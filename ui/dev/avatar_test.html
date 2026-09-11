@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>JARVIS — banc d'essai avatar</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #070d19; color: #d7e3f0;
+    font: 12px ui-sans-serif, system-ui, sans-serif; }
+  #stage { position: fixed; inset: 0; }
+  #hud { position: fixed; left: 10px; top: 10px; z-index: 5; max-width: 360px;
+    background: rgba(8,15,28,.86); border: 1px solid rgba(56,142,190,.25);
+    border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
+  #hud b { color: #22d3ee; }
+  #controls { position: fixed; right: 10px; top: 10px; z-index: 5; display: grid;
+    gap: 4px; max-height: 96vh; overflow: auto; }
+  button { background: rgba(12,22,40,.9); color: #d7e3f0; border: 1px solid rgba(56,142,190,.3);
+    border-radius: 7px; padding: 4px 8px; cursor: pointer; font-size: 11px; text-align: left; }
+  button:hover { border-color: #22d3ee; }
+  #fps { position: fixed; left: 10px; bottom: 10px; z-index: 5; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hud">chargement…</div>
+<div id="controls"></div>
+<div id="fps"></div>
+<script type="module">
+import * as THREE from '../vendor/three.module.js';
+import { loadAvatar, RigControl, solveTwoBoneIK } from '../js/avatar/core.js';
+
+const canvas = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a1120);
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.05, 60);
+camera.position.set(0, 1.45, 2.2);
+camera.lookAt(0, 1.35, 0);
+
+scene.add(new THREE.HemisphereLight(0x9db8e6, 0x0a0d14, 0.85));
+const key = new THREE.DirectionalLight(0xfff1df, 2.1);
+key.position.set(1.6, 2.8, 2.4); key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024); key.shadow.camera.near = 0.5;
+key.shadow.camera.far = 12; key.shadow.bias = -0.0012;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0x6aa8ea, 0.55);
+fill.position.set(-2.2, 1.4, 1.2); scene.add(fill);
+const rim = new THREE.DirectionalLight(0x22d3ee, 0.8);
+rim.position.set(-0.6, 2.2, -2.4); scene.add(rim);
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(6, 48),
+  new THREE.MeshStandardMaterial({ color: 0x0d1626, roughness: 0.95 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+const hud = document.getElementById('hud');
+const controls = document.getElementById('controls');
+const fpsEl = document.getElementById('fps');
+
+let model, rig, mixer, current;
+const clock = new THREE.Clock();
+
+function button(label, fn) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.onclick = fn;
+  controls.appendChild(b);
+}
+
+try {
+  model = await loadAvatar('/assets/avatar/jarvis_avatar.glb');
+  window.__model = model;
+  scene.add(model.root);
+  rig = new RigControl(model);
+  mixer = new THREE.AnimationMixer(model.root);
+
+  const morphs = model.morphNames();
+  hud.innerHTML = `<b>os</b> ${model.bones.size} · <b>meshes</b> ${model.meshes.length}
+    · <b>skinnées</b> ${model.skinned.length}<br>
+    <b>morph targets</b> ${morphs.length}<br>
+    <b>clips</b> ${model.clips.size} (dont ${model.additiveClips.size} additifs)<br>
+    <b>foulée</b> ${model.meta.walkCycleDistance} m / ${model.meta.walkCycleSeconds}s<br>
+    <b>doigts</b> ${Object.keys(model.meta.fingerChains || {}).length} chaînes`;
+  window.__report = {
+    bones: [...model.bones.keys()],
+    morphs,
+    clips: [...model.clips.keys()],
+    additive: [...model.additiveClips],
+    meta: model.meta,
+  };
+
+  for (const name of model.clips.keys()) {
+    button('▶ ' + name, () => play(name));
+  }
+  for (const name of morphs) {
+    button('◆ ' + name, () => {
+      model.clearMorphs();
+      model.setMorph(name, 1);
+    });
+  }
+  button('✕ morphs', () => model.clearMorphs());
+  play(model.meta.idleClips?.[0] || [...model.clips.keys()][0]);
+} catch (err) {
+  hud.textContent = 'ERREUR : ' + err.message;
+  console.error(err);
+  window.__error = String(err && err.stack || err);
+}
+
+function play(name) {
+  const clip = model.clips.get(name);
+  if (!clip) return;
+  const action = mixer.clipAction(clip);
+  if (model.additiveClips.has(name)) {
+    action.blendMode = THREE.AdditiveAnimationBlendMode;
+    action.setLoop(THREE.LoopOnce, 1);
+    action.reset().setEffectiveWeight(1).play();
+    return;
+  }
+  if (current && current !== action) current.fadeOut(0.35);
+  action.reset().setEffectiveWeight(1).fadeIn(0.35).play();
+  current = action;
+  window.__playing = name;
+}
+window.__play = play;
+
+let frames = 0, last = performance.now(), fps = 0;
+function tick() {
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (mixer) mixer.update(dt);
+  renderer.render(scene, camera);
+  frames++;
+  const now = performance.now();
+  if (now - last > 500) {
+    fps = Math.round((frames * 1000) / (now - last));
+    frames = 0; last = now;
+    fpsEl.textContent = fps + ' FPS';
+    window.__fps = fps;
+  }
+}
+tick();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
