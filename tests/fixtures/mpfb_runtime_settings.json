@@ -1,0 +1,23 @@
+{
+  "__action": "avatar_engine",
+  "__tool": "tests.mpfb_runtime",
+  "output_dir": "C:/Users/jerom/Desktop/jarvis-windows/jarvis-windows/data/generated/avatar/mpfb_runtime_test",
+  "requires_mpfb": true,
+  "preset_id": "jarvis_v1",
+  "parameters": {
+    "skin": "young_caucasian_male",
+    "hair": "short03",
+    "outfit": "male_casualsuit03"
+  },
+  "mpfb_macro_details": {
+    "gender": 0.15,
+    "age": 0.18,
+    "muscle": 0.34,
+    "weight": 0.4,
+    "proportions": 0.45,
+    "height": 0.5,
+    "cupsize": 0.5,
+    "firmness": 0.62,
+    "race": {"asian": 0.08, "caucasian": 0.84, "african": 0.08}
+  }
+}

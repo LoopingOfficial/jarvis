@@ -1,0 +1,23 @@
+.env
+.venv/
+.cache/
+__pycache__/
+*.pyc
+
+# Données locales — contiennent la base chiffrée et les sauvegardes.
+data/
+!data/.gitkeep
+
+# Ancien format, conservé le temps de la migration puis sauvegardé.
+data/connections.json
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.secret
+*.log
+node_modules/
+vendor/
+.DS_Store
+Thumbs.db
