@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>JARVIS · Command Center</title>
 <link rel="stylesheet" href="/css/app.css" />
+<link rel="stylesheet" href="/css/cockpit.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%2322d3ee' stroke-width='2'/><circle cx='16' cy='16' r='5' fill='%2322d3ee'/></svg>" />
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js",
@@ -31,11 +32,16 @@
       </div>
       <div class="brand-text">
         <b>JARVIS</b>
-        <small>COMMAND CENTER</small>
+        <small>ASSISTANT INTELLIGENT</small>
       </div>
     </div>
 
     <nav class="nav" id="nav"></nav>
+
+    <div class="nav-group shortcuts">
+      <div class="nav-group-label">RACCOURCIS</div>
+      <div class="shortcuts-list" id="navShortcuts"></div>
+    </div>
 
     <div class="side-meta">
       <div class="side-chip">
@@ -46,37 +52,29 @@
       </div>
     </div>
 
-    <div class="voice-panel">
-      <div class="voice-panel-head"><span>VOICE STATUS</span><span class="chev" id="voiceModeChip">—</span></div>
-      <canvas id="voiceWave" width="340" height="56"></canvas>
-      <div class="voice-state-label" id="voiceStateLabel">Idle</div>
-      <button class="mic-btn" id="micBtn" title="Parler à JARVIS">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
-             stroke-linecap="round"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
-      </button>
-      <div class="mic-hint" id="micHint">Tap to Speak</div>
-    </div>
+    <button class="sidebar-collapse" id="sidebarToggle" title="Réduire / agrandir la barre latérale">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m15 6-6 6 6 6"/></svg>
+    </button>
   </aside>
 
   <!-- ============================== MAIN ============================= -->
   <div class="main">
     <header class="header">
       <div class="status-pill">
-        <span>SYSTEM STATUS</span><i class="dot idle" id="sysDot"></i>
-        <b id="sysStatusTextHdr" style="color:var(--ok);font-weight:500">—</b>
+        <i class="dot idle" id="sysDot"></i>
+        <b id="sysStatusTextHdr" style="color:var(--ok);font-weight:500">ONLINE</b>
       </div>
-      <div class="header-clock">
-        <div class="date" id="headerDate">—</div>
-        <div class="time" id="headerTime">--:--:--</div>
+      <div class="ask-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             class="ask-spark" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="globalSearch" placeholder="Demandez à JARVIS… Analyse mes ventes · Prépare un post Discord · Résume mes mails · Vérifie mes serveurs"
+               autocomplete="off" spellcheck="false" aria-label="Demander à JARVIS" />
+        <kbd>⌘K</kbd>
       </div>
       <div class="header-right">
-        <div class="search-box">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-               style="color:var(--text-faint)"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input id="globalSearch" placeholder="Rechercher…" autocomplete="off" />
-          <kbd>⌘K</kbd>
-        </div>
+        <button class="icon-btn" id="appLauncher" title="Lanceur d'applications" aria-expanded="false" aria-haspopup="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        </button>
         <button class="icon-btn" id="consoleToggle" title="Console (⌘J)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
         </button>
@@ -84,131 +82,301 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
           <span class="badge" id="notifBadge" hidden>0</span>
         </button>
-        <button class="icon-btn" data-goto="settings" title="Réglages">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 7 2.6h.1A1.7 1.7 0 0 0 9 1.1V1a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 2.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.9z" transform="translate(1 1) scale(.92)"/></svg>
-        </button>
+        <div class="header-clock">
+          <div class="date" id="headerDate">—</div>
+          <div class="time" id="headerTime">--:--:--</div>
+        </div>
         <div class="operator">
           <div class="txt"><b id="operatorName">Operator</b><small id="operatorTitle">Commander</small></div>
           <div class="avatar">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
           </div>
         </div>
+        <button class="icon-btn" data-goto="settings" title="Réglages">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 7 2.6h.1A1.7 1.7 0 0 0 9 1.1V1a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 2.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.9z" transform="translate(1 1) scale(.92)"/></svg>
+        </button>
       </div>
     </header>
 
     <div class="page-wrap" id="pageWrap">
       <!-- ---------------------- COMMAND CENTER ---------------------- -->
-      <section class="page active" id="page-command">
-        <div class="command-center">
+      <section class="page active" id="page-command" aria-label="Accueil">
+        <div class="home-shell">
 
-          <!-- ============ ZONE CENTRALE : JARVIS ROBOT ============ -->
-          <div class="robot-zone" id="robotZone">
-            <div class="zone-head">
-              <div class="zone-title">
-                <span class="zone-kicker">ENTITÉ NUMÉRIQUE</span>
-                <h2>JARVIS</h2>
-              </div>
-              <button class="link-more" id="avatarStudioCenter" title="Ouvrir Avatar Studio">Avatar Studio ‣</button>
-              <div class="state-badge"><i id="robotStateDot" class="dot idle"></i><b id="robotStateLabel">IDLE</b></div>
+          <!-- ================= SALUTATION ================= -->
+          <header class="home-greet">
+            <div>
+              <h1>Bonjour, <span id="homeOperator">Opérateur</span>,</h1>
+              <p class="home-sub">Prêt à transformer vos idées en résultats&nbsp;?</p>
             </div>
-            <div class="robot-stage">
-              <canvas id="robotStage" class="stage-canvas"></canvas>
-              <div class="robot-fallback" id="robotFallback" hidden>
-                <div class="avatar-mark">
-                  <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="none" stroke="rgba(34,211,238,.4)" stroke-width="1.5"/><circle cx="32" cy="32" r="22" fill="none" stroke="rgba(34,211,238,.7)" stroke-width="1.5" stroke-dasharray="4 6"/><circle cx="32" cy="32" r="6" fill="#22d3ee"/></svg>
-                </div>
-              </div>
-              <div class="robot-pulse" id="robotPulse"></div>
+            <div class="home-chips">
+              <span class="chip" id="homeDate">—</span>
+              <span class="chip" id="homeSystem">—</span>
             </div>
-            <div class="zone-foot">
-              <span class="sub-chip" id="robotReason">—</span>
-              <div class="quality-switch avatar-mode-switch" id="avatarModeSwitch" aria-label="Mode avatar">
-                <button data-avatar-mode="CALL" class="active">Call</button><button data-avatar-mode="FULL_BODY">Full body</button>
-              </div>
-              <div class="quality-switch" id="qualitySwitch">
-                <button data-quality="low">Low</button><button data-quality="balanced" class="active">Balanced</button><button data-quality="ultra">Ultra</button>
-              </div>
-            </div>
-          </div>
+</header>
 
-          <!-- ============ COLONNE DROITE ============ -->
-          <div class="brain-zone" id="brainZone">
-            <!-- Bandeau live : agents convoqués + to-dos + tâches -->
-            <div class="ops-rail" id="opsRail">
-              <div class="ops-tile" data-goto="agents" title="Agents spécialisés actifs dans cette session JARVIS">
-                <span class="ops-k">AGENTS EN LIGNE</span><b id="opsAgents">—</b>
-              </div>
-              <div class="ops-tile live" title="Agents en train de travailler">
-                <span class="ops-k">AGENTS ACTIFS</span><b id="opsAgentsActive">0</b>
-              </div>
-              <div class="ops-tile" data-goto="tasks" title="Tâches planifiées / en cours = tes to-do">
-                <span class="ops-k">TO-DO</span><b id="opsTodos">—</b>
-              </div>
-              <div class="ops-tile" data-goto="tasks" title="Tâches actives maintenant">
-                <span class="ops-k">TÂCHES ACTIVES</span><b id="opsTasksActive">0</b>
-              </div>
-              <div class="ops-live" id="opsLive"></div>
+    <div class="launcher-overlay" id="launcherPop" hidden></div>
+
+          <!-- ================= COMMAND BAR ================= -->
+          <form class="home-cmd" id="homeCmdForm" role="search">
+            <button type="button" class="mic-btn" id="homeMic" title="Parler à JARVIS (via la console de dialogue)" aria-label="Parler à JARVIS">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                   stroke-linecap="round"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+            </button>
+            <div class="home-cmd-main">
+              <input id="homeCmd" placeholder="Dites-moi ce que vous souhaitez faire…" autocomplete="off" spellcheck="false"
+                     aria-label="Commander JARVIS" />
+              <div class="home-cmd-examples">Analyse mes ventes&nbsp;·&nbsp;Prépare un post Discord&nbsp;·&nbsp;Résume mes mails&nbsp;·&nbsp;Vérifie mes serveurs</div>
             </div>
-            <div class="zone-head">
-              <div class="zone-title">
-                <span class="zone-kicker">MÉMOIRE CONNECTÉE</span>
-                <h2>Brain Atlas</h2>
-              </div>
-              <div class="brain-search">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-                <input id="brainSearch" aria-label="Rechercher dans le Brain Atlas" placeholder="Explorer la mémoire…" autocomplete="off" />
-              </div>
-              <button class="icon-btn" id="brainLabels" title="Afficher les étiquettes" aria-label="Afficher les étiquettes" aria-pressed="true">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20.6 13.4 11 3.8A2 2 0 0 0 9.6 3H4a1 1 0 0 0-1 1v5.6A2 2 0 0 0 3.8 11l9.6 9.6a2 2 0 0 0 2.8 0l4.4-4.4a2 2 0 0 0 0-2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
-              </button>
-              <button class="icon-btn" id="brainExpand" title="Agrandir le Brain Atlas" aria-label="Agrandir le Brain Atlas" aria-expanded="false">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg>
+            <div class="home-cmd-actions">
+              <span class="cmd-mode on">Texte</span>
+              <span class="cmd-mode">Voix</span>
+              <span class="cmd-mode">Web</span>
+              <span class="cmd-mode">Agents</span>
+              <button type="submit" class="btn primary send" title="Envoyer">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>
+                <span>Envoyer</span>
               </button>
             </div>
-            <div class="brain-stage">
-              <canvas id="brainStage" class="stage-canvas" aria-label="Graphe interactif des connaissances JARVIS"></canvas>
-              <div class="brain-view-label" id="brainSearchStatus" role="status">VUE D’ENSEMBLE</div>
-              <div class="brain-hud" id="brainHud"><span><b id="brainNodeCount">—</b> nœuds</span><i></i><span><b id="brainEdgeCount">—</b> connexions</span></div>
-              <div class="brain-stage-actions"><span>Glisser pour explorer · Défiler pour zoomer</span><button id="brainReset" title="Recentrer et effacer les filtres" aria-label="Recentrer et effacer les filtres"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="6"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg></button></div>
-              <div class="brain-empty" id="brainEmpty" hidden><span>Votre mémoire prend forme</span><p>Les connaissances et leurs connexions apparaîtront ici.</p></div>
-              <div class="brain-fallback" id="brainFallback" hidden>
-                <div class="bf-list" id="brainFallbackList"></div>
-              </div>
-            </div>
-            <div class="brain-legend" id="brainLegend"></div>
+          </form>
+
+          <!-- ================= ACTIONS RAPIDES ================= -->
+          <div class="home-quick" aria-label="Actions rapides">
+            <span class="home-quick-label">Rapide</span>
+            <button data-quick="analyse-ventes">Analyse mes ventes</button>
+            <button data-quick="post-discord">Créer un post Discord</button>
+            <button data-quick="optim-serveur">Optimiser mon serveur</button>
+            <button data-quick="planning">Préparer mon planning</button>
+            <button data-quick="recherche-web">Rechercher sur le web</button>
+            <button data-quick="creer-workflow">Créer un workflow</button>
           </div>
 
-          <div class="side-bottom">
-            <!-- ============ CONVERSATION ============ -->
-            <div class="conv-zone" id="convZone">
-              <div class="zone-head">
-                <div class="zone-title">
-                  <span class="zone-kicker">DIALOGUE</span>
-                  <h2>Conversation</h2>
-                </div>
-                <button class="link-more" id="avatarStudioOpen" title="Refondre l'avatar 3D à partir d'une image">Avatar ‣</button>
-                <button class="link-more" id="convOpen" title="Ouvrir la console">Console ›</button>
-              </div>
-              <div class="conv-log" id="convLog"></div>
-              <form class="conv-input" id="convForm">
-                <input id="convInput" placeholder="Parle à JARVIS…" autocomplete="off" />
-                <button class="btn primary sm" type="submit">Envoyer</button>
-              </form>
-            </div>
+          <!-- ================= COCKPIT ================= -->
+          <div class="home-grid">
 
-            <!-- ============ ACTIVITÉ RÉELLE ============ -->
-            <div class="activity-zone" id="activityZone">
-              <div class="zone-head">
-                <div class="zone-title">
-                  <span class="zone-kicker">EN COURS</span>
-                  <h2>Activité</h2>
+            <!-- ---------- COLONNE PRINCIPALE ---------- -->
+            <main class="home-main">
+
+              <!-- ===== CERVEAU DE JARVIS (Brain Atlas réel) ===== -->
+              <section class="card brain-hero" aria-label="Brain Atlas">
+                <div class="home-sec-head">
+                  <div class="zone-title">
+                    <span class="zone-kicker">CERVEAU DE JARVIS</span>
+                    <h2>Brain Atlas</h2>
+                  </div>
+                  <div class="brain-search" role="search">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <input id="brainSearch" aria-label="Rechercher dans le Brain Atlas" placeholder="Explorer la mémoire…" autocomplete="off" />
+                  </div>
+                  <div class="home-sec-actions">
+                    <button class="icon-btn" id="brainLabels" title="Étiquettes" aria-label="Étiquettes" aria-pressed="true">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20.6 13.4 11 3.8A2 2 0 0 0 9.6 3H4a1 1 0 0 0-1 1v5.6A2 2 0 0 0 3.8 11l9.6 9.6a2 2 0 0 0 2.8 0l4.4-4.4a2 2 0 0 0 0-2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
+                    </button>
+                    <button class="icon-btn" id="brainReset" title="Recentrer et effacer les filtres" aria-label="Recentrer">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="6"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+                    </button>
+                    <button class="icon-btn" id="brainExpand" title="Plein écran du Brain Atlas" aria-label="Agrandir le Brain Atlas" aria-expanded="false">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg>
+                    </button>
+                  </div>
                 </div>
-                <button class="link-more" id="activityClear">vider</button>
+
+                <div class="brain-zone" id="brainZone">
+                  <div class="brain-stage">
+                    <canvas id="brainStage" class="stage-canvas" aria-label="Graphe interactif des connaissances JARVIS"></canvas>
+                    <div class="brain-view-label" id="brainSearchStatus" role="status">VUE D’ENSEMBLE</div>
+                    <div class="brain-hud" id="brainHud"><span><b id="brainNodeCount">—</b> nœuds</span><i></i><span><b id="brainEdgeCount">—</b> connexions</span></div>
+                    <div class="brain-stage-actions"><span>Glisser pour explorer · Molette pour zoomer · Clic pour ouvrir un nœud</span></div>
+                    <div class="brain-empty" id="brainEmpty" hidden><span>Votre mémoire prend forme</span><p>Les connaissances et leurs connexions apparaîtront ici.</p></div>
+                    <div class="brain-fallback" id="brainFallback" hidden>
+                      <div class="bf-list" id="brainFallbackList"></div>
+                    </div>
+                  </div>
+                  <div class="brain-legend" id="brainLegend"></div>
+                </div>
+
+                <div class="brain-counts" id="brainCounts" aria-label="Contenu visible de la mémoire"></div>
+              </section>
+
+              <!-- ===== COMMANDES ===== -->
+              <div class="home-quickcmds" aria-label="Commandes">
+                <button data-nav-action="focus-chat">Discuter</button>
+                <button data-nav-action="code">Créer</button>
+                <button data-nav-action="analyses">Analyser</button>
+                <button data-nav-action="workflows">Automatiser</button>
+                <button data-nav-action="avatar-studio">Générer</button>
+                <button data-nav-action="calendar">Planifier</button>
+                <button data-launcher>Plus</button>
               </div>
-              <div class="activity-list" id="activityList"></div>
-            </div>
+
+              <!-- ===== PROJETS ACTIFS ===== -->
+              <section class="card" id="homeProjects" aria-label="Projets actifs">
+                <div class="home-sec-head">
+                  <div class="zone-title">
+                    <span class="zone-kicker">PROJETS</span>
+                    <h2>Projets actifs</h2>
+                  </div>
+                  <button class="link-more" data-goto="projects">Tous ‣</button>
+                </div>
+                <div class="projects-grid" id="projectsGrid"></div>
+              </section>
+
+              <!-- ===== STATISTIQUES ===== -->
+              <section class="card" id="homeWidgets" aria-label="Statistiques">
+                <div class="home-sec-head">
+                  <div class="zone-title">
+                    <span class="zone-kicker">OBSERVATOIRE</span>
+                    <h2>Statistiques</h2>
+                  </div>
+                  <span class="text-dim home-sec-note" id="widgetNote">Données réelles</span>
+                </div>
+                <div class="widgets-grid" id="widgetsGrid"></div>
+              </section>
+
+              <!-- ===== CHAT JARVIS (avatar + voix + conversation) ===== -->
+              <section class="chat-row" id="chatRow" aria-label="Conversation avec JARVIS">
+                <div class="stage-card" id="jarvisStageCard">
+                  <div class="stage-head">
+                    <div class="stage-id">
+                      <span class="stage-core"></span>
+                      <div class="stage-id-text"><b>JARVIS</b><span>Entité numérique</span></div>
+                    </div>
+                    <div class="state-badge" id="jarvisStateBadge" title="État actuel de JARVIS">
+                      <i id="robotStateDot" class="dot idle"></i><b id="robotStateLabel">IDLE</b>
+                    </div>
+                    <button class="icon-btn" id="avatarStudioCenter" title="Ouvrir Avatar Studio" aria-label="Ouvrir Avatar Studio">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+                    </button>
+                  </div>
+                  <div class="robot-stage" id="robotStageCard">
+                    <canvas id="robotStage" class="stage-canvas"></canvas>
+                    <div class="robot-fallback" id="robotFallback" hidden>
+                      <div class="avatar-mark">
+                        <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="none" stroke="rgba(34,211,238,.4)" stroke-width="1.5"/><circle cx="32" cy="32" r="22" fill="none" stroke="rgba(34,211,238,.7)" stroke-width="1.5" stroke-dasharray="4 6"/><circle cx="32" cy="32" r="6" fill="#22d3ee"/></svg>
+                      </div>
+                    </div>
+                    <div class="robot-pulse" id="robotPulse"></div>
+                    <div class="stage-vignette"></div>
+                  </div>
+                  <div class="stage-foot">
+                    <span class="sub-chip" id="robotReason">—</span>
+                    <div class="stage-controls">
+                      <div class="quality-switch avatar-mode-switch" id="avatarModeSwitch" aria-label="Mode avatar">
+                        <button data-avatar-mode="CALL" class="active">Buste</button><button data-avatar-mode="FULL_BODY">Plein</button>
+                      </div>
+                      <div class="quality-switch" id="qualitySwitch">
+                        <button data-quality="low">Low</button><button data-quality="balanced" class="active">Balanced</button><button data-quality="ultra">Ultra</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="stage-card conv-card" id="convZone">
+                  <div class="zone-head">
+                    <div class="zone-title">
+                      <span class="zone-kicker">DIALOGUE</span>
+                      <h2>Conversation</h2>
+                    </div>
+                    <button class="link-more" id="avatarStudioOpen" title="Refondre l'avatar 3D à partir d'une image">Avatar ‣</button>
+                  </div>
+                  <div class="conv-log" id="convLog"></div>
+                  <form class="composer" id="convForm">
+                    <button type="button" class="mic-btn" id="micBtn" title="Parler à JARVIS" aria-label="Parler à JARVIS">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                           stroke-linecap="round"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+                    </button>
+                    <div class="composer-main">
+                      <textarea id="convInput" rows="1" placeholder="Parle à JARVIS…" autocomplete="off"></textarea>
+                      <div class="composer-meta">
+                        <span class="composer-mode" id="voiceModeChip">—</span>
+                        <i class="composer-dot"></i>
+                        <span id="voiceStateLabel">Idle</span>
+                        <span id="micHint">Tap to Speak</span>
+                        <canvas id="voiceWave" width="340" height="56"></canvas>
+                      </div>
+                    </div>
+                    <div class="composer-actions">
+                      <button type="button" class="icon-btn" id="convOpen" title="Ouvrir la console" aria-label="Ouvrir la console">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+                      </button>
+                      <button type="submit" class="btn primary send" title="Envoyer">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>
+                        <span>Envoyer</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </section>
+
+            </main>
+
+            <!-- ---------- PANNEAU DE CONTEXTE ---------- -->
+            <aside class="context-panel" id="contextPanel">
+
+              <section class="ctx-card" id="ctxAgenda">
+                <div class="ctx-head">
+                  <div class="ctx-title"><span class="zone-kicker">AUJOURD’HUI</span><h3>Agenda</h3></div>
+                  <button class="link-more" data-goto="calendar">Calendrier ‣</button>
+                </div>
+                <div class="ctx-body">
+                  <div class="agenda-timeline" id="agendaList"></div>
+                </div>
+              </section>
+
+              <section class="ctx-card" id="ctxOps">
+                <div class="ctx-head">
+                  <div class="ctx-title"><span class="zone-kicker">OPÉRATIONS</span><h3>Agents &amp; tâches</h3></div>
+                  <button class="link-more" data-goto="agents">Agents ‣</button>
+                </div>
+                <div class="ctx-body ops-summary">
+                  <div class="ops-tiles">
+                    <div class="ops-tile" data-goto="agents" title="Agents spécialisés présents dans cette session JARVIS"><span class="ops-k">PRÊTS</span><b id="opsAgents">—</b></div>
+                    <div class="ops-tile live" title="Agents réellement sollicités"><span class="ops-k">ACTIFS</span><b id="opsAgentsActive">0</b></div>
+                    <div class="ops-tile" data-goto="tasks" title="Tâches planifiées / en cours"><span class="ops-k">TO-DO</span><b id="opsTodos">—</b></div>
+                    <div class="ops-tile" data-goto="tasks" title="Tâches actives maintenant"><span class="ops-k">TÂCHES</span><b id="opsTasksActive">0</b></div>
+                  </div>
+                  <div class="agent-strip" id="agentsMini"></div>
+                  <div class="ops-live" id="opsLive"></div>
+                </div>
+              </section>
+
+              <section class="ctx-card" id="ctxConnectors">
+                <div class="ctx-head">
+                  <div class="ctx-title"><span class="zone-kicker">SYSTÈMES LIÉS</span><h3>Connecteurs</h3></div>
+                  <button class="link-more" data-goto="settings" data-section="connectors">Config ‣</button>
+                </div>
+                <div class="ctx-body">
+                  <div class="conn-strip" id="connectorsMini"></div>
+                </div>
+              </section>
+
+              <section class="ctx-card" id="ctxMemory">
+                <div class="ctx-head">
+                  <div class="ctx-title"><span class="zone-kicker">MÉMOIRE</span><h3>Brain Atlas</h3></div>
+                  <button class="link-more" data-launcher="brain">Détail ‣</button>
+                </div>
+                <div class="ctx-body mem-summary">
+                  <div class="mem-metrics">
+                    <div class="mem-metric"><b id="memNodeCount">—</b><span>nœuds</span></div>
+                    <div class="mem-metric"><b id="memEdgeCount">—</b><span>liaisons</span></div>
+                    <div class="mem-metric"><b id="memKnowledge">—</b><span>savoirs</span></div>
+                  </div>
+                  <div class="mem-families" id="memFamilies"><span class="mem-empty">Mémoire en préparation…</span></div>
+                </div>
+              </section>
+
+              <section class="ctx-card" id="ctxActivity">
+                <div class="ctx-head">
+                  <div class="ctx-title"><span class="zone-kicker">EN COURS</span><h3>Activité</h3></div>
+                  <button class="link-more" id="activityClear">vider</button>
+                </div>
+                <div class="ctx-body activity-list" id="activityList"></div>
+              </section>
+
+            </aside>
           </div>
-
         </div>
       </section>
 
@@ -287,6 +455,36 @@
       <section class="page" id="page-tools"></section>
       <section class="page" id="page-workflows"></section>
       <section class="page" id="page-settings"></section>
+
+      <!-- ============================== PROJETS ============================== -->
+      <section class="page" id="page-projects">
+        <div class="page-zone"><div class="empty">Chargement…</div></div>
+      </section>
+
+      <!-- ============================== ANALYSES ============================== -->
+      <section class="page" id="page-analyses">
+        <div class="page-zone"><div class="empty">Chargement…</div></div>
+      </section>
+
+      <!-- ============================== FINANCE ============================== -->
+      <section class="page" id="page-finance">
+        <div class="page-zone"><div class="empty">Chargement…</div></div>
+      </section>
+
+      <!-- ============================== MARKETING ============================== -->
+      <section class="page" id="page-marketing">
+        <div class="page-zone"><div class="empty">Chargement…</div></div>
+      </section>
+
+      <!-- ============================== RÉSEAUX SOCIAUX ============================== -->
+      <section class="page" id="page-social">
+        <div class="page-zone"><div class="empty">Chargement…</div></div>
+      </section>
+
+      <!-- ============================== SITES & SERVEURS ============================== -->
+      <section class="page" id="page-servers">
+        <div class="page-zone"><div class="empty">Chargement…</div></div>
+      </section>
 
       <!-- ============================== TERMINAL ============================== -->
       <section class="page" id="page-terminal">
@@ -407,6 +605,7 @@
 <script src="/js/model_message.js"></script>
 <script src="/js/avatar_update.js?v=AVATAR_STUDIO_BUILD_1_FIX2"></script>
 <script src="/js/avatar_studio.js?v=AVATAR_QUALITY_PIPELINE_20260911_A"></script>
+<script src="/js/home.js?v=COCKPIT_20260912_A"></script>
 <script src="/js/app.js?v=CHAT_RELOAD_FIX_20260911_A"></script>
 </body>
 </html>

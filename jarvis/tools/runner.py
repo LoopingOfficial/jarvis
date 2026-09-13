@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import time
 import uuid
+import posixpath
+from pathlib import Path
 from hashlib import sha256
 from typing import Any
 
@@ -49,11 +51,8 @@ class SecureToolRunner:
         core = self._core
         requested = str(arguments.get("connector_id") or arguments.get("connector") or "").strip()
         if requested:
-            found = core.connectors.resolve_connector(tool.connector_type, {"connector_id": requested})
-            if found:
-                return found
             found = core.connectors.raw(requested)
-            if found and found["type"] == tool.connector_type and found.get("enabled") and found.get("status") == "connected":
+            if found and found["type"] == tool.connector_type and found.get("enabled"):
                 return found
             if not tool.connector_optional:
                 raise ToolDenied(
@@ -94,11 +93,36 @@ class SecureToolRunner:
         policies = [saved, current_policy(), execution_policy or {}]
         policy = next((dict(p) for p in policies if is_readonly(p)),
                       dict(saved or current_policy() or execution_policy or {}))
+        # Mode MODEL_ONLY : la politique interdit TOUT appel d'outil, même en
+        # lecture. Un benchmark, une citation ou une phrase « n'utilise aucun
+        # outil » ne doivent jamais traverser le ToolRunner.
+        if any(p.get("tools_allowed") is False for p in policies if p):
+            reason = "TOOL_DENIED_BY_EXECUTION_POLICY"
+            core.audit.record(action=f"{tool_id} refusé (modèle seul)", tool=tool_id,
+                              status="denied", agent=agent, task_id=task_id, detail=reason)
+            core.events.emit("tool.denied", {"tool": tool_id, "reason": reason,
+                                             "agent": agent, "task_id": task_id,
+                                             "tool_policy": "DENY"})
+            return ToolResult(False, reason)
         read_only = is_readonly(policy)
         if tool_id in {"ssh.write_file", "fs.write"}:
+            target = str(arguments.get("path") or "")
+            cid = str(arguments.get("connector_id") or arguments.get("connector") or "")
+            if tool_id == "ssh.write_file":
+                if not target.startswith("/"):
+                    candidates = core.connectors.routing_candidates("ssh")
+                    selected = core.connectors.raw(cid) if cid else (
+                        candidates[0] if len(candidates) == 1 else {})
+                    cfg = (selected or {}).get("config") or {}
+                    root = cfg.get("working_directory") or cfg.get("deployment_path") or cfg.get("remote_path")
+                    if root:
+                        target = posixpath.join(root, target)
+                target = posixpath.normpath(target)
+            elif target:
+                target = str(Path(target).expanduser().resolve())
             for doc in core.documents.documents.values():
-                if (doc.read_only and arguments.get("path") == doc.absolute_path
-                        and arguments.get("connector_id", "") == doc.connector_id):
+                if (doc.read_only and target == doc.absolute_path
+                        and (not cid or cid == doc.connector_id)):
                     read_only = True
         # Fail closed: even a shell command misclassified as READ_ONLY cannot
         # escape the allowlist. This runs before connector/secrets/confirmation.

@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from .config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -249,6 +249,24 @@ CREATE TABLE IF NOT EXISTS learning_sources (
   url TEXT, content_hash TEXT, checked_at REAL, version TEXT, status TEXT,
   UNIQUE(session_id, url)
 );
+
+CREATE TABLE IF NOT EXISTS self_upgrades (
+  id TEXT PRIMARY KEY, prompt TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'auto',
+  status TEXT NOT NULL DEFAULT 'queued', branch TEXT DEFAULT '', workspace_path TEXT DEFAULT '',
+  version_before TEXT DEFAULT '', version_after TEXT DEFAULT '',
+  plan TEXT DEFAULT '{}', files_changed TEXT DEFAULT '[]', git_diff TEXT DEFAULT '',
+  tests_result TEXT DEFAULT '{}', health_status TEXT DEFAULT '', install_status TEXT DEFAULT '',
+  rollback_status TEXT DEFAULT '', error TEXT DEFAULT '',
+  candidate_port INTEGER DEFAULT 0, created_at REAL, started_at REAL, completed_at REAL,
+  promoted_at REAL, rolled_back_at REAL, meta TEXT DEFAULT '{}', updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_self_upgrades_status ON self_upgrades(status, created_at);
+
+CREATE TABLE IF NOT EXISTS self_upgrade_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, upgrade_id TEXT NOT NULL, path TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT 'modified', created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_self_upgrade_files ON self_upgrade_files(upgrade_id);
 """
 
 
@@ -415,6 +433,15 @@ class Database:
             c.execute("ALTER TABLE knowledge ADD COLUMN evidence TEXT DEFAULT '{}'")
         if not has_column("tool_usage", "tool_version"):
             c.execute("ALTER TABLE tool_usage ADD COLUMN tool_version TEXT DEFAULT ''")
+
+        if from_version < 11:
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_self_upgrade_files ON self_upgrade_files(upgrade_id)")
+        if from_version < 11 and not has_column("self_upgrades", "updated_at"):
+            try:
+                c.execute("ALTER TABLE self_upgrades ADD COLUMN updated_at REAL")
+            except Exception:
+                pass
 
     # -- sauvegarde ---------------------------------------------------------
     def backup(self, label: str = "") -> Path:

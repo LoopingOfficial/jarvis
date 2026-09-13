@@ -45,6 +45,13 @@ def has_write_intent(text: str) -> bool:
     if has_read_only_constraint(text):
         return False
     value = _FILE_TOKEN.sub(" ", text or "")
+    # An explanatory question about an edit does not request its execution.
+    if re.search(r"\b(?:explique|comment|pourquoi|propose|sugg[èe]re)\b", value, re.I):
+        explicit_action = re.search(
+            r"(?:^|\b(?:et|puis|ensuite)\s+)(?:modifie|corrige|remplace|ajoute|"
+            r"supprime|enregistre|sauvegarde|d[ée]ploie)\b", value, re.I)
+        if not explicit_action:
+            return False
     # A quoted/negated verb is not permission to edit.
     value = re.sub(r"\bne\s+(?:\w+\s+){0,2}(?:modifie|change|corrige|supprime)\s+pas\b",
                    " ", value, flags=re.I)

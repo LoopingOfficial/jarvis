@@ -91,18 +91,29 @@ class CodeEditRouter:
             return {"ok": False, "response": "WRITE_DENIED_READ_ONLY", "tools_used": []}
         if not self.should_handle(text):
             return None
-        doc = self.active_document()
-        if doc is None:
-            return None
         policy = {"intent": "file_edit", "read_only": False, "write_allowed": True,
                   "require_write_confirmation": True}
         if not task_id:
             task_id = self.core.tasks.create(name=text[:200], kind="file_edit",
                 conversation_id=conversation_id, meta={"execution_policy": policy})["id"]
+        self.core.tasks.set_status(task_id, "running")
+        result = self._execute_edit(text, conversation_id, task_id, policy)
+        result.update(task_id=task_id, conversation_id=conversation_id)
+        if not result.get("needs_confirmation"):
+            if result.get("ok"):
+                self.core.tasks.complete(task_id, result.get("response", ""))
+            else:
+                self.core.tasks.fail(task_id, result.get("response", "Échec édition."))
+        return result
+
+    def _execute_edit(self, text, conversation_id, task_id, policy):
+        doc = self.active_document()
         if not self.core.documents.allow_edit(doc, self.core.events):
             return {"ok": False, "response": "Le document est encore en lecture seule.",
                     "task_id": task_id, "tools_used": []}
-        audit = self.core.active_task_context.get("last_security_audit") or {}
+        audit = next((m.get("meta", {}).get("analysis") for m in
+                      reversed(self.core.conversations.messages(conversation_id, limit=30))
+                      if m.get("meta", {}).get("analysis")), {})
         audit_context = ("\nRapport précédent (contexte, seule la nouvelle demande autorise les changements):\n"
                          + json.dumps(audit, ensure_ascii=False)
                          if audit.get("file") == doc.absolute_path else "")

@@ -44,11 +44,14 @@ from .tools.runner import SecureToolRunner
 from .tts import PiperTTS
 from .voice import VoiceSessionManager, VoiceStateMachine
 
+from .self_upgrade.service import SelfUpgradeService  # noqa: E402
+
 # Enregistre les outils intégrés (import = enregistrement dans le registre).
 from .tools import (avatar_engine_tools, avatar_tools, avatar_update_tools,  # noqa: F401,E402
                     blender_tools, image_tools,
                     jarvis_tools,
                     remote_tools,
+                    self_upgrade_tools,
                     system_tools, web_tools)  # noqa: F401,E402
 
 
@@ -90,6 +93,7 @@ class JarvisCore:
         self.brain = BrainManager(self)
         self.auto_learning = AutoLearning(self)
         self.idle_learning = IdleLearningEngine(self)
+        self.self_upgrade = SelfUpgradeService(self)
         self.activity = self.brain.activity
         self.active_task_context: dict[str, Any] = {"active_goal": "", "requested_file": "", "scope": "auto"}
 
@@ -336,6 +340,9 @@ class JarvisCore:
     # -- interface ---------------------------------------------------------
     def launch_ui(self, port: int) -> None:
         if self._ui_launched or not self.settings.get("general", "launch_ui_on_start", True):
+            return
+        if os.getenv("JARVIS_LAUNCH_UI", "1").strip().lower() in {"0", "false", "no"}:
+            self._ui_launched = True
             return
         url = f"http://127.0.0.1:{port}/"
         self._ui_launched = True

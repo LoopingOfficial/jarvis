@@ -22,12 +22,11 @@ from .goals import GoalCompletionChecker, has_write_intent
 from .risk_guard import RiskEscalationGuard
 from .remote_paths import (InvalidRemoteRootError, MissingRemoteWorkingDirectoryError,
                            active_remote_root, resolveRemotePath)
-from .security_analysis import (AnalysisFinding, AnalysisResult, SourceDocument,
-                                READ_ONLY_ALLOWED_TOOLS, deduplicate_findings,
-                                parse_findings, split_into_chunks)
+from .security_analysis import READ_ONLY_ALLOWED_TOOLS
 from .code_edit import CodeEditRouter
 from .file_router import FileCommandRouter
 from .execution_policy import policy_scope
+from .message_context import IntentClassifier, ResolvedIntent, predict_intent
 from .security_audit import SecurityAuditPipeline
 
 # Raccourcis déterministes : ces demandes n'ont pas besoin d'un LLM.
@@ -140,23 +139,60 @@ class Orchestrator:
         m = re.search(r"(?:/[^\s'\"`]*|[A-Za-z]:[\\/][^\s'\"`]*)" + re.escape(filename), output or "", re.I)
         return m.group(0) if m else ""
 
-    # -- entrée principale -------------------------------------------------
+# -- entrée principale -------------------------------------------------
     def handle(
         self, text: str, *, conversation_id: str = "", source: str = "text",
         confirmation_id: str = "", background: bool = False,
     ) -> dict[str, Any]:
-        with policy_scope(detect_read_only_intent(text).to_dict()):
+        resolved = self._classify(text)
+        execution_policy = resolved.to_policy_dict()
+        self._log_routing(resolved, text)
+        with policy_scope(execution_policy):
             return self._handle(text, conversation_id=conversation_id, source=source,
-                                confirmation_id=confirmation_id, background=background)
+                                confirmation_id=confirmation_id, background=background,
+                                resolved=resolved, execution_policy=execution_policy)
+
+    def _classify(self, text: str) -> ResolvedIntent:
+        return predict_intent(text)
+
+    def _log_routing(self, resolved: ResolvedIntent, text: str) -> None:
+        p = resolved.to_policy_dict()
+        line = ("[routing] primary_intent={} resolved_intent={} benchmark_mode={} "
+                "tools_allowed={} fast_actions_allowed={} read_only={} write_allowed={} "
+                "explicit_constraint={} selected_action={} trigger={} reason={} model_role={}"
+                ).format(
+                    p["primary_intent"],
+                    p["intent"],
+                    p["benchmark_mode"],
+                    p["tools_allowed"],
+                    p["fast_actions_allowed"],
+                    p["read_only"],
+                    p["write_allowed"],
+                    p["explicit_constraint"],
+                    resolved.action or "none",
+                    p["trigger_source"],
+                    p["reason"],
+                    p["model_role"],
+                )
+        self._debug(line, force=resolved.tools_allowed is False)
+        self._debug(f"[routing] exec={resolved.segments.executable_instruction[:160]!r}",
+                    force=resolved.tools_allowed is False)
 
     def _handle(
         self, text: str, *, conversation_id: str = "", source: str = "text",
         confirmation_id: str = "", background: bool = False,
+        resolved: ResolvedIntent | None = None,
+        execution_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         core = self._core
         text = (text or "").strip()
         if not text:
             return {"ok": False, "response": "", "action": "none"}
+
+        if resolved is None:
+            resolved = self._classify(text)
+        if execution_policy is None:
+            execution_policy = resolved.to_policy_dict()
 
         conversation_id = conversation_id or core.conversations.current_id()
         core.conversations.add_message(conversation_id, "user", text, meta={"source": source})
@@ -165,22 +201,36 @@ class Orchestrator:
         # Décision de sécurité avant tout routeur et avant le LLM. Cette valeur
         # est recopiée dans le contexte actif pour protéger aussi les chemins
         # déterministes et les appels de runner sans argument explicite.
-        readonly_intent = detect_read_only_intent(text)
-        execution_policy = readonly_intent.to_dict()
+        readonly_intent = detect_read_only_intent(resolved.segments.executable_instruction or text)
+        execution_policy = dict(readonly_intent.to_dict(), **execution_policy,
+                                **resolved.to_policy_dict())
         core.active_task_context.update({
-            "intent": readonly_intent.intent,
-            "read_only": readonly_intent.read_only,
-            "write_allowed": readonly_intent.write_allowed,
-            "active_file": readonly_intent.target or core.active_task_context.get("active_file", ""),
+            "intent": resolved.intent,
+            "read_only": bool(resolved.read_only),
+            "write_allowed": bool(resolved.write_allowed),
+            "tools_allowed": bool(resolved.tools_allowed),
+            "fast_actions_allowed": bool(resolved.fast_actions_allowed),
+            "benchmark_mode": bool(resolved.benchmark_mode),
+            "trigger_source": resolved.trigger_source,
+            "active_file": resolved.target or core.active_task_context.get("active_file", ""),
             "updated_at": time.time(),
         })
-        self._debug(f"[intent] {readonly_intent.intent}", force=readonly_intent.read_only)
-        self._debug(f"[policy] read_only={readonly_intent.read_only} "
-                    f"write_allowed={readonly_intent.write_allowed}", force=readonly_intent.read_only)
+        self._debug(f"[intent] {resolved.intent}", force=bool(resolved.read_only))
+        self._debug(f"[policy] read_only={resolved.read_only} "
+                    f"write_allowed={resolved.write_allowed} "
+                    f"tools_allowed={resolved.tools_allowed}",
+                    force=bool(resolved.read_only))
+
+        # Mode MODEL_ONLY : aucun outil n'est exposé ni exécuté. Le modèle
+        # répond seul — c'est la garantie qu'un benchmark, une citation, une
+        # donnée ou une question théorique ne déclenche jamais d'action réelle.
+        if resolved.tools_allowed is False:
+            return self._run_model_only(text, conversation_id, background=background,
+                                        execution_policy=execution_policy)
 
         # Audit is terminal routing, BEFORE file opening, scope rewriting or
         # CodeEditRouter. In particular "ne modifie rien" never sees the editor.
-        if readonly_intent.intent == "security_audit_readonly":
+        if resolved.intent == "security_audit_readonly":
             task = core.tasks.create(name=text[:200], kind="security_audit_readonly",
                                      conversation_id=conversation_id,
                                      meta={"execution_policy": execution_policy})
@@ -226,22 +276,28 @@ class Orchestrator:
                     text = "affiche le contenu de " + str(active_ctx["last_remote_path"])
 
         # Action locale non ambiguë : exécution immédiate, sans Ollama.
-        fast = self.fast_actions.execute(text, conversation_id)
+        # Les routeurs déterministes n'opèrent que sur l'instruction exécutable,
+        # jamais sur un fragment cité, un benchmark ou un bloc de données.
+        routing_text = text
+        fast = self.fast_actions.execute(routing_text, conversation_id,
+                                         resolved_intent=resolved,
+                                         execution_policy=execution_policy)
         if fast is not None:
             return fast
-        file_action = self.file_router.execute(text, conversation_id)
+        file_action = self.file_router.execute(routing_text, conversation_id,
+                                               execution_policy=execution_policy)
         if file_action is not None:
             return file_action
         # ROUTE D'EDITION DETERMINISTE : une demande de modification portant sur
         # le document ouvert dans Coding est EXECUTEE ici. Laissee au modele,
         # elle degenere en explication (« ouvre ton editeur et colle ceci »).
-        if self.code_edit_router.should_handle(text):
-            edit_action = self.code_edit_router.execute(text, conversation_id)
+        if self.code_edit_router.should_handle(routing_text):
+            edit_action = self.code_edit_router.execute(routing_text, conversation_id)
             if edit_action is not None:
                 return edit_action
 
         # 1. Raccourcis déterministes (rapides, sans LLM)
-        low = text.casefold().strip(" .!")
+        low = routing_text.casefold().strip(" .!")
         for pattern, tool_id, args in DIRECT_PATTERNS:
             if re.match(pattern, low, re.IGNORECASE):
                 core.activity(title="Exécution directe", detail=tool_id, kind="action", state="ACTING")
@@ -254,22 +310,115 @@ class Orchestrator:
                 return {"ok": result.ok, "response": response, "action": tool_id,
                         "conversation_id": conversation_id, "tools_used": [tool_id]}
 
-        # 2. Boucle agentique complète, dans une tâche suivie
-        task = core.tasks.create(name=text[:200], kind="chat", agent="jarvis",
+# 2. Boucle agentique complète, dans une tâche suivie
+        task = core.tasks.create(name=routing_text[:200], kind="chat", agent="jarvis",
                                  conversation_id=conversation_id,
                                  meta={"execution_policy": execution_policy})
         if background:
             core.tasks.run_background(
                 task["id"],
-                lambda: self._run_loop(text, task["id"], conversation_id,
+                lambda: self._run_loop(routing_text, task["id"], conversation_id,
                                        confirmation_id=confirmation_id,
                                        execution_policy=execution_policy),
             )
             return {"ok": True, "response": "Je m'en occupe.", "action": "task",
                     "task_id": task["id"], "conversation_id": conversation_id, "background": True}
-        return self._run_loop(text, task["id"], conversation_id,
+        return self._run_loop(routing_text, task["id"], conversation_id,
                               confirmation_id=confirmation_id,
                               execution_policy=execution_policy)
+
+    # -- mode réponse seule (MODEL_ONLY) ---------------------------------
+    def _run_model_only(
+        self, text: str, conversation_id: str = "", *, background: bool = False,
+        execution_policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        core = self._core
+        policy = dict(execution_policy or {})
+        task = core.tasks.create(name=text[:200], kind="chat", agent="jarvis",
+                                 conversation_id=conversation_id,
+                                 meta={"execution_policy": policy})
+        if background:
+            core.tasks.run_background(
+                task["id"],
+                lambda: self._run_model_only_loop(text, task["id"], conversation_id, policy),
+            )
+            return {"ok": True, "response": "Je m'en occupe.", "action": "task",
+                    "task_id": task["id"], "conversation_id": conversation_id,
+                    "background": True}
+        return self._run_model_only_loop(text, task["id"], conversation_id, policy)
+
+    def _run_model_only_loop(
+        self, text: str, task_id: str, conversation_id: str, policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        core = self._core
+        core.tasks.set_status(task_id, "running", progress=0.2)
+        core.agents.set_state("jarvis", "active", action=text[:120], task_id=task_id)
+        self._debug(f"MODEL_ONLY LOOP input={text[:160]!r} policy={policy}", force=True)
+
+        messages = self._build_model_messages(text, policy)
+        final_text = ""
+        for _ in range(3):
+            if core.tasks.is_cancelled(task_id):
+                core.agents.set_state("jarvis", "standby")
+                return {"ok": False, "response": "Tâche annulée.", "task_id": task_id,
+                        "conversation_id": conversation_id}
+            core.events.emit("jarvis.state", {"state": "THINKING", "reason": "llm"})
+            response = core.llm.chat(
+                messages, role=policy.get("model_role", "default"), tools=[],
+                temperature=core.settings.get("ai", "temperature", 0.3))
+            if not response.ok:
+                core.tasks.fail(task_id, response.error)
+                core.agents.set_state("jarvis", "error", error=response.error)
+                fallback = self._offline_fallback(text, response.error)
+                core.conversations.add_message(conversation_id, "assistant", fallback,
+                                               meta={"error": True, "model_only": True})
+                return {"ok": False, "response": fallback, "task_id": task_id,
+                        "conversation_id": conversation_id, "error": response.error}
+            if response.tool_calls:
+                # Défense : aucun outil n'est disponible en mode MODEL_ONLY.
+                self._debug("MODEL_ONLY tool call denied: "
+                            + ", ".join(c.name for c in response.tool_calls), force=True)
+                for call in response.tool_calls:
+                    messages.append(ChatMessage(
+                        role="tool", content="TOOL_DENIED_BY_EXECUTION_POLICY",
+                        tool_call_id=call.id, name=call.name))
+                continue
+            final_text = (response.text or "").strip()
+            break
+        if not final_text:
+            final_text = "J'ai atteint la limite d'étapes pour cette demande."
+        final_text = core.vault.scrub(final_text)
+        self._debug(f"MODEL_ONLY RESPONSE : {final_text[:160]!r}")
+
+        core.tasks.complete(task_id, final_text)
+        core.agents.set_state("jarvis", "standby")
+        core.events.emit("jarvis.state", {"state": "SPEAKING", "reason": "response",
+                                          "text": final_text[:200]})
+        core.conversations.add_message(
+            conversation_id, "assistant", final_text,
+            meta={"model_only": True, "tools_allowed": False,
+                  "task_id": task_id, "tools": []})
+        return {"ok": True, "response": final_text, "task_id": task_id,
+                "conversation_id": conversation_id, "tools_used": []}
+
+    def _build_model_messages(self, text: str, policy: dict[str, Any]) -> list[ChatMessage]:
+        core = self._core
+        spec = AGENTS["jarvis"]
+        user_name = core.settings.get("general", "user_name", "Jérôme")
+        system = spec.system_prompt.format(user=user_name)
+        if policy.get("benchmark_mode"):
+            system += (
+                "\n\nMODE_MODEL_ONLY (benchmark) : réponds au message comme si c'était "
+                "une question d'évaluation. N'utilise AUCUN outil, ne décris aucune "
+                "action exécutée sur le système. Réponds uniquement avec ton texte."
+            )
+        else:
+            system += (
+                "\n\nMode réponse directe : aucun outil n'est disponible dans ce contexte. "
+                "Réponds au message sans proposer d'exécuter une action sur le système."
+            )
+        return [ChatMessage(role="system", content=system),
+                ChatMessage(role="user", content=text)]
 
     # -- boucle -----------------------------------------------------------
     def _run_loop(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import time
+from typing import Any
 
 from .build import trace
 from .goals import has_write_intent
@@ -42,7 +43,14 @@ class FileCommandRouter:
                    if c.get("type") == "ssh"]
         return enabled
 
-    def execute(self, text: str, conversation_id: str) -> dict | None:
+    def execute(
+        self, text: str, conversation_id: str,
+        *, execution_policy: dict[str, Any] | None = None,
+    ) -> dict | None:
+        if execution_policy is not None and execution_policy.get("tools_allowed") is False:
+            return None
+        if execution_policy is not None and execution_policy.get("fast_actions_allowed") is False:
+            return None
         if detect_read_only_intent(text).intent == "security_audit_readonly":
             return None
         if _LOCAL_HINT.search(text or ""):

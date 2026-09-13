@@ -57,7 +57,14 @@ class SecurityAuditPipeline:
             if not requested:
                 return doc is active_doc
             if "/" in requested or "\\" in requested:
-                return doc.absolute_path.replace("\\", "/") == requested.replace("\\", "/")
+                path = requested.replace("\\", "/")
+                if doc.source_type == "ssh" and not path.startswith("/"):
+                    connector = core.connectors.raw(doc.connector_id)
+                    try:
+                        path = resolveRemotePath(connector or {}, path, {})
+                    except Exception:
+                        return False
+                return doc.absolute_path.replace("\\", "/") == path
             return doc.filename == requested
         opened = [docs.documents[d] for d in docs.open_document_ids if d in docs.documents]
         matching = [d for d in opened if matches(d)]
@@ -150,7 +157,8 @@ class SecurityAuditPipeline:
                 locked = True
                 source = SourceDocument.from_content(doc.absolute_path, doc.content)
                 report.update(file=source.path, source_hash_before=source.hash, source_hash_after="",
-                              source_size=source.size, source_origin=origin)
+                              source_size=source.size, source_origin=origin,
+                              connector_id=doc.connector_id, source_type=doc.source_type)
                 core.active_task_context.update({"active_file": doc.filename, "last_file": doc.filename,
                     "last_remote_path": doc.absolute_path if doc.source_type == "ssh" else "",
                     "requested_file": doc.absolute_path, "mode": "security_audit_readonly",

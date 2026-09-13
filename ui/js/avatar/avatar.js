@@ -109,6 +109,7 @@ export class JarvisAvatar {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
+    this.scene.fog = new THREE.FogExp2(0x05080f, 0.14);
     this.camera = new THREE.PerspectiveCamera(34, width / height, 0.05, 60);
 
     // Éclairage portrait : clé chaude, remplissage froid, contre-jour cyan.
@@ -133,7 +134,7 @@ export class JarvisAvatar {
     this.fill.position.set(-2.3, 1.5, 1.4);
     this.scene.add(this.fill);
 
-    this.rim = new THREE.DirectionalLight(0x22d3ee, 0.42);
+    this.rim = new THREE.DirectionalLight(0x22d3ee, 0.52);
     this.rim.position.set(-0.7, 2.2, -2.5);
     this.scene.add(this.rim);
 
@@ -141,22 +142,44 @@ export class JarvisAvatar {
     this.ground = new THREE.Mesh(
       new THREE.CircleGeometry(7, 56),
       new THREE.MeshStandardMaterial({
-        color: 0x0a1322, roughness: 0.94, metalness: 0.0,
-        transparent: true, opacity: 0.92,
+        color: 0x060b16, roughness: 0.94, metalness: 0.0,
+        transparent: true, opacity: 0.9,
       }));
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.receiveShadow = q.shadows;
     this.scene.add(this.ground);
 
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.42, 0.47, 64),
+      new THREE.RingGeometry(0.47, 0.55, 64),
       new THREE.MeshBasicMaterial({
-        color: 0x22d3ee, transparent: true, opacity: 0.20, side: THREE.DoubleSide,
+        color: 0x22d3ee, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
       }));
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.002;
     this.scene.add(ring);
     this.ring = ring;
+
+    // Halo lumineux au sol : ancre « premium » qui suit doucement l'avatar.
+    const poolCanvas = document.createElement('canvas');
+    poolCanvas.width = 256; poolCanvas.height = 256;
+    const pctx = poolCanvas.getContext('2d');
+    const pgrad = pctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+    pgrad.addColorStop(0, 'rgba(34,211,238,0.42)');
+    pgrad.addColorStop(0.38, 'rgba(34,211,238,0.10)');
+    pgrad.addColorStop(1, 'rgba(34,211,238,0)');
+    pctx.fillStyle = pgrad;
+    pctx.fillRect(0, 0, 256, 256);
+    const poolTex = new THREE.CanvasTexture(poolCanvas);
+    const pool = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 3.4),
+      new THREE.MeshBasicMaterial({
+        map: poolTex, transparent: true, opacity: 0.9,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.y = 0.001;
+    this.scene.add(pool);
+    this.pool = pool;
 
     this.avatarRoot = new THREE.Group();
     this.scene.add(this.avatarRoot);
@@ -476,6 +499,7 @@ export class JarvisAvatar {
 
     if (this.ring) {
       this.ring.position.set(this.avatarRoot.position.x, 0.002, this.avatarRoot.position.z);
+      this.pool?.position.set(this.avatarRoot.position.x, 0.001, this.avatarRoot.position.z);
       const pulse = this.state === 'IDLE' || this.state === 'SLEEPING' ? 0.14 : 0.26;
       this.ring.material.opacity = pulse
         + Math.sin(performance.now() / 900) * 0.04;

@@ -21,3 +21,9 @@ node_modules/
 vendor/
 .DS_Store
 Thumbs.db
+
+# Runtime Self Upgrade / Supervisor — artefacts générés, jamais commités.
+state/
+backups/
+releases/
+upgrade-workspaces/

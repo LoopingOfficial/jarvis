@@ -133,6 +133,92 @@ def api_health(req):
 
 
 # ---------------------------------------------------------------------------
+# Self Upgrade V1
+# ---------------------------------------------------------------------------
+@router.get("/api/self-upgrade/build-id")
+def api_self_upgrade_build_id(req):
+    return _ok({"build_id": "JARVIS_SELF_UPGRADE_V1", "version": __version__})
+
+
+@router.get("/api/self-upgrade/config")
+def api_self_upgrade_config(req):
+    cfg = CORE.self_upgrade.config()
+    cfg["supervisor"] = CORE.self_upgrade._client.status() if CORE.self_upgrade._client.ping() else {
+        "ok": False, "reachable": False}
+    return _ok({"config": cfg})
+
+
+@router.post("/api/self-upgrade/config")
+def api_self_upgrade_config_update(req):
+    allowed = {"base_url", "orchestrator_model", "coder_model", "candidate_port",
+               "supervisor_url", "main_port", "python", "max_attempts", "enabled"}
+    values = {k: v for k, v in (req["body"] or {}).items() if k in allowed}
+    if not values:
+        return _err("Aucun réglage valide fourni.")
+    updated = CORE.self_upgrade.update_config(values)
+    return _ok({"config": updated})
+
+
+@router.post("/api/self-upgrade/run")
+def api_self_upgrade_run(req):
+    prompt = str((req["body"] or {}).get("prompt") or "").strip()
+    if not prompt:
+        return _err("prompt requis.")
+    mode = str((req["body"] or {}).get("mode") or "auto")
+    conversation_id = str((req["body"] or {}).get("conversation_id") or "")
+    result = CORE.self_upgrade.run(prompt, mode=mode, conversation_id=conversation_id)
+    if not result.get("ok"):
+        return _err(result.get("error", "échec"), 409)
+    return _ok(result)
+
+
+@router.post("/api/self-upgrade/cancel")
+def api_self_upgrade_cancel(req):
+    return _ok(CORE.self_upgrade.cancel())
+
+
+@router.get("/api/self-upgrade/active")
+def api_self_upgrade_active(req):
+    active = CORE.self_upgrade.active_upgrade()
+    return _ok({"active": active})
+
+
+@router.get("/api/self-upgrade/upgrades")
+def api_self_upgrade_list(req):
+    items = CORE.self_upgrade.history.list(limit=30)
+    return _ok({"upgrades": items})
+
+
+@router.get("/api/self-upgrade/upgrades/<upgrade_id>")
+def api_self_upgrade_detail(req, upgrade_id):
+    row = CORE.self_upgrade.history.get(upgrade_id)
+    if row is None:
+        return _err("upgrade inconnue", 404)
+    return _ok(CORE.self_upgrade._with_report(row))
+
+
+@router.post("/api/self-upgrade/upgrades/<upgrade_id>/install")
+def api_self_upgrade_install(req, upgrade_id):
+    result = CORE.self_upgrade.install(upgrade_id)
+    if not result.get("ok"):
+        return _err(result.get("error", "installation refusée"), 409)
+    return _ok(result)
+
+
+@router.post("/api/self-upgrade/upgrades/<upgrade_id>/rollback")
+def api_self_upgrade_rollback(req, upgrade_id):
+    result = CORE.self_upgrade.rollback_u(upgrade_id)
+    if not result.get("ok"):
+        return _err(result.get("error", "rollback refusé"), 409)
+    return _ok(result)
+
+
+@router.post("/api/self-upgrade/upgrades/<upgrade_id>/history")
+def api_self_upgrade_history_detail(req, upgrade_id):
+    return _ok({"files": CORE.self_upgrade.history.files(upgrade_id)})
+
+
+# ---------------------------------------------------------------------------
 # Conversation / commandes
 # ---------------------------------------------------------------------------
 @router.post("/api/command")
@@ -1406,6 +1492,11 @@ class JarvisHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "Interface introuvable."}, 404)
                 return
         data = candidate.read_bytes()
+        if candidate.name == "index.html":
+            data = data.replace(
+                b"</body>",
+                b'<script src="/js/self_upgrades.js?v=JARVIS_SELF_UPGRADE_V1"></script></body>'
+            )
         ctype, _ = mimetypes.guess_type(candidate.name)
         if candidate.suffix.lower() == ".js":
             ctype = "text/javascript"           # indépendant du registre Windows
