@@ -52,7 +52,8 @@ _SECURITY_REQUEST = re.compile(
     r"owasp|csrf|xss|sql\s*injection|secrets?|permissions?|audit)\b", re.IGNORECASE,
 )
 _ANALYSIS_TARGET = re.compile(
-    r"\b([\w./-]+\.(?:php|html?|css|js|json|ya?ml|py|txt|log|sql|sh))\b", re.IGNORECASE,
+    r"(?<![\w./\\])((?:[A-Za-z]:)?[\w./\\~-]+\."
+    r"(?:php|html?|css|[cm]?jsx?|tsx?|json|ya?ml|py|txt|log|sql|sh|md|inc))\b", re.IGNORECASE,
 )
 
 
@@ -73,7 +74,8 @@ def detect_read_only_intent(text: str) -> ReadOnlyIntent:
     audit = bool(re.search(
         r"\b(?:analys\w*|audit\w*|inspect\w*|review|revue|failles?|"
         r"vuln[ée]rabilit[ée]s?|s[ée]curit[ée]|security)\b", words, re.I))
-    reading = bool(_READ_ONLY_REQUEST.search(words))
+    reading = bool(_READ_ONLY_REQUEST.search(words) or
+                   re.search(r"\b(?:comment|pourquoi|propose|sugg[èe]re)\b", words, re.I))
     if constrained or (audit and not editing):
         mode = "security_audit_readonly"
     elif editing:

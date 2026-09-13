@@ -148,22 +148,47 @@ const Dashboard = {
   async renderBrain(status) {
     const hudN = $('#brainNodeCount');
     const hudE = $('#brainEdgeCount');
-    if (!hudN && !hudE) return;
+    const memN = $('#memNodeCount');
+    if (!hudN && !hudE && !memN) return;
     try {
       const st = await fetch('/api/brain/stats', { signal: AbortSignal.timeout(3000) }).then((r) => r.json());
       if (hudN) hudN.textContent = st.nodes ?? '—';
       if (hudE) hudE.textContent = st.edges ?? '—';
+      // Carte-résumé mémoire du Command Center (données réelles /api/brain/stats).
+      if (memN) memN.textContent = st.brains ?? st.nodes ?? '—';
+      const memE = $('#memEdgeCount');
+      if (memE) memE.textContent = st.edges ?? '—';
+      const memK = $('#memKnowledge');
+      if (memK) memK.textContent = st.knowledge ?? '—';
+      const families = Object.entries(st.families || {})
+        .map(([name, count]) => ({ name, count: Number(count) || 0 }))
+        .sort((a, b) => b.count - a.count);
       const legend = $('#brainLegend');
-      if (legend && !legend.children.length && Array.isArray(st.families)) {
-        st.families.slice(0, 12).forEach((f) => {
-          const d = document.createElement('span');
-          d.className = 'legend-item';
-          d.innerHTML = `<i class="legend-dot"></i>${esc(f.name || f)} (${f.count ?? ''})`;
-          d.style.setProperty('--ld', BrainDotColor(f.name || f));
-          legend.appendChild(d);
-        });
+      if (legend && !legend.children.length && families.length) {
+        families.slice(0, 12).forEach((f) => legend.appendChild(this._familyItem(f)));
+      }
+      const memFam = $('#memFamilies');
+      if (memFam && !memFam.querySelector('.mem-fam') && families.length) {
+        memFam.innerHTML = '';
+        families.slice(0, 8).forEach((f) => memFam.appendChild(this._memFamilyChip(f)));
       }
     } catch { /* le HUD 3D fournit déjà ces compteurs */ }
+  },
+
+  _familyItem(f) {
+    const d = document.createElement('span');
+    d.className = 'legend-item';
+    d.innerHTML = `<i class="legend-dot"></i>${esc(f.name)} (${f.count})`;
+    d.style.setProperty('--ld', BrainDotColor(f.name));
+    return d;
+  },
+
+  _memFamilyChip(f) {
+    const d = document.createElement('span');
+    d.className = 'mem-fam';
+    d.innerHTML = `<i class="legend-dot"></i>${esc(f.name)}<b>${f.count}</b>`;
+    d.style.setProperty('--ld', BrainDotColor(f.name));
+    return d;
   },
 
   renderMonitor() { /* conservé pour compatibilité */ },

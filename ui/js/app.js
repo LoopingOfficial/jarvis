@@ -8,20 +8,35 @@
    ========================================================================== */
 const App = {
 NAV: [
-    ['command', 'Command Center', 'command'],
-    ['code', 'Coding', 'code'],
-    ['terminal', 'Terminal', 'terminal'],
-    ['agents', 'Agents', 'agents'],
-    ['tasks', 'Tasks & To-do', 'tasks'],
-    ['avatar-studio', 'Avatar Studio', 'avatar'],
-    ['knowledge', 'Knowledge Base', 'knowledge'],
-    ['learning', 'Idle Learning', 'brain'],
-    ['memory', 'Memory', 'memory'],
-    ['calendar', 'Calendar', 'calendar'],
-    ['conversations', 'Conversations', 'conversations'],
-    ['tools', 'Tools & Skills', 'tools'],
-    ['workflows', 'Workflows', 'workflows'],
-    ['aicore', 'AI Core', 'core'],
+    { label: 'CORE', items: [
+      ['command', 'Accueil', 'command'],
+      ['chat', 'Chat', 'chat'],
+      ['projects', 'Projets', 'folder'],
+      ['agents', 'Agents IA', 'agents'],
+      ['workflows', 'Automatisations', 'workflows'],
+      ['calendar', 'Calendrier', 'calendar'],
+      ['tasks', 'Tâches', 'tasks'],
+    ]},
+    { label: 'RESSOURCES', items: [
+      ['knowledge', 'Connaissances', 'knowledge'],
+      ['memory', 'Mémoire', 'memory'],
+      ['code', 'Fichiers & Code', 'code'],
+      ['analyses', 'Analyses', 'database'],
+      ['terminal', 'Terminal', 'terminal'],
+      ['brain', 'Brain Atlas', 'brain'],
+    ]},
+    { label: 'ESPACES', items: [
+      ['marketing', 'Marketing', 'globe'],
+      ['finance', 'Finance', 'mail'],
+      ['social', 'Réseaux sociaux', 'link'],
+      ['servers', 'Sites & Serveurs', 'server'],
+      ['tools', 'Outils', 'tools'],
+    ]},
+    { label: 'SYSTÈME', items: [
+      ['avatar-studio', 'Avatar Studio', 'avatar'],
+      ['aicore', 'AI Core', 'core'],
+      ['settings', 'Paramètres', 'settings'],
+    ]},
   ],
   phase: 0,
   focusMode: false,
@@ -59,6 +74,7 @@ NAV: [
 
     Dashboard.refreshSoon(6000);
     await Dashboard.refresh();
+    AppHome?.render();
     const brain = window.JarvisBrain;
     if (brain) {
       brain.onNodeClick = (node) => this.showNodeDetails(node);
@@ -74,16 +90,24 @@ NAV: [
   },
 
   renderNav() {
-    $('#nav').innerHTML = this.NAV.map(([id, label, ic]) => `
-      <button class="nav-item ${id === 'command' ? 'active' : ''}" data-nav="${id}">
-        ${icon(ic, 15)}<span>${label}</span>
-      </button>`).join('') + `
-      <button class="nav-item" data-nav="settings">${icon('settings', 15)}<span>Settings</span></button>`;
+    const groups = this.NAV.map((g) => `
+      <div class="nav-group">
+        <div class="nav-group-label">${g.label}</div>
+        ${g.items.map(([id, label, ic]) => `
+          <button class="nav-item ${id === 'command' ? 'active' : ''}" data-nav="${id}" title="${label}">
+            ${icon(ic, 15)}<span>${label}</span>
+          </button>`).join('')}
+      </div>`).join('');
+    $('#nav').innerHTML = groups;
     $$('[data-nav]').forEach((b) => b.onclick = () => this.goto(b.dataset.nav));
   },
 
-  goto(page, options = {}) {
+goto(page, options = {}) {
     window.AvatarStudio?.restoreAvatarStage();
+    let brainFocus = false;
+    let chatFocus = false;
+    if (page === 'brain') { page = 'command'; brainFocus = true; }
+    else if (page === 'chat') { page = 'command'; chatFocus = true; }
     if (!document.getElementById('page-' + page)) page = 'command';
     J.state.page = page;
     location.hash = page;
@@ -94,13 +118,57 @@ NAV: [
     else if (page === 'settings') Settings.render($('#page-settings'), options.section);
     else if (page === 'terminal') Terminal.render();
     else if (page === 'code') CodeEnv.render();
+    else if (page === 'projects' || page === 'analyses' || page === 'finance'
+      || page === 'marketing' || page === 'social' || page === 'servers') Pages.render(page);
+    else if (page === 'conversations') Pages.render('conversations');
     else Pages.render(page);
+    if (brainFocus) {
+      requestAnimationFrame(() => {
+        if (!$('#brainZone')?.classList.contains('is-expanded')) $('#brainExpand')?.click();
+      });
+    }
+    if (chatFocus) setTimeout(() => this.focusChat(), 60);
+  },
+
+  focusChat() {
+    const row = $('#chatRow');
+    if (row) {
+      row.classList.remove('chat-flash');
+      void row.offsetWidth;
+      row.classList.add('chat-flash');
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    setTimeout(() => $('#convInput')?.focus(), 300);
+  },
+
+  toggleLauncher(force) {
+    const pop = $('#launcherPop');
+    if (!pop) return;
+    const hide = force !== undefined ? force : !pop.hidden;
+    pop.hidden = hide;
+    pop.classList.toggle('open', !hide);
+    $('#appLauncher')?.setAttribute('aria-expanded', String(!hide));
+  },
+
+  handleNavAction(action) {
+    if (action === 'focus-chat') return this.focusChat();
+    if (action) this.goto(action);
   },
 
   /* --------------------------------------------------------------- UI */
   bindUI() {
     $('#micBtn').onclick = () => this.toggleVoice();
     $('#talkBar').onclick = () => this.toggleVoice();
+    const sidebarToggle = $('#sidebarToggle');
+    if (sidebarToggle) {
+      sidebarToggle.onclick = async () => {
+        const compact = !$('#app').classList.contains('sidebar-compact');
+        $('#app').classList.toggle('sidebar-compact', compact);
+        sidebarToggle.setAttribute('aria-expanded', String(!compact));
+        const res = await J.put('/api/settings/appearance', { compact_sidebar: compact });
+        if (res.ok) toast(compact ? 'Barre latérale réduite.' : 'Barre latérale déployée.', 'ok');
+      };
+    }
     $('#consoleToggle').onclick = () => this.toggleConsole();
     $('#consoleClose').onclick = () => this.closeConsole();
     $('#consoleNew').onclick = async () => {
@@ -219,6 +287,14 @@ NAV: [
       if (agent) this.goto('agents');
       const taskRow = e.target.closest('.tl-row[data-task]');
       if (taskRow) Pages.showTask(taskRow.dataset.task);
+      const navAct = e.target.closest('[data-nav-action]');
+      if (navAct) this.handleNavAction(navAct.dataset.navAction);
+      const launcher = e.target.closest('[data-launcher], #appLauncher');
+      if (launcher) {
+        if (!e.target.closest('#appLauncher')) { AppHome?.renderLauncher(); this.toggleLauncher(); }
+      } else {
+        this.toggleLauncher(true);
+      }
     });
 
     document.addEventListener('keydown', (e) => {
@@ -233,6 +309,7 @@ NAV: [
       if (e.key === 'Escape') {
         this.closeConsole();
         $('#nodePanel').classList.add('hidden');
+        this.toggleLauncher(true);
       }
     });
 
@@ -245,6 +322,36 @@ NAV: [
         const chip = $('#qualityChip');
         chip.textContent = q.toUpperCase();
         toast('Qualité 3D : ' + q + ' (recharge pour l\'appliquer à toute la scène).');
+      }
+    });
+
+    // ---- Command bar de l'accueil (pilotée par les vraies routes JARVIS) ----
+    const homeForm = $('#homeCmdForm');
+    if (homeForm) homeForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const el = $('#homeCmd');
+      const text = (el.value || '').trim();
+      if (!text) return;
+      el.value = '';
+      this.send(text);
+    });
+    const homeMic = $('#homeMic');
+    if (homeMic) homeMic.onclick = () => this.toggleVoice();
+
+    // ---- Lanceur d'applications ----
+    $('#appLauncher').onclick = (e) => {
+      e.stopPropagation();
+      AppHome?.renderLauncher();
+      this.toggleLauncher();
+    };
+    $('#launcherPop').addEventListener('click', (e) => {
+      const go = e.target.closest('[data-launch]');
+      if (go) {
+        this.toggleLauncher(true);
+        const v = go.dataset.launch;
+        if (v === 'focus-chat') this.focusChat();
+        else if (v === 'settings-connectors') this.goto('settings', { section: 'connectors' });
+        else this.goto(v);
       }
     });
   },
@@ -267,6 +374,9 @@ NAV: [
     if (action === 'voice') return this.toggleVoice();
     if (action === 'new-task') return this.newTaskDialog();
     if (action === 'run-workflow') return this.runWorkflowDialog();
+    const prompt = AppHome?.QUICK_PROMPTS?.[action];
+    if (prompt) return this.send(prompt);
+    return this.send(action);
   },
 
   /* ------------------------------------------------------------ console */

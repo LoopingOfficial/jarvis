@@ -75,6 +75,10 @@ class SecurityAnalysisCase(unittest.TestCase):
             self.assertEqual(detect_read_only_intent(text).intent, "file_edit")
         self.assertEqual(detect_read_only_intent("affiche moi marketplace.php").intent, "read_only")
         self.assertEqual(detect_read_only_intent("affiche security.php").intent, "read_only")
+        for text in ("explique comment modifier index.php", "propose les correctifs",
+                     "analyse index.php et explique comment corriger la faille"):
+            self.assertTrue(detect_read_only_intent(text).read_only)
+            self.assertFalse(has_write_intent(text))
 
     def test_open_is_only_open(self):
         with patch("jarvis.tools.remote_tools.ssh_exec", side_effect=self.transport), \

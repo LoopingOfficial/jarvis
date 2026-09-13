@@ -219,6 +219,18 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "fontSize": 13,
         "fontFamily": "Cascadia Code",
     },
+    "self_upgrade": {
+        "enabled": True,
+        "provider": "ollama",
+        "base_url": "http://127.0.0.1:11434",
+        "orchestrator_model": "jarvis-astra",
+        "coder_model": "qwen2.5-coder:7b-instruct-q4_K_M",
+        "candidate_port": 8791,
+        "supervisor_url": "http://127.0.0.1:8770",
+        "main_port": 8765,
+        "python": "",
+        "max_attempts": 2,
+    },
 }
 
 # Les clés ci-dessous sont verrouillées : Settings ne peut pas les modifier

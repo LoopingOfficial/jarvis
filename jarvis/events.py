@@ -74,6 +74,11 @@ EVENT_TYPES = {
     "coding.started", "coding.completed",
     "deploy.started", "deploy.completed",
     "verification.started", "verification.completed",
+    # Self Upgrade V1 — contrat temps réel avec la page Self Upgrades.
+    "upgrade.started", "upgrade.progress", "upgrade.log", "upgrade.plan_ready",
+    "upgrade.workspace_ready", "upgrade.building", "upgrade.testing", "upgrade.candidate",
+    "upgrade.promoting", "upgrade.installed", "upgrade.completed", "upgrade.failed",
+    "upgrade.rolled_back", "upgrade.cancelled",
 }
 
 LEVELS = ("info", "warn", "error", "live", "tip", "meeting", "focus", "overdue")

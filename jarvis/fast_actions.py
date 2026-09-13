@@ -34,7 +34,14 @@ class FastActionRouter:
             return {"intent": "close_app", "name": self.APPS[m.group(1).strip().casefold()], "raw": m.group(1).strip()}
         return None
 
-    def execute(self, text: str, conversation_id: str = "") -> dict[str, Any] | None:
+    def execute(
+        self, text: str, conversation_id: str = "",
+        *, resolved_intent=None, execution_policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if execution_policy is not None and execution_policy.get("fast_actions_allowed") is False:
+            return None
+        if execution_policy is not None and execution_policy.get("tools_allowed") is False:
+            return None
         hit = self.match(text)
         if not hit:
             return None
