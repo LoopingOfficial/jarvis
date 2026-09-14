@@ -445,3 +445,189 @@ registry.add(
         "command": {"type": "string", "description": "status | run-task <description>"}},
         "required": ["admin_id", "command"]},
 )
+
+
+# ---------------------------------------------------------------------------
+# F. Publication simple (briques des tâches planifiées)
+# ---------------------------------------------------------------------------
+def _send_message(ctx: ToolContext) -> ToolResult:
+    channel_id = int(ctx.arguments.get("channel_id") or 0)
+    content = str(ctx.arguments.get("content") or ctx.arguments.get("message") or "")
+    return _bridge(ctx, lambda e: e.send_message(channel_id, content), risk=SAFE_WRITE,
+                   describe=lambda d: f"Message publié dans {d['channel']}.")
+
+
+registry.add(
+    id="discord.send_message", name="Envoyer un message", category="Discord",
+    description=("Publie un message texte dans un salon. Les mentions de masse (@everyone, @here) "
+                 "sont neutralisées."),
+    handler=_send_message, risk=SAFE_WRITE, permissions=("write",), agents=(),
+    input_schema={"type": "object", "properties": {
+        "channel_id": {"type": "string", "description": "Identifiant du salon."},
+        "content": {"type": "string", "description": "Texte à publier (2000 caractères max)."}},
+        "required": ["channel_id", "content"]},
+)
+
+
+def _send_embed(ctx: ToolContext) -> ToolResult:
+    channel_id = int(ctx.arguments.get("channel_id") or 0)
+    title = str(ctx.arguments.get("title") or "JARVIS")
+    description = str(ctx.arguments.get("description") or ctx.arguments.get("message") or "")
+    severity = str(ctx.arguments.get("severity") or "INFO").upper()
+    fields = ctx.arguments.get("fields") or []
+    return _bridge(ctx, lambda e: e.send_embed(channel_id, title, description, severity, fields),
+                   risk=SAFE_WRITE,
+                   describe=lambda d: f"Embed « {d['title']} » publié dans {d['channel']}.")
+
+
+registry.add(
+    id="discord.send_embed", name="Envoyer un embed", category="Discord",
+    description="Publie un message formaté (embed coloré, champs facultatifs) dans un salon.",
+    handler=_send_embed, risk=SAFE_WRITE, permissions=("write",), agents=(),
+    input_schema={"type": "object", "properties": {
+        "channel_id": {"type": "string"},
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "severity": {"type": "string", "enum": ["INFO", "WARNING", "CRITICAL", "SUCCESS"]},
+        "fields": {"type": "array", "description": "Champs [{name, value}] facultatifs.",
+                   "items": {"type": "object", "properties": {
+                       "name": {"type": "string"}, "value": {"type": "string"}}}}},
+        "required": ["channel_id", "description"]},
+)
+
+
+# ---------------------------------------------------------------------------
+# G. Tâches Discord planifiées
+# ---------------------------------------------------------------------------
+def _scheduler(ctx: ToolContext):
+    """Planificateur du cœur, créé à la demande comme le moteur Discord."""
+    core = ctx.core
+    scheduler = getattr(core, "discord_scheduler", None)
+    if scheduler is None:
+        from ..discord_scheduler import DiscordScheduler
+        scheduler = DiscordScheduler(core)
+        core.discord_scheduler = scheduler
+    return scheduler
+
+
+def _schedule_add(ctx: ToolContext) -> ToolResult:
+    from ..discord_scheduler import ScheduleError, describe_interval
+
+    args = ctx.arguments
+    params = args.get("params") or {}
+    if isinstance(params, str):                     # le modèle envoie parfois du JSON en texte
+        import json
+        try:
+            params = json.loads(params)
+        except Exception:
+            return ToolResult(ok=False, risk=SENSITIVE, output="`params` doit être un objet JSON.")
+    if not isinstance(params, dict):
+        return ToolResult(ok=False, risk=SENSITIVE, output="`params` doit être un objet JSON.")
+    try:
+        task = _scheduler(ctx).add(
+            name=str(args.get("name") or ""),
+            interval=args.get("interval"),
+            tool_to_call=str(args.get("tool_to_call") or ""),
+            target_channel_id=str(args.get("target_channel_id") or ""),
+            params=params,
+            status=str(args.get("status") or "ACTIVE"),
+            allow_destructive=bool(args.get("allow_destructive")),
+            source=f"agent:{ctx.agent}",
+        )
+    except ScheduleError as exc:
+        return ToolResult(ok=False, risk=SENSITIVE, output=str(exc))
+    return ToolResult(ok=True, risk=SENSITIVE, data=task,
+                      output=(f"Tâche « {task['name']} » planifiée "
+                              f"({describe_interval(task['trigger'])}), identifiant {task['id']}. "
+                              f"Prochaine exécution : {task['next_run_iso'] or 'suspendue'}."))
+
+
+registry.add(
+    id="discord.schedule_add", name="Planifier une action Discord", category="Discord",
+    description=("Programme l'exécution récurrente d'un outil Discord : intervalle (« 30m », « 2h »), "
+                 "heure fixe (« 09:00 ») ou expression cron (« 0 9 * * * »). "
+                 "Seuls les outils discord.* sont planifiables."),
+    handler=_schedule_add, risk=SENSITIVE, confirmation_policy="always",
+    permissions=("write",), agents=("jarvis", "system", "ops", "cmo"),
+    dangerous_hint="L'action se répétera sans nouvelle validation à chaque exécution.",
+    input_schema={"type": "object", "properties": {
+        "name": {"type": "string", "description": "Nom de la tâche (ex. « Annonce matinale »)."},
+        "interval": {"type": "string",
+                     "description": "« 30m », « 2h », « 09:00 » ou cron « 0 9 * * * »."},
+        "tool_to_call": {"type": "string",
+                         "description": ("Outil à déclencher : discord.send_message, discord.send_embed, "
+                                         "discord.send_alert, discord.purge, discord.summarize_channel…")},
+        "target_channel_id": {"type": "string", "description": "Salon concerné."},
+        "params": {"type": "object", "description": "Paramètres passés à l'outil."},
+        "status": {"type": "string", "enum": ["ACTIVE", "PAUSED"]},
+        "allow_destructive": {"type": "boolean",
+                              "description": "Obligatoire pour planifier une action irréversible (purge)."}},
+        "required": ["name", "interval", "tool_to_call"]},
+)
+
+
+def _schedule_list(ctx: ToolContext) -> ToolResult:
+    scheduler = _scheduler(ctx)
+    status = str(ctx.arguments.get("status") or "")
+    tasks = scheduler.list(status=status)
+    if not tasks:
+        return ToolResult(ok=True, data={"tasks": []}, risk=READ_ONLY,
+                          output="Aucune tâche Discord planifiée.")
+    lines = [(f"- [{t['status']}] {t['name']} ({t['id']}) — {t['tool_to_call']} {t['interval']}, "
+              f"salon {t['target_channel_id'] or '—'}, prochaine : {t['next_run_iso'] or '—'}, "
+              f"{t['run_count']} exécution(s), dernier statut : {t['last_status'] or '—'}")
+             for t in tasks]
+    return ToolResult(ok=True, risk=READ_ONLY,
+                      data={"tasks": tasks, "runs": scheduler.runs(limit=20)},
+                      output="Tâches Discord planifiées :\n" + "\n".join(lines))
+
+
+registry.add(
+    id="discord.schedule_list", name="Lister les actions planifiées", category="Discord",
+    description="Liste les tâches Discord planifiées, leur statut et leur prochaine exécution.",
+    handler=_schedule_list, risk=READ_ONLY, agents=(),
+    input_schema={"type": "object", "properties": {
+        "status": {"type": "string", "enum": ["ACTIVE", "PAUSED"],
+                   "description": "Filtre facultatif."}}},
+)
+
+
+def _schedule_delete(ctx: ToolContext) -> ToolResult:
+    from ..discord_scheduler import ScheduleError
+
+    scheduler = _scheduler(ctx)
+    task_id = str(ctx.arguments.get("task_id") or "")
+    mode = str(ctx.arguments.get("mode") or "delete").lower()
+    task = scheduler.get(task_id)
+    if not task:
+        return ToolResult(ok=False, risk=SENSITIVE,
+                          output=(f"Aucune tâche planifiée « {task_id} ». "
+                                  f"Utilise discord.schedule_list pour retrouver son identifiant."))
+    try:
+        if mode == "pause":
+            updated = scheduler.set_status(task_id, "PAUSED")
+            return ToolResult(ok=True, risk=SENSITIVE, data=updated,
+                              output=f"Tâche « {task['name']} » suspendue (elle reste enregistrée).")
+        if mode == "resume":
+            updated = scheduler.set_status(task_id, "ACTIVE")
+            return ToolResult(ok=True, risk=SENSITIVE, data=updated,
+                              output=(f"Tâche « {task['name']} » réactivée. Prochaine exécution : "
+                                      f"{updated['next_run_iso']}."))
+    except ScheduleError as exc:
+        return ToolResult(ok=False, risk=SENSITIVE, output=str(exc))
+    scheduler.delete(task_id)
+    return ToolResult(ok=True, risk=SENSITIVE, data={"deleted": task_id},
+                      output=f"Tâche « {task['name']} » supprimée.")
+
+
+registry.add(
+    id="discord.schedule_delete", name="Supprimer une action planifiée", category="Discord",
+    description=("Supprime une tâche Discord planifiée, ou la suspend / réactive "
+                 "(mode : delete | pause | resume)."),
+    handler=_schedule_delete, risk=SENSITIVE, permissions=("write",),
+    agents=("jarvis", "system", "ops", "cmo"),
+    input_schema={"type": "object", "properties": {
+        "task_id": {"type": "string", "description": "Identifiant de la tâche planifiée."},
+        "mode": {"type": "string", "enum": ["delete", "pause", "resume"]}},
+        "required": ["task_id"]},
+)

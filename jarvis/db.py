@@ -247,6 +247,25 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   status TEXT, output TEXT, task_id TEXT
 );
 
+-- Tâches Discord récurrentes (cf. jarvis/discord_scheduler.py). Table distincte
+-- de `workflows` : une planification Discord porte un salon cible et un outil,
+-- là où un workflow porte une suite d'étapes d'agent.
+CREATE TABLE IF NOT EXISTS discord_schedules (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, trigger TEXT NOT NULL DEFAULT '{}',
+  target_channel_id TEXT DEFAULT '', tool_to_call TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'ACTIVE', allow_destructive INTEGER NOT NULL DEFAULT 0,
+  source TEXT DEFAULT 'user', created_at REAL, updated_at REAL, next_run_at REAL, last_run_at REAL,
+  last_status TEXT DEFAULT '', last_output TEXT DEFAULT '',
+  run_count INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_discord_schedules_due ON discord_schedules(status, next_run_at);
+
+CREATE TABLE IF NOT EXISTS discord_schedule_runs (
+  id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, ts REAL, status TEXT, duration_ms INTEGER DEFAULT 0,
+  reason TEXT DEFAULT '', tool_to_call TEXT DEFAULT '', output TEXT DEFAULT '', data TEXT DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_discord_schedule_runs ON discord_schedule_runs(schedule_id, ts);
+
 CREATE TABLE IF NOT EXISTS calendar_events (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, start_at REAL NOT NULL, end_at REAL, all_day INTEGER DEFAULT 0,
   source TEXT DEFAULT 'local', description TEXT DEFAULT '', meta TEXT DEFAULT '{}', created_at REAL

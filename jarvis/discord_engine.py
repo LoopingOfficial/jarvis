@@ -640,6 +640,42 @@ class DiscordEngine:
                                                  "severite": severity})
         return {"ok": True, "message_id": getattr(sent, "id", None), "channel": str(channel)}
 
+    async def send_message(self, channel_id: int, content: str) -> dict[str, Any]:
+        """Message texte simple. Les mentions de masse (@everyone, @here) sont
+        neutralisées : une tâche planifiée qui pingue tout le serveur par erreur
+        ne se rattrape pas."""
+        channel = self._channel(channel_id)
+        text = self.redact(content)[:2000]
+        if not text.strip():
+            raise ValueError("Message vide : rien à publier.")
+        sent = await self.api(
+            lambda: channel.send(text, allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False, users=True)),
+            what="message")
+        self.audit("discord.message.sent", detail={"salon": str(channel), "taille": len(text)})
+        return {"ok": True, "message_id": getattr(sent, "id", None), "channel": str(channel),
+                "content": text}
+
+    async def send_embed(self, channel_id: int, title: str, description: str,
+                         severity: str = "INFO",
+                         fields: list[Any] | None = None) -> dict[str, Any]:
+        """Embed formaté. `fields` accepte [{name, value}] ou [[name, value]]."""
+        channel = self._channel(channel_id)
+        pairs: list[tuple[str, str]] = []
+        for field_spec in (fields or []):
+            if isinstance(field_spec, dict):
+                pairs.append((str(field_spec.get("name", "")), str(field_spec.get("value", ""))))
+            elif isinstance(field_spec, (list, tuple)) and len(field_spec) >= 2:
+                pairs.append((str(field_spec[0]), str(field_spec[1])))
+        sent = await self.api(
+            lambda: channel.send(embed=self.embed(title, description, severity, fields=pairs),
+                                 allowed_mentions=discord.AllowedMentions(
+                                     everyone=False, roles=False, users=True)),
+            what="embed")
+        self.audit("discord.embed.sent", detail={"salon": str(channel), "titre": title})
+        return {"ok": True, "message_id": getattr(sent, "id", None), "channel": str(channel),
+                "title": str(title)}
+
     async def purge(self, channel_id: int, limit: int = 50, filter_type: str = "all") -> dict[str, Any]:
         """Nettoyage ciblé. `limit` est plafonné : une purge massive est irréversible."""
         channel = self._channel(channel_id)

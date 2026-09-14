@@ -21,6 +21,7 @@ from .vault_credentials import ALL_SECRET_FIELDS, AgentContext, VaultDenied
 from .attachments import AttachmentError
 from .config import UI_DIR
 from .connectors import type_catalog
+from .discord_scheduler import ScheduleError
 from .permissions import RISK_LABELS
 from .tools.base import registry
 
@@ -796,6 +797,63 @@ def api_workflow_toggle(req, wid):
 @router.post("/api/hooks/<token>")
 def api_hook(req, token):
     return _ok(CORE.automations.trigger_webhook(token, req["body"]))
+
+
+# ---------------------------------------------------------------------------
+# Tâches Discord planifiées
+# ---------------------------------------------------------------------------
+@router.get("/api/discord/schedules")
+def api_discord_schedules(req):
+    return _ok({"schedules": CORE.discord_scheduler.list(),
+                "runs": CORE.discord_scheduler.runs(limit=30)})
+
+
+@router.post("/api/discord/schedules")
+def api_discord_schedule_create(req):
+    body = req["body"]
+    try:
+        task = CORE.discord_scheduler.add(
+            name=str(body.get("name") or ""),
+            interval=body.get("interval"),
+            tool_to_call=str(body.get("tool_to_call") or ""),
+            target_channel_id=str(body.get("target_channel_id") or ""),
+            params=body.get("params") or {},
+            status=str(body.get("status") or "ACTIVE"),
+            allow_destructive=bool(body.get("allow_destructive")),
+            source="api",
+        )
+    except ScheduleError as exc:
+        return _err(str(exc))
+    return _ok({"schedule": task})
+
+
+@router.put("/api/discord/schedules/<sid>")
+def api_discord_schedule_update(req, sid):
+    try:
+        task = CORE.discord_scheduler.update(sid, req["body"])
+    except ScheduleError as exc:
+        return _err(str(exc))
+    return _ok({"schedule": task}) if task else _err("Tâche planifiée introuvable.", 404)
+
+
+@router.delete("/api/discord/schedules/<sid>")
+def api_discord_schedule_delete(req, sid):
+    return _ok({"deleted": CORE.discord_scheduler.delete(sid)})
+
+
+@router.post("/api/discord/schedules/<sid>/status")
+def api_discord_schedule_status(req, sid):
+    """Bascule ACTIVE / PAUSED sans perdre l'historique de la tâche."""
+    try:
+        task = CORE.discord_scheduler.set_status(sid, str(req["body"].get("status") or ""))
+    except ScheduleError as exc:
+        return _err(str(exc))
+    return _ok({"schedule": task}) if task else _err("Tâche planifiée introuvable.", 404)
+
+
+@router.post("/api/discord/schedules/<sid>/run")
+def api_discord_schedule_run(req, sid):
+    return _ok(CORE.discord_scheduler.run_now(sid, reason="manuel"))
 
 
 # ---------------------------------------------------------------------------

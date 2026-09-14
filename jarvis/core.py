@@ -34,6 +34,7 @@ from .config import DATA_DIR, LEGACY_CONNECTIONS, SettingsStore, ensure_dirs
 from .connectors import ConnectorManager
 from .conversations import ConversationManager
 from .db import Database
+from .discord_scheduler import DiscordScheduler
 from .events import EventBus
 from .document_store import DocumentStore
 from .imagegen import ImageGenManager
@@ -85,6 +86,10 @@ class JarvisCore:
         self.agents = AgentManager(self.db, self.events)
         self.llm = LLMManager(self.connectors, self.vault, self.settings, self.events)
         self.automations = AutomationManager(self.db, self.events, self.tasks, self.settings)
+        # Planificateur Discord : dépend de `automations` (calcul du cron) et du
+        # runner, donc construit après eux. Le moteur Discord, lui, reste créé à
+        # la demande : planifier une tâche ne doit pas forcer la connexion du bot.
+        self.discord_scheduler = DiscordScheduler(self)
         self.imagegen = ImageGenManager(self)
         self.blender = BlenderManager(self)
         self.avatar = AvatarDirector(self)
@@ -208,6 +213,7 @@ class JarvisCore:
         self.monitor.start_broadcast(interval=5.0, stop_event=self._stop)
         self.idle_learning.start()
         self.automations.start_scheduler()
+        self.discord_scheduler.start()
         threading.Thread(target=self._maintenance_loop, daemon=True, name="jarvis-maintenance").start()
         # Sonde initiale des fournisseurs de modèles hors du chemin des requêtes.
         threading.Thread(target=self._llm_probe_loop, daemon=True, name="jarvis-llm-status").start()
@@ -242,6 +248,7 @@ class JarvisCore:
         if self._clap_listener is not None:
             self._clap_listener.stop()
         self.automations.stop()
+        self.discord_scheduler.stop()
         self.idle_learning.stop()
         try:
             self.blender.shutdown()
