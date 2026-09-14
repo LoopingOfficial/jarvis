@@ -35,7 +35,10 @@ const DEFAULTS = {
   bloom: { strength: 0.38, radius: 0.55, threshold: 0.92 },
   accent: 0x22d3ee,        // cyan JARVIS
   rim: 0x3b82f6,           // bleu froid pour le contre-jour
-  exposure: 0.95,
+  // Exposition volontairement basse : un sujet clair (sweat blanc) sature
+  // très vite en ACESFilmic, et la lumière écrase alors tout le modelé du
+  // visage et des plis du vêtement.
+  exposure: 0.72,
   shadows: true,
   autoRotate: false,
   platform: true,
@@ -112,10 +115,14 @@ export async function createAvatarViewer(options = {}) {
   const lights = new THREE.Group();
   scene.add(lights);
 
-  const ambient = new THREE.AmbientLight(0xdfefff, 0.35);
+  // Ambiante faible et légèrement bleutée : elle sert à décoller les noirs,
+  // pas à éclairer. Trop forte, elle aplatit le sujet en aplat blanc.
+  const ambient = new THREE.AmbientLight(0xcfe4ff, 0.16);
   lights.add(ambient);
 
-  const key = new THREE.DirectionalLight(0xffffff, 2.2);        // lumière principale
+  // Clé tiède plutôt que blanc pur, et deux fois moins intense : le blanc pur
+  // à 2.2 cramait les vêtements clairs bien avant le bloom.
+  const key = new THREE.DirectionalLight(0xfff2e2, 1.05);       // lumière principale
   key.position.set(2.6, 4.2, 3.2);
   if (opts.shadows) {
     key.castShadow = true;
@@ -127,15 +134,15 @@ export async function createAvatarViewer(options = {}) {
   }
   lights.add(key);
 
-  const fill = new THREE.DirectionalLight(0x9fc6ff, 0.6);       // déboucheur froid
+  const fill = new THREE.DirectionalLight(0x9fc6ff, 0.32);      // déboucheur froid
   fill.position.set(-3.5, 2.0, 1.5);
   lights.add(fill);
 
-  const rim = new THREE.PointLight(opts.rim, 18, 14, 2);        // contre-jour bleu
+  const rim = new THREE.PointLight(opts.rim, 12, 14, 2);        // contre-jour bleu
   rim.position.set(-1.8, 2.4, -2.6);
   lights.add(rim);
 
-  const accent = new THREE.PointLight(opts.accent, 14, 10, 2);  // accent cyan au sol
+  const accent = new THREE.PointLight(opts.accent, 9, 10, 2);   // accent cyan au sol
   accent.position.set(1.6, 0.35, 1.8);
   lights.add(accent);
 
@@ -195,7 +202,9 @@ export async function createAvatarViewer(options = {}) {
     const materials = Array.isArray(node.material) ? node.material : [node.material];
     for (const material of materials) {
       if (!material) continue;
-      material.envMapIntensity = 0.9;
+      // L'environnement PMREM ajoute sa propre lumière diffuse : à 0.9 il
+      // s'additionnait aux sources et participait à la saturation.
+      material.envMapIntensity = 0.45;
       if (material.map) material.map.anisotropy = 8;
       // La peau n'est ni métallique ni miroir : forcer metalness 0.8 partout,
       // comme le font beaucoup d'exemples, donnerait un mannequin en étain.
@@ -400,8 +409,8 @@ export async function createAvatarViewer(options = {}) {
 
     // Respiration lumineuse : discrète, et surtout pas sur le sujet lui-même.
     const t = clock.elapsedTime;
-    accent.intensity = 14 + Math.sin(t * 1.6) * 3;
-    rim.intensity = 18 + Math.sin(t * 1.1 + 1.2) * 2.5;
+    accent.intensity = 9 + Math.sin(t * 1.6) * 2;
+    rim.intensity = 12 + Math.sin(t * 1.1 + 1.2) * 1.8;
 
     controls.update();
     composer.render();
