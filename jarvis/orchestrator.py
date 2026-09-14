@@ -448,6 +448,8 @@ class Orchestrator:
                     kind="google_sheet_analysis", reason=code or "SHEET_NOT_FOUND", url=url,
                     available_tabs=(result.data or {}).get("available_tabs")
                     if isinstance(result.data, dict) else None)
+                self._debug(f"[sheet] request_id={request_id} resource_type=GOOGLE_SHEET "
+                            f"google_sheet_read=FAILED code={code or 'UNKNOWN'}", force=True)
                 core.tasks.fail(task["id"], result.output or code or message)
                 return {"ok": False, "response": message, "action": "google.sheets.read",
                         "task_id": task["id"], "conversation_id": conversation_id,
@@ -457,6 +459,12 @@ class Orchestrator:
             workbook = result.data if isinstance(result.data, dict) else {}
             summary = workbook_summary(workbook)
             analysis = analyze_workbook(workbook)
+            # Trace ciblee : sans elle, un echec de lecture ou une analyse vide
+            # est indiagnosticable depuis l'interface (cf. erreurs silencieuses).
+            self._debug(f"[sheet] request_id={request_id} intent={resolved.intent} "
+                        f"resource_type=GOOGLE_SHEET google_sheet_read=OK "
+                        f"sheet_count={workbook.get('sheet_count', 0)} "
+                        f"semantic_analysis={len(analysis.get('sheets', []))}_sheets", force=True)
             original_text = text
             core.active_task_context["last_sheet_url"] = url
             # « Analyse ce fichier » attend une synthèse, pas la récitation des
@@ -544,6 +552,10 @@ class Orchestrator:
                 duration_ms=int((time.time() - started_at) * 1000),
                 intent=detect_intent(original_text))
             response["analysis_workspace"] = payload
+            self._debug(f"[sheet] request_id={request_id} "
+                        f"grounding_status={'PASS' if grounding.ok else grounding.code} "
+                        f"workspace_payload_created=1 intent={payload['intent']} "
+                        f"sections={len(payload.get('sections', []))}", force=True)
             response["workspace_intent"] = payload["intent"]
             # Le chat reste court : le detail vit dans le workspace.
             response["chat_response"] = chat_digest(payload)
