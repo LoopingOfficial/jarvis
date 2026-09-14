@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_1';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_2';
 
 const AVATAR_URL = '/assets/avatar/cartoon_boy.glb';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
@@ -133,7 +133,7 @@ const Home = {
         // Un vêtement blanc sous un bloom trop bas devient une lampe : le seuil
         // haut réserve la lueur aux accents néon de la scène.
         bloom: { strength: 0.34, radius: 0.6, threshold: 0.93 },
-        exposure: 0.95,
+        exposure: 0.72,
       });
       window.JarvisHomeAvatar = this.viewer;
       this.q('[data-loading]')?.classList.add('gone');
