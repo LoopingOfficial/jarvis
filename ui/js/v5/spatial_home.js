@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_7';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_10';
 
 const AVATAR_URL = '/assets/avatar/cartoon_boy.glb';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
@@ -59,55 +59,30 @@ const Home = {
     wrap = document.createElement('section');
     wrap.className = 'jh';
     wrap.innerHTML = `
-      <aside class="jh-col jh-left">
-        <div class="jh-card">
-          <div class="jh-card-h"><span class="jh-dot" data-sys-dot></span>Système<span class="jh-tag" data-sys-tag>—</span></div>
-          <div class="jh-card-b">
-            <div class="jh-gauge"><div class="jh-gauge-top"><span>Processeur</span><b data-cpu>—</b></div>
-              <div class="jh-bar"><i data-cpu-bar></i></div></div>
-            <div class="jh-gauge"><div class="jh-gauge-top"><span>Mémoire</span><b data-ram>—</b></div>
-              <div class="jh-bar"><i data-ram-bar></i></div></div>
-            <div class="jh-gauge"><div class="jh-gauge-top"><span>Disque</span><b data-disk>—</b></div>
-              <div class="jh-bar"><i data-disk-bar></i></div></div>
-          </div>
+      <div class="jh-inner">
+        <div class="jh-stage" data-stage>
+          <div class="jh-loading" data-loading></div>
         </div>
 
-        <div class="jh-card">
-          <div class="jh-card-h">Noyau<span class="jh-tag" data-version>—</span></div>
-          <div class="jh-card-b">
-            <div class="jh-kv"><span>Uptime</span><b data-uptime>—</b></div>
-            <div class="jh-kv"><span>Outils</span><b data-tools>—</b></div>
-            <div class="jh-kv"><span>Mémoires</span><b data-memories>—</b></div>
-            <div class="jh-kv"><span>Conversations</span><b data-convs>—</b></div>
-          </div>
+        <h1 class="jh-hello" data-hello>Bonsoir.</h1>
+        <p class="jh-sub" data-sub>Connexion aux systèmes…</p>
+
+        <div class="jh-suggest" data-suggest></div>
+
+        <div class="jh-strip">
+          <span class="jh-chip"><span class="jh-dot" data-sys-dot></span><b data-sys>—</b></span>
+          <span class="jh-chip">Processeur <b data-cpu>—</b></span>
+          <span class="jh-chip">Mémoire <b data-ram>—</b></span>
+          <span class="jh-chip">Modèles <b data-llm-tag>—</b></span>
+          <span class="jh-chip">Outils <b data-tools>—</b></span>
+          <span class="jh-chip">Agents <b data-agents-tag>—</b></span>
+          <span class="jh-chip jh-chip-mute" data-version>—</span>
         </div>
 
-        <div class="jh-card">
-          <div class="jh-card-h"><span class="jh-dot off" data-llm-dot></span>Modèles<span class="jh-tag" data-llm-tag>—</span></div>
-          <div class="jh-card-b" data-llm-list><div class="jh-empty">Chargement…</div></div>
+        <div class="jh-activity" data-activity hidden>
+          <span class="jh-dot"></span><span data-activity-text></span>
         </div>
-      </aside>
-
-      <main class="jh-center">
-        <div class="jh-card jh-stage-card">
-          <div class="jh-stage" data-stage>
-            <div class="jh-badge"><span class="jh-dot" data-core-dot></span><span data-core-label>JARVIS CORE · CHARGEMENT</span></div>
-            <div class="jh-loading" data-loading>PRÉPARATION DE L'AVATAR…</div>
-            <div class="jh-hint">glisser : orbiter · molette : zoom</div>
-          </div>
-        </div>
-      </main>
-
-      <aside class="jh-col jh-right">
-        <div class="jh-card">
-          <div class="jh-card-h"><span class="jh-dot" data-agents-dot></span>Agents<span class="jh-tag" data-agents-tag>—</span></div>
-          <div class="jh-card-b" data-agents><div class="jh-empty">Chargement…</div></div>
-        </div>
-        <div class="jh-card jh-feed">
-          <div class="jh-card-h"><span class="jh-dot"></span>Activité<span class="jh-tag" data-feed-tag>EN DIRECT</span></div>
-          <div class="jh-feed-list" data-feed><div class="jh-empty">En attente d'événements…</div></div>
-        </div>
-      </aside>`;
+      </div>`;
     wrap.classList.add('jh-layer');
     target.appendChild(wrap);
     this.host = wrap;
@@ -115,6 +90,34 @@ const Home = {
   },
 
   q(sel) { return this.host ? this.host.querySelector(sel) : null; },
+
+  /* Suggestions : elles ne « font » rien toutes seules, elles PRÉPARENT la
+     demande dans la vraie barre de commande (#convInput) et lui donnent le
+     focus. L'utilisateur garde la main sur l'envoi — proposer n'est pas agir. */
+  SUGGESTIONS: [
+    { t: 'Résumer mes derniers mails', p: 'Résume mes mails non lus et classe-les par urgence.' },
+    { t: 'Analyser un document', p: "Analyse le document que je vais te joindre et donne-moi l'essentiel." },
+    { t: 'Chercher sur le web', p: 'Cherche sur le web : ' },
+    { t: 'Faire le point', p: 'Fais le point sur mes tâches en cours et ce qui bloque.' },
+  ],
+
+  renderSuggestions() {
+    const box = this.q('[data-suggest]');
+    if (!box || box.dataset.ready) return;
+    box.dataset.ready = '1';
+    box.innerHTML = this.SUGGESTIONS.map((s, i) =>
+      `<button class="jh-sugg" type="button" data-i="${i}">${esc(s.t)}</button>`).join('');
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-i]');
+      if (!btn) return;
+      const input = document.getElementById('convInput');
+      if (!input) return;
+      input.value = this.SUGGESTIONS[Number(btn.dataset.i)].p;
+      input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));   // laisse l'app réagir
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) {}
+    });
+  },
 
   /* -------------------------------------------------------------- avatar */
   async mountViewer() {
@@ -171,72 +174,56 @@ const Home = {
   renderStatus(status) {
     const core = status.core || {};
     const sys = parseSystem(core.system?.detail);
-    this.setGauge('[data-cpu]', '[data-cpu-bar]', sys.cpu);
-    this.setGauge('[data-ram]', '[data-ram-bar]', sys.ram);
-    this.setGauge('[data-disk]', '[data-disk-bar]', sys.disk);
-
-    const sysTag = this.q('[data-sys-tag]');
-    if (sysTag) sysTag.textContent = (core.system?.status || '—').toUpperCase();
-    const sysDot = this.q('[data-sys-dot]');
-    if (sysDot) sysDot.className = 'jh-dot' + (core.system?.status === 'optimal' ? '' : ' warn');
-
     const set = (sel, text) => { const el = this.q(sel); if (el) el.textContent = text; };
-    set('[data-version]', status.version ? `v${status.version}` : '—');
-    set('[data-uptime]', fmtUptime(status.uptime_s));
+
+    set('[data-cpu]', sys.cpu === null ? '—' : `${Math.round(sys.cpu)} %`);
+    set('[data-ram]', sys.ram === null ? '—' : `${Math.round(sys.ram)} %`);
     set('[data-tools]', status.tools?.total != null ? String(status.tools.total) : '—');
-    set('[data-memories]', core.memory?.count != null ? String(core.memory.count) : '—');
-    set('[data-convs]', status.conversations?.total != null ? String(status.conversations.total) : '—');
+    set('[data-version]', status.version ? `v${status.version}` : '—');
+
+    const health = core.system?.status || '';
+    set('[data-sys]', health === 'optimal' ? 'Systèmes opérationnels'
+      : health ? `Systèmes · ${health}` : 'État inconnu');
+    const dot = this.q('[data-sys-dot]');
+    if (dot) dot.className = 'jh-dot' + (health === 'optimal' ? '' : health ? ' warn' : ' off');
 
     const providers = status.llm || [];
     const connected = providers.filter((p) => p.connected);
-    const llmList = this.q('[data-llm-list]');
-    if (llmList) {
-      llmList.innerHTML = providers.length
-        ? providers.slice(0, 6).map((p) => `
-            <div class="jh-kv"><span>${esc(p.name)}</span>
-              <b class="jh-pill ${p.connected ? 'on' : ''}">${p.connected ? 'connecté' : 'hors ligne'}</b></div>`).join('')
-        : '<div class="jh-empty">Aucun fournisseur configuré.</div>';
-    }
-    set('[data-llm-tag]', `${connected.length}/${providers.length}`);
-    const llmDot = this.q('[data-llm-dot]');
-    if (llmDot) llmDot.className = 'jh-dot' + (connected.length ? '' : ' off');
+    set('[data-llm-tag]', providers.length ? `${connected.length}/${providers.length}` : '—');
 
-    const label = this.q('[data-core-label]');
-    if (label) {
-      label.textContent = `JARVIS CORE V${status.version || '—'} · ${(core.agents?.status || 'ACTIVE').toUpperCase()}`;
-    }
+    // Salutation : l'heure et le prénom viennent du backend, jamais d'un défaut
+    // inventé. Sans nom connu, on salue sans nommer.
+    const hour = new Date().getHours();
+    const moment = hour < 6 ? 'Bonne nuit' : hour < 18 ? 'Bonjour' : 'Bonsoir';
+    const name = String(status.user_name || '').trim();
+    set('[data-hello]', name ? `${moment}, ${name}.` : `${moment}.`);
+
+    const assistant = String(status.assistant_name || 'JARVIS').trim();
+    const bits = [];
+    if (connected.length) bits.push(`${connected[0].name} connecté`);
+    if (status.tools?.total) bits.push(`${status.tools.total} outils`);
+    set('[data-sub]', bits.length
+      ? `${assistant} est prêt · ${bits.join(' · ')}`
+      : `${assistant} démarre…`);
   },
 
   renderAgents(agents) {
-    const box = this.q('[data-agents]');
-    if (!box) return;
-    box.innerHTML = agents.length
-      ? agents.slice(0, 8).map((a) => {
-          const on = a.status === 'active' || a.status === 'running';
-          const bad = a.status === 'error' || a.last_error;
-          return `<div class="jh-agent">
-            <span class="jh-dot ${bad ? 'err' : on ? '' : 'off'}"></span>
-            <div class="jh-agent-main"><b>${esc(a.name)}</b><small>${esc(a.role || a.description || '—')}</small></div>
-            <span class="jh-pill ${bad ? 'err' : on ? 'on' : ''}">${esc(a.status || '—')}</span>
-          </div>`;
-        }).join('')
-      : '<div class="jh-empty">Aucun agent déclaré.</div>';
+    const actifs = agents.filter((a) => a.status === 'active' || a.status === 'running').length;
     const tag = this.q('[data-agents-tag]');
-    if (tag) tag.textContent = `${agents.filter((a) => a.status === 'active').length}/${agents.length}`;
+    if (tag) tag.textContent = agents.length ? `${actifs}/${agents.length}` : '—';
   },
 
   /* ---------------------------------------------------- flux d'activité */
+  /* Une page d'assistant n'a pas à dérouler un journal : on annonce ce qui se
+     passe MAINTENANT, en une ligne, et la ligne disparaît quand c'est fini. */
   pushLine(text, kind = '') {
-    const list = this.q('[data-feed]');
-    if (!list) return;
-    if (this.lines.length === 0) list.innerHTML = '';
-    const el = document.createElement('div');
-    el.className = 'jh-line';
-    el.innerHTML = `<time>${new Date().toLocaleTimeString('fr-FR')}</time>
-      <span class="jh-msg">${kind ? `<b>${esc(kind)}</b> ` : ''}${esc(text)}</span>`;
-    list.prepend(el);
-    this.lines.push(el);
-    while (this.lines.length > 40) this.lines.shift().remove();
+    const box = this.q('[data-activity]');
+    const label = this.q('[data-activity-text]');
+    if (!box || !label) return;
+    label.textContent = String(text || kind).slice(0, 90);
+    box.hidden = false;
+    clearTimeout(this._activityTimer);
+    this._activityTimer = setTimeout(() => { box.hidden = true; }, 6000);
   },
 
   bind() {
@@ -279,6 +266,7 @@ const Home = {
     // chargement du GLB (4,6 Mo, plusieurs secondes) laissait les jauges et les
     // agents à « — » pendant tout ce temps. Un asset 3D ne doit jamais retarder
     // l'affichage de l'état du système.
+    this.renderSuggestions();
     this.refresh();
     clearInterval(this.timer);
     this.timer = setInterval(() => this.refresh(), 5000);
