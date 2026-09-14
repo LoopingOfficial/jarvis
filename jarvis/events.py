@@ -24,6 +24,8 @@ EVENT_TYPES = {
     # JARVIS 4 — cerveau vivant, états, activité temps réel.
     "jarvis.state", "jarvis.activity", "jarvis.tool.notice",
     "activity.trace",
+    # Analyse Google Sheet : progression reelle du pipeline (aucune etape simulee).
+    "sheet.progress",
     "brain.search", "brain.node.selected", "brain.path", "brain.tool.active",
     "brain.learn.created", "brain.learn.updated",
     "knowledge.learn.created", "knowledge.learn.updated",

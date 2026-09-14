@@ -125,7 +125,11 @@ def resolve_sheet_tab(workbook: dict[str, Any], preferred: str = SHEET_TAB) -> t
     names = [str(s.get("name") or "") for s in sheets]
     if not sheets:
         return None, "empty", []
-    selected = workbook.get("selected_tab")
+    # `selected_tab` n'est un CHOIX que si l'URL portait un gid explicite.
+    # Sans gid, le lecteur retombe sur le premier onglet peuple ("Home" ici) :
+    # le prendre pour une demande de l'utilisateur faisait lire le mauvais
+    # onglet et echouer la comparaison en SHEET_TABLE_NOT_FOUND.
+    selected = workbook.get("selected_tab") if workbook.get("selected_tab_explicit") else ""
     if selected:
         for index, sheet in enumerate(sheets):
             if str(sheet.get("name") or "") == str(selected):
@@ -149,6 +153,32 @@ def resolve_sheet_tab(workbook: dict[str, Any], preferred: str = SHEET_TAB) -> t
     return sheets[0], "first", names
 
 
+def _select_source_region(cells: list, regions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Table principale choisie par ses EN-TETES REELS, jamais par sa position.
+
+    L'onglet « ALL BRAINROTS » contient plusieurs tableaux (« ALL TRAIT MULTS »,
+    « ALL TYPE MULTS », les blocs de calcul). Prendre la premiere region
+    detectee dependait de l'ordre de detection et pouvait retomber sur un
+    tableau de multiplicateurs, dont les colonnes (Name/Multiplier) produisent
+    des enregistrements valides mais faux.
+
+    Le score est le nombre d'en-tetes de FIELD_MAPPING reellement presents ;
+    l'identite (`Name`) est obligatoire, et un tableau qui ne porte qu'elle ne
+    suffit pas a etre la source d'une comparaison.
+    """
+    best, best_score = None, 0
+    for region in regions:
+        headers = {p["name"] for p in region_columns(cells, region) if p["filled"]}
+        if IDENTITY_FIELD not in headers:
+            continue
+        score = sum(1 for field in FIELD_MAPPING if field in headers)
+        if score > best_score:
+            best, best_score = region, score
+    # Au moins une colonne comparee en plus de l'identite : sinon ce n'est pas
+    # la table des brainrots mais un tableau annexe qui lui ressemble.
+    return best if best_score >= 2 else None
+
+
 def read_sheet_records(workbook: dict[str, Any], tab: str = SHEET_TAB) -> dict[str, Any]:
     """Enregistrements de la table principale, rareté résolue par les fusions.
 
@@ -169,11 +199,17 @@ def read_sheet_records(workbook: dict[str, Any], tab: str = SHEET_TAB) -> dict[s
         return {"ok": False, "error": "SHEET_EMPTY", "tab_requested": tab,
                 "tab": real_name, "tab_resolution": mode, "records": [],
                 "available_tabs": names}
-    region = next((r for r in detect_regions(cells, real_name) if r["kind"] == "table"), None)
+    regions = [r for r in detect_regions(cells, real_name) if r["kind"] == "table"]
+    region = _select_source_region(cells, regions)
     if not region:
-        return {"ok": False, "error": "SHEET_TABLE_NOT_FOUND", "tab_requested": tab,
+        # Diagnostic structure : dire CE QUI a ete vu vaut mieux qu'un
+        # « onglet non identifie » qui n'oriente vers aucune correction.
+        return {"ok": False, "error": "COMPARE_SOURCE_NOT_FOUND", "tab_requested": tab,
                 "tab": real_name, "tab_resolution": mode, "records": [],
-                "available_tabs": names}
+                "available_tabs": names, "sheets_found": names,
+                "regions_found": [r.get("title") or r.get("id") for r in regions],
+                "headers_found": [[p["name"] for p in region_columns(cells, r) if p["filled"]]
+                                  for r in regions]}
 
     numbers = sheet.get("row_numbers") or list(range(1, len(cells) + 1))
     position = {number: index for index, number in enumerate(numbers)}
