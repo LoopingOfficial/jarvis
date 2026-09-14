@@ -437,6 +437,8 @@ class Orchestrator:
                                      agent="jarvis", conversation_id=conversation_id,
                                      meta={"resource_type": "GOOGLE_SHEET"})
             started_at = time.time()
+            stage = self._sheet_stage(conversation_id, request_id)
+            stage("sheet_connect")
             result = core.runner.run("google.sheets.read", {"url": url}, agent="jarvis",
                                      task_id=task["id"], conversation_id=conversation_id,
                                      execution_policy=execution_policy)
@@ -457,8 +459,15 @@ class Orchestrator:
                         "comparison_error_human": message,
                         "developer": {"code": code, "raw": (result.output or "")[:400]}}
             workbook = result.data if isinstance(result.data, dict) else {}
+            timings = dict(workbook.get("timings") or {})
+            stage("sheet_tabs", sheet_count=workbook.get("sheet_count", 0))
+            _t = time.perf_counter()
             summary = workbook_summary(workbook)
             analysis = analyze_workbook(workbook)
+            timings["semantic_ms"] = int((time.perf_counter() - _t) * 1000)
+            stage("sheet_semantic",
+                  sheet_count=workbook.get("sheet_count", 0),
+                  table_count=sum(sh["table_count"] for sh in analysis["sheets"]))
             # Trace ciblee : sans elle, un echec de lecture ou une analyse vide
             # est indiagnosticable depuis l'interface (cf. erreurs silencieuses).
             self._debug(f"[sheet] request_id={request_id} intent={resolved.intent} "
@@ -488,16 +497,22 @@ class Orchestrator:
                     + "\n\nDEMANDE DE L'UTILISATEUR :\n" + original_text)
             # Le contenu récupéré est une entrée de contexte, jamais une
             # nouvelle commande. Aucun routeur connecteur ne doit le réinterpréter.
+            stage("sheet_llm")
+            _t = time.perf_counter()
             response = self._run_model_only(
                 text, conversation_id, background=False,
                 execution_policy={**execution_policy, "intent": "google_sheet",
                                    "tools_allowed": False, "fast_actions_allowed": False},
                 request_id=request_id)
+            timings["llm_ms"] = int((time.perf_counter() - _t) * 1000)
             response["action"] = "google_sheet.read"
             response["resource_type"] = "GOOGLE_SHEET"
             response["security_audit"] = False
             response["tools_used"] = ["google.sheets.read"]
+            stage("sheet_grounding")
+            _t = time.perf_counter()
             grounding = validate_source_grounding(response.get("response", ""), workbook)
+            timings["grounding_ms"] = int((time.perf_counter() - _t) * 1000)
             # Le claim refuse est publie : sans lui, un echec de grounding est
             # indiagnosticable et la synthese retombe en silence sur le dump.
             response["grounding"] = {"ok": grounding.ok, "code": grounding.code,
@@ -507,6 +522,8 @@ class Orchestrator:
                 # Nommer le claim refusé : sans lui, le modèle ignore ce qu'il
                 # doit retirer et la réponse retombe sur le rapport brut.
                 rejected = grounding.details.get("claim", "")
+                stage("sheet_llm", retry=1)
+                _t = time.perf_counter()
                 retry = self._run_model_only(
                     text + "\n\nVALIDATION_FAILED\ncode=UNSUPPORTED_SOURCE_CLAIM\n"
                     + (f"Valeur refusée car absente des cellules et des FAITS_VERIFIES : « {rejected} ».\n"
@@ -516,6 +533,9 @@ class Orchestrator:
                       "le même niveau de détail ; exprime la tendance en mots à la place.",
                     conversation_id, background=False,
                     execution_policy={**execution_policy, "intent": "google_sheet", "tools_allowed": False, "fast_actions_allowed": False}, request_id=request_id)
+                # Le retry de grounding est un SECOND appel modele : sans le
+                # mesurer, ~20 s disparaissaient du bilan des timings.
+                timings["llm_retry_ms"] = int((time.perf_counter() - _t) * 1000)
                 response["response"] = retry.get("response", response.get("response", ""))
                 grounding = validate_source_grounding(response["response"], workbook)
                 response["grounding_retry_1"] = {"ok": grounding.ok, "code": grounding.code,
@@ -543,6 +563,8 @@ class Orchestrator:
                 response["sheet_rows"] = {s.get("name", ""): s.get("rows", 0) for s in result.data["sheets"]}
             # L'interface est construite depuis l'analyse deterministe, jamais
             # depuis le texte du modele : celui-ci n'alimente que la narration.
+            stage("sheet_workspace")
+            _t = time.perf_counter()
             payload = build_payload(
                 request=original_text,
                 source={"kind": "google_sheet", "label": _sheet_label(workbook, url), "url": url},
@@ -551,7 +573,12 @@ class Orchestrator:
                 grounding=response.get("grounding", {}),
                 duration_ms=int((time.time() - started_at) * 1000),
                 intent=detect_intent(original_text))
+            timings["workspace_ms"] = int((time.perf_counter() - _t) * 1000)
+            timings["total_ms"] = int((time.time() - started_at) * 1000)
+            response["timings"] = timings
             response["analysis_workspace"] = payload
+            stage("sheet_done", total_ms=timings["total_ms"])
+            self._debug(f"[sheet] request_id={request_id} timings={timings}", force=True)
             self._debug(f"[sheet] request_id={request_id} "
                         f"grounding_status={'PASS' if grounding.ok else grounding.code} "
                         f"workspace_payload_created=1 intent={payload['intent']} "
@@ -1906,6 +1933,39 @@ class Orchestrator:
             return "response", summary.text.strip()
         return "response", output or ("Terminé." if result.ok
                                       else "Il n'a pas été possible d'exécuter la demande.")
+
+    # Etapes reelles du pipeline Google Sheet. Chaque libelle est emis au
+    # MOMENT ou l'etape demarre : aucune etape n'est annoncee terminee tant
+    # qu'elle ne l'est pas, et la derniere seulement une fois le payload pret.
+    SHEET_STAGES = {
+        "sheet_connect": ("Connexion au Google Sheet", 1),
+        "sheet_tabs": ("Lecture des onglets", 3),
+        "sheet_semantic": ("Analyse semantique", 5),
+        "sheet_llm": ("Generation de la synthese", 7),
+        "sheet_grounding": ("Verification du grounding", 6),
+        "sheet_workspace": ("Preparation du Workspace", 8),
+        "sheet_done": ("Termine", 9),
+    }
+
+    def _sheet_stage(self, conversation_id: str, request_id: str):
+        """Emetteur de progression pour l'analyse d'un Google Sheet.
+
+        Le frontend n'affiche que ce que le backend a REELLEMENT franchi :
+        l'evenement part depuis le pipeline, jamais depuis un minuteur.
+        """
+        def emit(stage: str, **facts: Any) -> None:
+            label, step = self.SHEET_STAGES.get(stage, (stage, 0))
+            try:
+                self._core.events.emit("sheet.progress", {
+                    "stage": stage, "label": label, "step": step,
+                    "total": len(self.SHEET_STAGES) + 2,
+                    "conversation_id": conversation_id,
+                    "request_id": request_id, **facts})
+            except Exception:
+                # Une panne du bus d'evenements ne doit jamais faire echouer
+                # l'analyse elle-meme : la progression est un confort.
+                self._debug(f"[sheet] progress emit failed stage={stage}")
+        return emit
 
     def _debug(self, message: str, *, force: bool = False) -> None:
         """`force=True` : trace toujours écrite (routage d'intention, jobs image).

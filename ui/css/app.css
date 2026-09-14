@@ -1710,3 +1710,13 @@ textarea { resize: vertical; min-height: 64px; line-height: 1.55; }
   .composer-actions .send span { display: none; }
   .stage-foot .sub-chip { display: none; }
 }
+
+/* JARVIS_SHEET_PROGRESS_AND_COMPARE_V8 — progression reelle de l'analyse Sheet.
+   Les etapes proviennent d'evenements `sheet.progress` : ce bloc ne fait que
+   les afficher, il n'anime jamais une progression de son propre chef. */
+.sheet-progress { display: flex; flex-direction: column; gap: 3px; }
+.sheet-progress b { font-weight: 500; color: var(--text); }
+.sheet-progress .sheet-step { opacity: .55; font-size: 11px; font-variant-numeric: tabular-nums; }
+.sheet-progress .sheet-facts { font-size: 11.5px; opacity: .7; }
+.sheet-duration { margin-top: 6px; font-size: 11px; opacity: .5; font-variant-numeric: tabular-nums; }
+.sheet-progress .sheet-stall:not(:empty) { font-size: 11px; opacity: .55; margin-top: 2px; }

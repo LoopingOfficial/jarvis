@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,7 +34,12 @@ def parse_sheet_url(url: str) -> dict[str, str] | None:
     match = SHEET_URL_RE.search(url or "")
     if not match:
         return None
-    return {"sheet_id": match.group(1), "gid": sheet_url_gid(match.group(0))}
+    # `gid` vaut "0" par defaut : une URL SANS gid est donc indiscernable d'un
+    # `?gid=0` explicite. `gid_explicit` leve cette ambiguite pour que les
+    # consommateurs ne prennent pas le premier onglet pour un choix de l'utilisateur.
+    explicit = sheet_url_gid(match.group(0), default="") != ""
+    return {"sheet_id": match.group(1), "gid": sheet_url_gid(match.group(0)),
+            "gid_explicit": explicit}
 
 
 def _col_index(ref: str) -> int:
@@ -271,11 +277,17 @@ def read_public_sheet(url: str, *, timeout: float = 30, max_bytes: int = 32_000_
     try:
         req = urllib.request.Request(export, headers={"User-Agent": "JARVIS/3.0"}, method="GET")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        _t0 = time.perf_counter()
         with opener.open(req, timeout=timeout) as response:
             raw = response.read(max_bytes + 1)
+        _t1 = time.perf_counter()
         if len(raw) > max_bytes:
             return {"ok": False, "error": "GOOGLE_SHEET_TOO_LARGE"}
         sheets = _read_xlsx(raw)
+        _t2 = time.perf_counter()
+        timings = {"download_ms": int((_t1 - _t0) * 1000),
+                   "xlsx_parse_ms": int((_t2 - _t1) * 1000),
+                   "bytes": len(raw)}
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError,
             UnicodeDecodeError, zipfile.BadZipFile) as exc:
         if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 403):
@@ -307,6 +319,11 @@ def read_public_sheet(url: str, *, timeout: float = 30, max_bytes: int = 32_000_
         "ok": True, "workbook": parsed["sheet_id"], "sheet_count": len(sheets),
         "sheets": sheets, "source_url": export,
         "selected_tab": selected_name,
+        # Vrai uniquement si l'URL portait reellement un gid : sinon
+        # `selected_tab` est un defaut de lecture, pas une demande explicite.
+        "selected_tab_explicit": bool(parsed.get("gid_explicit")) and target is not None,
+        # Cout reel de la lecture, mesure et non estime.
+        "timings": timings,
     }
     target = next((s for s in sheets if s["name"] == selected_name), None) or sheets[0]
     result["sheet_id"] = parsed["sheet_id"]

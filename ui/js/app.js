@@ -477,6 +477,7 @@ goto(page, options = {}) {
 
   /** Unique point de rendu de la réponse de JARVIS (événement jarvis.reply). */
   renderReply(text, result) {
+    clearTimeout(this._sheetStall);
     this.clearPendingReply();
     const el = this.pushMessage('jarvis', text, { error: result.ok === false });
     console.debug('[CHAT-UI] assistant message added');
@@ -488,6 +489,13 @@ goto(page, options = {}) {
       el.appendChild(actions);
     }
     if (result.analysis_workspace) this.attachWorkspace(el, result.analysis_workspace);
+    // Duree totale, discrete : mesuree par le pipeline, pas estimee ici.
+    if (result.timings && result.timings.total_ms) {
+      const t = document.createElement('div');
+      t.className = 'sheet-duration';
+      t.textContent = `Analyse terminee en ${(result.timings.total_ms / 1000).toFixed(1)} s`;
+      el?.appendChild(t);
+    }
     if (result.needs_confirmation) this.showConfirmation(result.needs_confirmation);
     Dashboard.refresh();
   },
@@ -886,6 +894,58 @@ async showNodeDetails(node) {
     }
   },
 
+  /* ------------------------------------------- progression Google Sheet */
+  /* Chaque etape vient d'un evenement `sheet.progress` emis par le pipeline.
+     Rien n'est simule : pas de barre 0->100 pilotee par un minuteur. */
+  sheetProgress(data) {
+    const bubble = this.pendingReply;
+    if (!bubble) return;
+    // Les faits deja etablis RESTENT affiches aux etapes suivantes : une fois
+    // les 20 onglets lus, l'information ne redevient pas inconnue.
+    const seen = (this._sheetFacts = data.stage === 'sheet_connect' ? {} : (this._sheetFacts || {}));
+    if (data.sheet_count) seen.sheets = data.sheet_count;
+    if (data.table_count) seen.tables = data.table_count;
+    const facts = [];
+    if (seen.sheets) facts.push(`Google Sheet · ${seen.sheets} onglets detectes`);
+    if (seen.tables) facts.push(`${seen.tables} tableaux detectes`);
+    if (data.total_ms) facts.push(`${(data.total_ms / 1000).toFixed(1)} s`);
+
+    // Etat du cerveau : miroir de l'etape REELLE, jamais une animation libre.
+    const brain = {
+      sheet_connect: 'USING_TOOL', sheet_tabs: 'USING_TOOL',
+      sheet_semantic: 'THINKING', sheet_llm: 'THINKING',
+      sheet_grounding: 'VERIFYING', sheet_workspace: 'THINKING',
+      sheet_done: 'SUCCESS',
+    }[data.stage];
+    if (brain) this.setRobot(brain, { reason: data.label || data.stage });
+    window.dispatchEvent(new CustomEvent('jarvis:brain-state',
+      { detail: { state: brain || 'THINKING', reason: data.label || '', zone: this.sheetZone(data.stage) } }));
+
+    const body = bubble.querySelector('.bubble') || bubble;
+    body.innerHTML = `<div class="sheet-progress">`
+      + `<b>${esc(data.label || '')}</b>`
+      + ` <span class="sheet-step">${data.step || 0}/${data.total || 9}</span>`
+      + `<div class="sheet-facts">${esc(facts.join(' · '))}</div>`
+      + `<div class="sheet-stall"></div>`
+      + `</div>`;
+
+    // Etape longue : on le DIT, dans une ligne DEDIEE. L'etape courante et les
+    // faits deja obtenus restent affiches : attendre n'est pas tout perdre.
+    clearTimeout(this._sheetStall);
+    if (data.stage !== 'sheet_done') {
+      this._sheetStall = setTimeout(() => {
+        const note = bubble.querySelector('.sheet-stall');
+        if (note) note.textContent = `Analyse toujours en cours — ${data.label || 'lecture du classeur'}`;
+      }, 12000);
+    }
+  },
+
+  sheetZone(stage) {
+    if (stage === 'sheet_connect' || stage === 'sheet_tabs') return 'TOOLS';
+    if (stage === 'sheet_semantic' || stage === 'sheet_llm') return 'KNOWLEDGE';
+    return '';
+  },
+
   /* ------------------------------------------------------------- flux SSE */
   bindStream() {
     // Câblerie unique : chaque événement brut est routé (robot, atlas, activité).
@@ -902,6 +962,7 @@ async showNodeDetails(node) {
       if (J.state.page === 'command' && VoiceManager.state !== 'IDLE') this.openConsole();
     });
     J.on('jarvis.reply', ({ text, result }) => this.renderReply(text, result || {}));
+    J.on('sheet.progress', (data) => this.sheetProgress(data || {}));
     J.on('jarvis.confirmation', (pending) => this.showConfirmation(pending));
     // Génération d'image : le composant dédié écoute image.generation.*
     window.ImageMessages?.bind();
