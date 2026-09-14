@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_2';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_4';
 
 const AVATAR_URL = '/assets/avatar/cartoon_boy.glb';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
@@ -254,6 +254,14 @@ const Home = {
       // Le flux reprend les ÉVÉNEMENTS RÉELS du bus : rien n'est simulé.
       J.on('*', (type, data) => {
         if (!this.host || !/^(tool|agent|task|vault|crm|discord|memory|image)\./.test(type)) return;
+        // Le personnage réagit quand JARVIS agit vraiment : un geste par
+        // rafale d'événements, pas un par événement — sinon il gesticule en
+        // permanence dès qu'un agent envoie sa progression.
+        const now = Date.now();
+        if (now - (this._lastGesture || 0) > 6000) {
+          this._lastGesture = now;
+          this.viewer?.gesture();
+        }
         const label = data?.name || data?.tool || data?.title || data?.id || '';
         this.pushLine(String(label).slice(0, 80) || type, type);
       });
