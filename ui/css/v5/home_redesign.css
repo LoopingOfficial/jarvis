@@ -1,0 +1,202 @@
+/* ==========================================================================
+   JARVIS — Refonte de l'accueil (glassmorphism / HUD)
+
+   Tous les sélecteurs sont préfixés `jh-` et n'existent que dans l'enveloppe
+   montée par spatial_home.js. Aucune règle ne cible un id ou une classe du DOM
+   hérité : la refonte se superpose, elle ne réécrit rien.
+   ========================================================================== */
+
+.jh {
+  --bg-0: #06090e;
+  --bg-1: #0d1117;
+  --cyan: #00f2fe;
+  --blue: #4facfe;
+  --emerald: #10b981;
+  --amber: #fbbf24;
+  --rose: #fb7185;
+  --ink: #e6f2ff;
+  --dim: #7e94b4;
+  --faint: #4a5d78;
+  --panel: rgba(13, 19, 31, .75);
+  --line: rgba(0, 242, 254, .2);
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, Consolas, monospace;
+
+  position: relative;
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 330px;
+  gap: 16px;
+  padding: 16px;
+  /* HAUTEUR BORNÉE, pas `min-height`. Le canvas du viewer est en height:100%
+     et son ResizeObserver redimensionne d'après le conteneur : avec une
+     hauteur libre, chacun poussait l'autre à chaque frame et l'enveloppe est
+     montée à 33 millions de pixels. */
+  height: min(880px, 82vh);
+  font-family: var(--mono);
+  color: var(--ink);
+  background:
+    radial-gradient(90% 60% at 50% -10%, rgba(0, 242, 254, .10), transparent 62%),
+    radial-gradient(70% 50% at 8% 100%, rgba(79, 172, 254, .09), transparent 60%),
+    radial-gradient(60% 50% at 100% 30%, rgba(16, 185, 129, .06), transparent 60%),
+    linear-gradient(180deg, var(--bg-0), var(--bg-1));
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+/* Grille de fond : posée en pseudo-élément pour ne jamais intercepter un clic. */
+.jh::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(transparent 95%, rgba(0, 242, 254, .045) 95%) 0 0 / 100% 36px,
+    linear-gradient(90deg, transparent 95%, rgba(0, 242, 254, .045) 95%) 0 0 / 36px 100%;
+  mask-image: radial-gradient(80% 70% at 50% 40%, #000 30%, transparent 100%);
+}
+
+/* --- colonnes ----------------------------------------------------------- */
+.jh-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow: auto; }
+.jh-center { position: relative; display: flex; flex-direction: column; min-width: 0; }
+
+/* --- panneau de verre --------------------------------------------------- */
+.jh-card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .46), inset 0 1px 0 rgba(255, 255, 255, .045);
+  transition: border-color .22s ease, transform .22s ease, box-shadow .22s ease;
+}
+.jh-card:hover {
+  border-color: rgba(0, 242, 254, .42);
+  transform: translateY(-1px);
+  box-shadow: 0 22px 52px rgba(0, 0, 0, .5), 0 0 22px rgba(0, 242, 254, .10),
+              inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+.jh-card-h {
+  display: flex; align-items: center; gap: 9px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(0, 242, 254, .12);
+  font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim);
+}
+.jh-card-h .jh-tag { margin-left: auto; color: var(--cyan); font-size: 9px; letter-spacing: .1em; }
+.jh-card-b { padding: 13px 14px; }
+
+.jh-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--emerald);
+  box-shadow: 0 0 10px var(--emerald); animation: jh-pulse 2.6s ease-in-out infinite; }
+.jh-dot.warn { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+.jh-dot.err  { background: var(--rose);  box-shadow: 0 0 10px var(--rose); }
+.jh-dot.off  { background: var(--faint); box-shadow: none; animation: none; }
+@keyframes jh-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .38; transform: scale(.72); } }
+
+/* --- jauges ------------------------------------------------------------- */
+.jh-gauge { margin-bottom: 13px; }
+.jh-gauge:last-child { margin-bottom: 0; }
+.jh-gauge-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.jh-gauge-top span { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.jh-gauge-top b { font-size: 13px; font-weight: 400; color: var(--ink); }
+.jh-bar { height: 5px; border-radius: 3px; background: rgba(0, 242, 254, .09); overflow: hidden; }
+.jh-bar i {
+  display: block; height: 100%; border-radius: 3px; width: 0;
+  background: linear-gradient(90deg, var(--blue), var(--cyan));
+  box-shadow: 0 0 12px rgba(0, 242, 254, .55);
+  transition: width .6s cubic-bezier(.22, .61, .36, 1);
+}
+.jh-bar i.warn { background: linear-gradient(90deg, #f59e0b, var(--amber)); box-shadow: 0 0 12px rgba(251, 191, 36, .5); }
+.jh-bar i.err  { background: linear-gradient(90deg, #ef4444, var(--rose));  box-shadow: 0 0 12px rgba(251, 113, 133, .5); }
+.jh-bar i.ok   { background: linear-gradient(90deg, #059669, var(--emerald)); box-shadow: 0 0 12px rgba(16, 185, 129, .5); }
+
+.jh-kv { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 0; color: var(--dim); }
+.jh-kv b { font-weight: 400; color: var(--ink); }
+
+/* --- viewport 3D -------------------------------------------------------- */
+.jh-stage-card { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.jh-stage { position: relative; flex: 1; min-height: 0; }
+/* Le canvas est sorti du flux : il ne peut plus influencer la hauteur de son
+   parent, seulement la subir. */
+.jh-stage canvas { position: absolute; inset: 0; display: block; }
+
+.jh-badge {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 7px 15px; border-radius: 999px;
+  background: rgba(6, 9, 14, .72);
+  border: 1px solid rgba(0, 242, 254, .3);
+  backdrop-filter: blur(12px);
+  font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--cyan);
+  box-shadow: 0 0 26px rgba(0, 242, 254, .14);
+  z-index: 2; pointer-events: none; white-space: nowrap;
+}
+.jh-hint {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  font-size: 9.5px; letter-spacing: .1em; color: var(--faint);
+  pointer-events: none; z-index: 2;
+}
+.jh-loading {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 10px; letter-spacing: .3em; color: var(--cyan);
+  background: linear-gradient(180deg, transparent, rgba(6, 9, 14, .5));
+  transition: opacity .5s ease;
+}
+.jh-loading.gone { opacity: 0; pointer-events: none; }
+
+/* --- agents ------------------------------------------------------------- */
+.jh-agent {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border-radius: 10px;
+  border: 1px solid rgba(0, 242, 254, .10);
+  background: rgba(0, 242, 254, .035);
+  margin-bottom: 7px;
+  transition: border-color .18s ease, background .18s ease;
+}
+.jh-agent:hover { border-color: rgba(0, 242, 254, .3); background: rgba(0, 242, 254, .07); }
+.jh-agent-main { flex: 1; min-width: 0; }
+.jh-agent-main b { display: block; font-size: 11.5px; font-weight: 400; }
+.jh-agent-main small { font-size: 9.5px; color: var(--faint); letter-spacing: .04em; }
+.jh-pill {
+  font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px;
+  border: 1px solid rgba(126, 148, 180, .3); color: var(--dim);
+}
+.jh-pill.on { border-color: rgba(16, 185, 129, .45); color: var(--emerald); background: rgba(16, 185, 129, .08); }
+.jh-pill.err { border-color: rgba(251, 113, 133, .45); color: var(--rose); background: rgba(251, 113, 133, .08); }
+
+/* --- flux d'activité ---------------------------------------------------- */
+.jh-feed { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.jh-feed-list { flex: 1; min-height: 0; max-height: 300px; overflow: auto; padding: 8px 14px 12px; }
+.jh-feed-list::-webkit-scrollbar { width: 5px; }
+.jh-feed-list::-webkit-scrollbar-thumb { background: rgba(0, 242, 254, .25); border-radius: 3px; }
+.jh-line { display: flex; gap: 9px; font-size: 10.5px; line-height: 1.65; padding: 4px 0;
+  border-bottom: 1px solid rgba(0, 242, 254, .05); opacity: 0; animation: jh-in .35s forwards; }
+@keyframes jh-in { to { opacity: 1; } }
+.jh-line time { color: var(--faint); flex: none; }
+.jh-line .jh-msg { color: var(--dim); word-break: break-word; }
+.jh-line .jh-msg b { color: var(--ink); font-weight: 400; }
+.jh-empty { padding: 14px; font-size: 11px; color: var(--faint); line-height: 1.7; }
+
+/* --- responsive --------------------------------------------------------- */
+@media (max-width: 1280px) {
+  .jh { grid-template-columns: 260px minmax(0, 1fr); }
+  .jh-right { display: none; }
+}
+@media (max-width: 980px) {
+  .jh { grid-template-columns: 1fr; padding: 12px; }
+  .jh-left { display: none; }
+  .jh-stage { min-height: 320px; }
+}
+
+/* Calque autonome posé sur le body. Les marges dégagent le rail de navigation
+   (gauche), le bandeau d'état (haut) et la barre de commande (bas) du shell :
+   la refonte occupe la zone centrale sans jamais recouvrir les contrôles. */
+.jh.jh-layer {
+  position: fixed;
+  top: 52px; right: 14px; bottom: 92px; left: 58px;
+  height: auto;
+  z-index: 26;
+  border-radius: 16px;
+}
+@media (max-width: 980px) {
+  .jh.jh-layer { left: 14px; bottom: 84px; }
+}
