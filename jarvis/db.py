@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from .config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -122,6 +122,119 @@ CREATE TABLE IF NOT EXISTS crm_contacts (
 );
 CREATE INDEX IF NOT EXISTS idx_crm_name ON crm_contacts(name);
 CREATE INDEX IF NOT EXISTS idx_crm_company ON crm_contacts(company);
+
+-- CRM étendu : sociétés, opportunités, interactions. `crm_contacts` reste la
+-- table pivot (les fiches existantes ne sont pas déplacées) ; `company_id` la
+-- relie à une société quand elle est connue, sans rendre le lien obligatoire.
+CREATE TABLE IF NOT EXISTS crm_companies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  domain TEXT NOT NULL DEFAULT '',
+  industry TEXT NOT NULL DEFAULT '',
+  size TEXT NOT NULL DEFAULT '',
+  website TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  vat_number TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at REAL, updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_crm_companies_name ON crm_companies(name);
+CREATE INDEX IF NOT EXISTS idx_crm_companies_domain ON crm_companies(domain);
+
+CREATE TABLE IF NOT EXISTS crm_deals (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  contact_id TEXT NOT NULL DEFAULT '',
+  company_id TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT 'nouveau',
+  status TEXT NOT NULL DEFAULT 'open',            -- open | won | lost
+  amount REAL NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'EUR',
+  probability INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  expected_close_at REAL, closed_at REAL,
+  created_at REAL, updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_crm_deals_contact ON crm_deals(contact_id);
+CREATE INDEX IF NOT EXISTS idx_crm_deals_status ON crm_deals(status, stage);
+
+-- Historique d'activité. Alimenté à la main ET par les agents : `agent` et
+-- `tool` disent qui a écrit la ligne, `source_ref` pointe la pièce d'origine
+-- (id de mail, de tâche, de document) pour pouvoir remonter à la source.
+CREATE TABLE IF NOT EXISTS crm_interactions (
+  id TEXT PRIMARY KEY,
+  contact_id TEXT NOT NULL DEFAULT '',
+  company_id TEXT NOT NULL DEFAULT '',
+  deal_id TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'note',              -- email | call | meeting | task | note | document
+  direction TEXT NOT NULL DEFAULT '',             -- in | out | ''
+  subject TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  intent TEXT NOT NULL DEFAULT '',
+  intent_confidence REAL NOT NULL DEFAULT 0,
+  sentiment TEXT NOT NULL DEFAULT '',
+  agent TEXT NOT NULL DEFAULT '',
+  tool TEXT NOT NULL DEFAULT '',
+  source_ref TEXT NOT NULL DEFAULT '',
+  meta TEXT NOT NULL DEFAULT '{}',
+  occurred_at REAL, created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_crm_inter_contact ON crm_interactions(contact_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crm_inter_occurred ON crm_interactions(occurred_at DESC);
+
+-- ==========================================================================
+-- Coffre-fort d'identifiants.
+-- Cette table ne contient AUCUN secret : uniquement les métadonnées d'un
+-- profil de connexion. Les valeurs sensibles (mot de passe, clé, jetons,
+-- cookies, secret TOTP) vivent dans la table `secrets` déjà chiffrée en
+-- AES-256-GCM par SecretVault, sous l'identité `cred:<credential_id>`.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS vault_credentials (
+  id TEXT PRIMARY KEY,
+  service_name TEXT NOT NULL,
+  service_url TEXT NOT NULL DEFAULT '',
+  allowed_domains TEXT NOT NULL DEFAULT '[]',     -- domaines où l'injection est permise
+  auth_type TEXT NOT NULL DEFAULT 'basic',        -- basic | api_key | oauth2 | cookies
+  username_preview TEXT NOT NULL DEFAULT '',      -- jamais le mot de passe, jamais la clé
+  connector_id TEXT NOT NULL DEFAULT '',          -- lien facultatif vers un connecteur existant
+  has_totp INTEGER NOT NULL DEFAULT 0,
+  totp_digits INTEGER NOT NULL DEFAULT 6,
+  totp_period INTEGER NOT NULL DEFAULT 30,
+  totp_algorithm TEXT NOT NULL DEFAULT 'SHA1',
+  status TEXT NOT NULL DEFAULT 'active',          -- active | expired | revoked
+  expires_at REAL,
+  rotation_days INTEGER NOT NULL DEFAULT 0,       -- 0 = pas de rotation planifiée
+  last_rotated_at REAL, last_used_at REAL,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at REAL, updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_vault_cred_service ON vault_credentials(service_name);
+CREATE INDEX IF NOT EXISTS idx_vault_cred_status ON vault_credentials(status);
+
+-- Moindre privilège : sans ligne ici, un agent n'obtient RIEN. Une habilitation
+-- est nominative (agent_id), limitée dans ses usages (scopes), et peut être
+-- bornée dans le temps ou en nombre d'utilisations.
+CREATE TABLE IF NOT EXISTS vault_grants (
+  id TEXT PRIMARY KEY,
+  credential_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '["login"]',       -- login | read | rotate
+  task_pattern TEXT NOT NULL DEFAULT '',          -- restriction facultative sur le contexte de tâche
+  max_uses INTEGER NOT NULL DEFAULT 0,            -- 0 = illimité
+  used INTEGER NOT NULL DEFAULT 0,
+  expires_at REAL,
+  revoked_at REAL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT 'jerome',
+  created_at REAL, updated_at REAL,
+  UNIQUE(credential_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vault_grants_agent ON vault_grants(agent_id);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
 
 CREATE TABLE IF NOT EXISTS workflows (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT DEFAULT '',
@@ -459,6 +572,25 @@ class Database:
                 c.execute("ALTER TABLE self_upgrades ADD COLUMN updated_at REAL")
             except Exception:
                 pass
+        # Migration 12 : CRM étendu. Les colonnes sont ajoutées à la table pivot
+        # `crm_contacts` — les fiches existantes sont conservées telles quelles
+        # et héritent simplement des valeurs par défaut.
+        if from_version < 12:
+            for col, ddl in (
+                ("company_id", "TEXT NOT NULL DEFAULT ''"),
+                ("role", "TEXT NOT NULL DEFAULT ''"),
+                ("status", "TEXT NOT NULL DEFAULT 'lead'"),      # lead | prospect | client | inactive
+                ("tags", "TEXT NOT NULL DEFAULT '[]'"),
+                ("score", "INTEGER NOT NULL DEFAULT 0"),
+                ("score_detail", "TEXT NOT NULL DEFAULT '{}'"),
+                ("intent", "TEXT NOT NULL DEFAULT ''"),
+                ("intent_confidence", "REAL NOT NULL DEFAULT 0"),
+                ("owner", "TEXT NOT NULL DEFAULT ''"),
+                ("source", "TEXT NOT NULL DEFAULT ''"),
+                ("last_interaction_at", "REAL"),
+            ):
+                if not has_column("crm_contacts", col):
+                    c.execute(f"ALTER TABLE crm_contacts ADD COLUMN {col} {ddl}")
 
     # -- sauvegarde ---------------------------------------------------------
     def backup(self, label: str = "") -> Path:

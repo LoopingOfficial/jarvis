@@ -17,6 +17,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from .vault_credentials import ALL_SECRET_FIELDS, AgentContext, VaultDenied
 from .attachments import AttachmentError
 from .config import UI_DIR
 from .connectors import type_catalog
@@ -2130,6 +2131,272 @@ class JarvisHandler(BaseHTTPRequestHandler):
         # la connexion keep-alive et fait échouer les requêtes suivantes.
         if not getattr(self, "_head_only", False):
             self.wfile.write(data)
+
+
+# ---------------------------------------------------------------------------
+# CRM — contacts, sociétés, opportunités, historique
+# ---------------------------------------------------------------------------
+@router.get("/api/crm/contacts")
+def api_crm_contacts(req):
+    query = req["query"].get("q", [""])[0].strip()
+    if query:
+        return _ok({"contacts": CORE.crm.search(query, limit=50), "query": query})
+    limit = int(req["query"].get("limit", ["200"])[0])
+    return _ok({"contacts": CORE.crm.all(limit=limit)})
+
+
+@router.get("/api/crm/contacts/<cid>")
+def api_crm_contact_get(req, cid):
+    """Fiche complète : contact, société, opportunités, historique, score."""
+    view = CORE.crm_pipeline.contact_view(cid)
+    return _ok(view) if view else _err("Contact introuvable.", 404)
+
+
+@router.post("/api/crm/contacts")
+def api_crm_contact_save(req):
+    body = req["body"] or {}
+    try:
+        contact = CORE.crm.upsert(body)
+    except Exception as exc:
+        return _err(str(exc))
+    # Les champs étendus ne passent pas par CrmStore (table pivot historique) :
+    # on les écrit ici pour ne pas dupliquer la logique de `upsert`.
+    extras = {k: body[k] for k in ("company_id", "role", "owner", "source", "status") if k in body}
+    if extras:
+        sets = ", ".join(f"{k}=?" for k in extras)
+        CORE.db.execute(f"UPDATE crm_contacts SET {sets} WHERE id=?", (*extras.values(), contact["id"]))
+    if "tags" in body:
+        CORE.db.execute("UPDATE crm_contacts SET tags=? WHERE id=?",
+                        (json.dumps(body.get("tags") or [], ensure_ascii=False), contact["id"]))
+    CORE.audit.record(action="crm.contact.saved", connector_id="", detail={"id": contact["id"]})
+    CORE.events.emit("crm.contact.saved", {"id": contact["id"], "name": contact.get("name", "")})
+    return _ok(CORE.crm_pipeline.contact_view(contact["id"]))
+
+
+@router.delete("/api/crm/contacts/<cid>")
+def api_crm_contact_delete(req, cid):
+    return _ok({"deleted": CORE.crm.delete(cid)})
+
+
+@router.get("/api/crm/companies")
+def api_crm_companies(req):
+    return _ok({"companies": CORE.crm_pipeline.companies.all(
+        limit=int(req["query"].get("limit", ["200"])[0]))})
+
+
+@router.post("/api/crm/companies")
+def api_crm_company_save(req):
+    try:
+        return _ok({"company": CORE.crm_pipeline.companies.upsert(req["body"] or {})})
+    except ValueError as exc:
+        return _err(str(exc))
+
+
+@router.delete("/api/crm/companies/<company_id>")
+def api_crm_company_delete(req, company_id):
+    return _ok({"deleted": CORE.crm_pipeline.companies.delete(company_id)})
+
+
+@router.get("/api/crm/deals")
+def api_crm_deals(req):
+    return _ok({"deals": CORE.crm_pipeline.deals.list(
+        contact_id=req["query"].get("contact_id", [""])[0],
+        status=req["query"].get("status", [""])[0])})
+
+
+@router.post("/api/crm/deals")
+def api_crm_deal_save(req):
+    try:
+        deal = CORE.crm_pipeline.deals.upsert(req["body"] or {})
+    except ValueError as exc:
+        return _err(str(exc))
+    if deal.get("contact_id"):
+        CORE.crm_pipeline.scorer.apply(deal["contact_id"])   # le score suit l'opportunité
+    CORE.events.emit("crm.deal.saved", {"id": deal["id"], "stage": deal["stage"], "status": deal["status"]})
+    return _ok({"deal": deal})
+
+
+@router.delete("/api/crm/deals/<deal_id>")
+def api_crm_deal_delete(req, deal_id):
+    return _ok({"deleted": CORE.crm_pipeline.deals.delete(deal_id)})
+
+
+@router.get("/api/crm/pipeline")
+def api_crm_pipeline(req):
+    return _ok(CORE.crm_pipeline.deals.pipeline())
+
+
+@router.get("/api/crm/interactions")
+def api_crm_interactions(req):
+    return _ok({"interactions": CORE.crm_pipeline.interactions.timeline(
+        req["query"].get("contact_id", [""])[0],
+        limit=int(req["query"].get("limit", ["100"])[0]))})
+
+
+@router.post("/api/crm/interactions")
+def api_crm_interaction_add(req):
+    """Point d'entrée des agents : historique et score mis à jour ensemble."""
+    try:
+        return _ok(CORE.crm_pipeline.log_interaction(req["body"] or {}))
+    except Exception as exc:
+        return _err(str(exc))
+
+
+@router.post("/api/crm/rescore")
+def api_crm_rescore(req):
+    contact_id = str((req["body"] or {}).get("contact_id") or "").strip()
+    if contact_id:
+        return _ok({"scoring": CORE.crm_pipeline.scorer.apply(contact_id)})
+    return _ok({"rescored": CORE.crm_pipeline.scorer.rescore_all()})
+
+
+# ---------------------------------------------------------------------------
+# Coffre-fort d'identifiants
+#
+# RÈGLE DE CETTE SECTION : aucune valeur secrète ne traverse ces routes, à deux
+# exceptions assumées et journalisées — /reveal, déclenché par l'utilisateur
+# avec confirmation explicite, et le code TOTP, à usage unique et périmé en
+# 30 secondes. Les agents, eux, n'obtiennent JAMAIS de secret par HTTP : ils
+# appellent core.credentials.get_credentials() en processus (voir plus bas).
+# ---------------------------------------------------------------------------
+@router.get("/api/vault/credentials")
+def api_vault_list(req):
+    include = req["query"].get("include_revoked", ["0"])[0] in ("1", "true")
+    return _ok({"credentials": CORE.credentials.list(include_revoked=include),
+                "stats": CORE.credentials.stats()})
+
+
+@router.get("/api/vault/credentials/<cred_id>")
+def api_vault_get(req, cred_id):
+    cred = CORE.credentials.get(cred_id)
+    return _ok({"credential": cred}) if cred else _err("Fiche introuvable.", 404)
+
+
+@router.post("/api/vault/credentials")
+def api_vault_save(req):
+    try:
+        return _ok({"credential": CORE.credentials.upsert(req["body"] or {})})
+    except ValueError as exc:
+        return _err(str(exc))
+
+
+@router.delete("/api/vault/credentials/<cred_id>")
+def api_vault_delete(req, cred_id):
+    return _ok({"deleted": CORE.credentials.delete(cred_id)})
+
+
+@router.post("/api/vault/credentials/<cred_id>/rotate")
+def api_vault_rotate(req, cred_id):
+    try:
+        return _ok({"credential": CORE.credentials.rotate(cred_id, req["body"] or {})})
+    except ValueError as exc:
+        return _err(str(exc))
+
+
+@router.post("/api/vault/credentials/<cred_id>/revoke")
+def api_vault_revoke(req, cred_id):
+    reason = str((req["body"] or {}).get("reason") or "")
+    return _ok({"revoked": CORE.credentials.revoke(cred_id, reason=reason)})
+
+
+@router.post("/api/vault/credentials/<cred_id>/grants")
+def api_vault_grant(req, cred_id):
+    body = req["body"] or {}
+    try:
+        grants = CORE.credentials.grant(
+            cred_id, str(body.get("agent_id") or ""),
+            scopes=body.get("scopes"), max_uses=int(body.get("max_uses") or 0),
+            ttl_seconds=int(body.get("ttl_seconds") or 0),
+            task_pattern=str(body.get("task_pattern") or ""), reason=str(body.get("reason") or ""))
+        return _ok({"grants": grants})
+    except ValueError as exc:
+        return _err(str(exc))
+
+
+@router.delete("/api/vault/credentials/<cred_id>/grants/<agent_id>")
+def api_vault_grant_revoke(req, cred_id, agent_id):
+    return _ok({"revoked": CORE.credentials.revoke_grant(cred_id, agent_id)})
+
+
+@router.post("/api/vault/credentials/<cred_id>/reveal")
+def api_vault_reveal(req, cred_id):
+    """Révélation d'UN champ à l'utilisateur, sur confirmation explicite.
+
+    Seule route qui renvoie une valeur en clair, et seulement pour l'humain
+    devant l'écran : `confirm: true` est obligatoire (un appel accidentel ou
+    une requête forgée sans ce champ ne révèle rien), l'accès est journalisé
+    avec le champ concerné, et un seul champ est renvoyé à la fois.
+    """
+    body = req["body"] or {}
+    if not body.get("confirm"):
+        return _err("Confirmation explicite requise pour révéler un secret.", 403)
+    field = str(body.get("field") or "").strip()
+    if field not in ALL_SECRET_FIELDS:
+        return _err(f"Champ inconnu : {field}", 400)
+    cred = CORE.credentials.get(cred_id)
+    if not cred:
+        return _err("Fiche introuvable.", 404)
+    value = CORE.vault.get(f"cred:{cred_id}", field)
+    CORE.audit.record(action="vault.secret.revealed", status="warn", agent="ui", connector_id=cred_id,
+                      detail={"service": cred["service_name"], "champ": field})
+    CORE.events.emit("vault.secret.revealed", {"credential_id": cred_id, "field": field})
+    return _ok({"field": field, "value": value})
+
+
+@router.get("/api/vault/audit")
+def api_vault_audit(req):
+    return _ok({"entries": CORE.credentials.audit_entries(
+        limit=int(req["query"].get("limit", ["100"])[0]),
+        credential_id=req["query"].get("credential_id", [""])[0])})
+
+
+@router.post("/api/vault/sweep")
+def api_vault_sweep(req):
+    return _ok({"expired": CORE.credentials.sweep_expired()})
+
+
+# ---------------------------------------------------------------------------
+# Interface agent
+#
+# Écart ASSUMÉ par rapport à une API get_credentials classique : cette route ne
+# renvoie PAS de mot de passe ni de clé. Les agents de JARVIS s'exécutent dans
+# le même processus que le coffre ; leur faire transiter des secrets par HTTP
+# créerait une surface d'exfiltration accessible à n'importe quel programme
+# local, sans aucun bénéfice. La route sert donc au contrôle d'habilitation et
+# au TOTP ; le secret lui-même s'obtient en processus :
+#
+#     from jarvis.vault_credentials import AgentContext
+#     bundle = core.credentials.get_credentials(cred_id, AgentContext(
+#         agent_id="web_agent", task_id=task.id, target_url=url))
+#     page.fill("#password", bundle.password)
+# ---------------------------------------------------------------------------
+@router.post("/api/agent/credentials/get")
+def api_agent_credentials(req):
+    body = req["body"] or {}
+    ctx = AgentContext(
+        agent_id=str(body.get("agent_id") or ""), task_id=str(body.get("task_id") or ""),
+        tool=str(body.get("tool") or ""), purpose=str(body.get("purpose") or ""),
+        target_url=str(body.get("target_url") or ""))
+    cred_id = str(body.get("credential_id") or "")
+    scope = str(body.get("scope") or "login")
+    try:
+        if not CORE.credentials.authorize(cred_id, ctx, scope):
+            # Rejoue la vérification pour obtenir le motif exact ET le journaliser.
+            CORE.credentials.get_credentials(cred_id, ctx, scope=scope)
+        cred = CORE.credentials.get(cred_id) or {}
+        payload = {
+            "authorized": True, "credential_id": cred_id,
+            "service_name": cred.get("service_name", ""), "service_url": cred.get("service_url", ""),
+            "auth_type": cred.get("auth_type", ""),
+            "fields": sorted(cred.get("secret_fields", {})),
+            "has_totp": cred.get("has_totp", False),
+            "hint": "Secrets accessibles en processus via core.credentials.get_credentials().",
+        }
+        if body.get("totp") and cred.get("has_totp"):
+            payload["totp"] = CORE.credentials.totp_code(cred_id, ctx)
+        return _ok(payload)
+    except VaultDenied as denied:
+        return {"ok": False, "authorized": False, "error": str(denied)}, 403
 
 
 def create_server(core, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
