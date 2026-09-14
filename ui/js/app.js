@@ -910,20 +910,27 @@ async showNodeDetails(node) {
     if (seen.tables) facts.push(`${seen.tables} tableaux detectes`);
     if (data.total_ms) facts.push(`${(data.total_ms / 1000).toFixed(1)} s`);
 
+    // Le libelle vient d'une allowlist backend ; seule la correction precise
+    // son volume reel. Jamais « nouvelle generation complete ».
+    let label = data.label || '';
+    if (data.stage === 'sheet_repair' && data.claims) {
+      label = `Correction de ${data.claims} affirmation${data.claims > 1 ? 's' : ''} non verifiee${data.claims > 1 ? 's' : ''}`;
+    }
+
     // Etat du cerveau : miroir de l'etape REELLE, jamais une animation libre.
     const brain = {
       sheet_connect: 'USING_TOOL', sheet_tabs: 'USING_TOOL',
       sheet_semantic: 'THINKING', sheet_llm: 'THINKING',
-      sheet_grounding: 'VERIFYING', sheet_workspace: 'THINKING',
-      sheet_done: 'SUCCESS',
+      sheet_grounding: 'VERIFYING', sheet_repair: 'VERIFYING',
+      sheet_workspace: 'THINKING', sheet_done: 'SUCCESS',
     }[data.stage];
-    if (brain) this.setRobot(brain, { reason: data.label || data.stage });
+    if (brain) this.setRobot(brain, { reason: label });
     window.dispatchEvent(new CustomEvent('jarvis:brain-state',
-      { detail: { state: brain || 'THINKING', reason: data.label || '', zone: this.sheetZone(data.stage) } }));
+      { detail: { state: brain || 'THINKING', reason: label, zone: this.sheetZone(data.stage) } }));
 
     const body = bubble.querySelector('.bubble') || bubble;
     body.innerHTML = `<div class="sheet-progress">`
-      + `<b>${esc(data.label || '')}</b>`
+      + `<b>${esc(label)}</b>`
       + ` <span class="sheet-step">${data.step || 0}/${data.total || 9}</span>`
       + `<div class="sheet-facts">${esc(facts.join(' · '))}</div>`
       + `<div class="sheet-stall"></div>`

@@ -139,3 +139,44 @@ def readable_preview(text: str, limit: int = 200) -> str:
     t = _LINK.sub(r"\1", t)
     t = _SPACES.sub(" ", t)
     return t.strip()[:limit]
+
+
+# Marqueurs de prompt interne. Un texte qui en contient un est destiné au
+# modèle, jamais à l'écran : il porte le contenu du classeur, la politique de
+# sources ou les consignes de grounding.
+INTERNAL_PROMPT_MARKERS = (
+    "CONTENU STRUCTURÉ", "CONTENU STRUCTURE", "SOURCE_POLICY", "ANALYSE_DETERMINISTE",
+    "DETERMINISTIC_WORKBOOK_SUMMARY", "PERIMETRE_OBLIGATOIRE", "FORMAT_REPONSE_ANALYSE",
+    "DEMANDE DE L'UTILISATEUR", "VALIDATION_FAILED", "FAITS_VERIFIES",
+    "PASSAGE_A_CORRIGER", "VALEURS_REFUSEES", "TACHE :",
+)
+
+# Libellés autorisés dans le bandeau système. Le frontend n'affiche que ceux-ci
+# pour l'analyse d'un classeur ; tout le reste est un texte de prompt.
+PUBLIC_ACTIVITY_LABELS = (
+    "Connexion au Google Sheet", "Téléchargement du classeur", "Lecture des onglets",
+    "Détection des tableaux", "Analyse des données", "Vérification des sources",
+    "Correction d'affirmations", "Préparation du Workspace", "Analyse terminée",
+)
+
+
+def is_internal_prompt(text: str) -> bool:
+    """Vrai si le texte est un prompt interne et non un message d'utilisateur."""
+    head = (text or "")[:4000]
+    return any(marker in head for marker in INTERNAL_PROMPT_MARKERS)
+
+
+def public_task_label(text: str, explicit: str = "") -> str:
+    """Nom de tâche PUBLIABLE : jamais un fragment de prompt interne.
+
+    `explicit` est le libellé voulu par l'appelant. À défaut, un message
+    d'utilisateur ordinaire reste affiché tel quel — c'est l'information utile —
+    tandis qu'un prompt interne est remplacé par un libellé neutre. Le garde-fou
+    est ici, au point d'émission : un filtre uniquement côté interface laisserait
+    fuir le texte par tout autre consommateur du même événement.
+    """
+    if explicit:
+        return explicit[:200]
+    if is_internal_prompt(text):
+        return "Analyse des données"
+    return (text or "")[:200]

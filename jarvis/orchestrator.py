@@ -35,6 +35,7 @@ from .validation import ValidationRetryLoop
 from .source_grounding import (workbook_summary, validate_source_grounding,
                                deterministic_workbook_report)
 from .sheet_semantics import analyze_workbook, analysis_brief
+from .speech_sanitizer import public_task_label
 from .analysis_workspace import (attach_comparison, build_payload, chat_digest,
                                  comparison_digest, detect_intent,
                                  deterministic_narrative)
@@ -503,8 +504,8 @@ class Orchestrator:
                 text, conversation_id, background=False,
                 execution_policy={**execution_policy, "intent": "google_sheet",
                                    "tools_allowed": False, "fast_actions_allowed": False},
-                request_id=request_id)
-            timings["llm_ms"] = int((time.perf_counter() - _t) * 1000)
+                request_id=request_id, public_label="Analyse des données")
+            timings["llm_initial_ms"] = int((time.perf_counter() - _t) * 1000)
             response["action"] = "google_sheet.read"
             response["resource_type"] = "GOOGLE_SHEET"
             response["security_audit"] = False
@@ -512,39 +513,39 @@ class Orchestrator:
             stage("sheet_grounding")
             _t = time.perf_counter()
             grounding = validate_source_grounding(response.get("response", ""), workbook)
-            timings["grounding_ms"] = int((time.perf_counter() - _t) * 1000)
+            timings["grounding_initial_ms"] = int((time.perf_counter() - _t) * 1000)
             # Le claim refuse est publie : sans lui, un echec de grounding est
             # indiagnosticable et la synthese retombe en silence sur le dump.
             response["grounding"] = {"ok": grounding.ok, "code": grounding.code,
                                      "claim": grounding.details.get("claim", ""),
                                      "message": grounding.message}
             if not grounding.ok:
-                # Nommer le claim refusé : sans lui, le modèle ignore ce qu'il
-                # doit retirer et la réponse retombe sur le rapport brut.
-                rejected = grounding.details.get("claim", "")
-                stage("sheet_llm", retry=1)
+                # Correction CIBLÉE : seuls les paragraphes portant un claim
+                # refusé repartent au modèle. La régénération complète coûtait
+                # un second appel de la taille du premier pour ne changer, le
+                # plus souvent, qu'un pourcentage inventé.
                 _t = time.perf_counter()
-                retry = self._run_model_only(
-                    text + "\n\nVALIDATION_FAILED\ncode=UNSUPPORTED_SOURCE_CLAIM\n"
-                    + (f"Valeur refusée car absente des cellules et des FAITS_VERIFIES : « {rejected} ».\n"
-                       if rejected else "")
-                    + "Réécris la réponse complète en supprimant cette valeur et toute autre "
-                      "valeur dérivée que tu aurais calculée toi-même. Garde le même plan et "
-                      "le même niveau de détail ; exprime la tendance en mots à la place.",
-                    conversation_id, background=False,
-                    execution_policy={**execution_policy, "intent": "google_sheet", "tools_allowed": False, "fast_actions_allowed": False}, request_id=request_id)
-                # Le retry de grounding est un SECOND appel modele : sans le
-                # mesurer, ~20 s disparaissaient du bilan des timings.
-                timings["llm_retry_ms"] = int((time.perf_counter() - _t) * 1000)
-                response["response"] = retry.get("response", response.get("response", ""))
-                grounding = validate_source_grounding(response["response"], workbook)
-                response["grounding_retry_1"] = {"ok": grounding.ok, "code": grounding.code,
-                                                 "claim": grounding.details.get("claim", ""),
-                                                 "message": grounding.message}
+                claims = grounding.details.get("unsupported_claims") or []
+                repaired, rechecked, repair_info = self._repair_grounding(
+                    response.get("response", ""), workbook, claims,
+                    conversation_id=conversation_id, execution_policy=execution_policy,
+                    request_id=request_id, stage=stage, timings=timings)
+                timings["repair_ms"] = int((time.perf_counter() - _t) * 1000)
+                timings["repair_rounds"] = repair_info["rounds"]
+                if rechecked is not None and rechecked.ok:
+                    response["response"] = repaired
+                    grounding = rechecked
+                response["grounding_repair"] = {
+                    "ok": bool(rechecked.ok) if rechecked is not None else False,
+                    "rounds": repair_info["rounds"],
+                    "claims_initial": repair_info["claims_initial"],
+                    "repaired_blocks": repair_info["repaired_blocks"],
+                    "fallback_reason": repair_info["fallback_reason"]}
                 if not grounding.ok:
                     # Dernier filet : synthèse calculée sans IA, donc impossible à
                     # halluciner — et rédigée au format d'analyse, jamais un dump
                     # de cellules, qui était précisément le défaut à corriger.
+                    timings["fallback_used"] = True
                     response["response"] = deterministic_narrative(analysis)
                     grounding = validate_source_grounding(response["response"], workbook)
                     response["grounding_retry"] = {"ok": grounding.ok, "code": grounding.code,
@@ -574,6 +575,8 @@ class Orchestrator:
                 duration_ms=int((time.time() - started_at) * 1000),
                 intent=detect_intent(original_text))
             timings["workspace_ms"] = int((time.perf_counter() - _t) * 1000)
+            timings.setdefault("repair_ms", 0)
+            timings.setdefault("fallback_used", False)
             timings["total_ms"] = int((time.time() - started_at) * 1000)
             response["timings"] = timings
             response["analysis_workspace"] = payload
@@ -876,10 +879,16 @@ class Orchestrator:
     def _run_model_only(
         self, text: str, conversation_id: str = "", *, background: bool = False,
         execution_policy: dict[str, Any] | None = None, request_id: str = "",
+        public_label: str = "",
     ) -> dict[str, Any]:
         core = self._core
         policy = dict(execution_policy or {})
-        task = core.tasks.create(name=text[:200], kind="chat", agent="jarvis",
+        # SEPARATION STRICTE message interne / libelle utilisateur. `text` est
+        # le prompt envoye au modele : il contient le contenu du classeur, la
+        # SOURCE_POLICY et les consignes de grounding. Publie tel quel comme nom
+        # de tache, il ressortait dans le bandeau d'activite de Spatial V5.
+        task = core.tasks.create(name=public_task_label(text, public_label),
+                                 kind="chat", agent="jarvis",
                                  conversation_id=conversation_id,
                                  meta={"execution_policy": policy})
         if background:
@@ -1937,15 +1946,135 @@ class Orchestrator:
     # Etapes reelles du pipeline Google Sheet. Chaque libelle est emis au
     # MOMENT ou l'etape demarre : aucune etape n'est annoncee terminee tant
     # qu'elle ne l'est pas, et la derniere seulement une fois le payload pret.
+    # Chaque libelle est repris MOT POUR MOT de PUBLIC_ACTIVITY_LABELS : le
+    # bandeau systeme n'affiche jamais de texte libre, et encore moins un
+    # fragment de prompt. Le test ci-dessous interdit toute derive.
     SHEET_STAGES = {
         "sheet_connect": ("Connexion au Google Sheet", 1),
         "sheet_tabs": ("Lecture des onglets", 3),
-        "sheet_semantic": ("Analyse semantique", 5),
-        "sheet_llm": ("Generation de la synthese", 7),
-        "sheet_grounding": ("Verification du grounding", 6),
-        "sheet_workspace": ("Preparation du Workspace", 8),
-        "sheet_done": ("Termine", 9),
+        "sheet_semantic": ("Détection des tableaux", 4),
+        "sheet_llm": ("Analyse des données", 5),
+        "sheet_grounding": ("Vérification des sources", 6),
+        "sheet_repair": ("Correction d'affirmations", 7),
+        "sheet_workspace": ("Préparation du Workspace", 8),
+        "sheet_done": ("Analyse terminée", 9),
     }
+
+    # Un bloc = un paragraphe non vide, avec ses offsets exacts. La réparation
+    # remplace des blocs entiers : c'est la plus petite unité que le modèle
+    # peut réécrire sans perdre la structure markdown environnante.
+    BLOCK_RE = re.compile(r"[^\n]+(?:\n(?!\s*\n)[^\n]*)*")
+    # Au-delà de ce ratio de paragraphes fautifs, le texte n'est plus « presque
+    # bon » : le réparer morceau par morceau coûterait plus cher qu'une synthèse
+    # déterministe, et donnerait un résultat cousu de corrections.
+    REPAIR_MAX_BAD_RATIO = 0.25
+    REPAIR_MAX_ROUNDS = 2
+
+    def _repair_grounding(self, answer, workbook, claims, *, conversation_id,
+                          execution_policy, request_id, stage, timings):
+        """Corrige UNIQUEMENT les passages fautifs, jamais toute la synthèse.
+
+        Retourne ``(texte, grounding, info)``. La régénération complète coûtait
+        un second appel de la taille du premier (~22 s) pour ne changer, le plus
+        souvent, qu'un pourcentage inventé. On réécrit donc le seul paragraphe
+        concerné, et on le réinjecte à sa place : les passages déjà validés
+        restent octet pour octet identiques.
+
+        Le validateur n'est pas assoupli : c'est toujours lui qui tranche, et
+        l'échec retombe sur la synthèse déterministe.
+        """
+        info = {"rounds": 0, "claims_initial": len(claims), "repaired_blocks": 0,
+                "fallback_used": False, "fallback_reason": ""}
+        text = answer or ""
+        blocks = [m for m in self.BLOCK_RE.finditer(text)]
+        if not blocks:
+            info.update(fallback_used=True, fallback_reason="EMPTY_ANSWER")
+            return text, None, info
+
+        bad = {i for i, b in enumerate(blocks)
+               for c in claims if b.start() <= c["start_offset"] < b.end()}
+        # Trop de paragraphes touchés : on ne rafistole pas, on recalcule.
+        # UN seul bloc fautif reste toujours réparable, quelle que soit la
+        # longueur du texte : sur une synthèse courte, un unique paragraphe
+        # depasse mecaniquement 25 % sans que le texte soit « largement faux ».
+        ratio = len(bad) / len(blocks)
+        if len(bad) > 1 and ratio > self.REPAIR_MAX_BAD_RATIO:
+            info.update(fallback_used=True, fallback_reason="TOO_MANY_INVALID_BLOCKS",
+                        bad_ratio=round(ratio, 3))
+            return text, None, info
+        if not bad:
+            # Les claims ne retombent dans aucun bloc : offsets inexploitables.
+            info.update(fallback_used=True, fallback_reason="CLAIMS_OUTSIDE_BLOCKS")
+            return text, None, info
+
+        facts = analysis_brief(analyze_workbook(workbook))[:1500]
+        current, grounding = text, None
+        for _round in range(self.REPAIR_MAX_ROUNDS):
+            info["rounds"] += 1
+            stage("sheet_repair", claims=len(claims))
+            blocks = [m for m in self.BLOCK_RE.finditer(current)]
+            targets = sorted({i for i, b in enumerate(blocks)
+                              for c in claims if b.start() <= c["start_offset"] < b.end()})
+            if not targets:
+                break
+            # Remplacement de la fin vers le début : les offsets des blocs
+            # précédents restent valides pendant toute la passe.
+            for index in reversed(targets):
+                block = blocks[index]
+                original = block.group(0)
+                local = [c for c in claims
+                         if block.start() <= c["start_offset"] < block.end()]
+                fixed = self._repair_block(original, local, facts,
+                                           conversation_id=conversation_id,
+                                           execution_policy=execution_policy,
+                                           request_id=request_id)
+                if not fixed or fixed == original:
+                    continue
+                current = current[:block.start()] + fixed + current[block.end():]
+                info["repaired_blocks"] += 1
+            stage("sheet_grounding")
+            grounding = validate_source_grounding(current, workbook)
+            if grounding.ok:
+                return current, grounding, info
+            claims = grounding.details.get("unsupported_claims") or []
+            if not claims:
+                break
+        return current, grounding, info
+
+    def _repair_block(self, block, claims, facts, *, conversation_id,
+                      execution_policy, request_id):
+        """Un seul paragraphe envoyé au modèle, avec le strict nécessaire.
+
+        Le prompt ne contient ni la synthèse entière ni le classeur : seulement
+        le passage, les valeurs refusées et les faits vérifiés proches. C'est ce
+        qui rend la correction courte là où la régénération était intégrale.
+        """
+        rejected = "\n".join(
+            f"- « {c['text']} » ({c['claim_type']}, {c['reason']})" for c in claims)
+        prompt = (
+            "PASSAGE_A_CORRIGER :\n" + block
+            + "\n\nVALEURS_REFUSEES (absentes des cellules et des FAITS_VERIFIES) :\n" + rejected
+            + "\n\nFAITS_VERIFIES (seules valeurs citables) :\n" + facts
+            + "\n\nTACHE : corrige UNIQUEMENT ce passage en retirant les valeurs refusées. "
+              "N'ajoute aucun nouveau chiffre, nom, date ni fait : exprime la tendance en "
+              "mots si un chiffre doit disparaître. Garde la même langue, le même ton et le "
+              "même formatage markdown (titres, listes, gras). "
+              "Réponds UNIQUEMENT par le passage corrigé, sans préambule ni commentaire.")
+        try:
+            result = self._run_model_only(
+                prompt, conversation_id, background=False,
+                execution_policy={**execution_policy, "intent": "google_sheet_repair",
+                                  "tools_allowed": False, "fast_actions_allowed": False},
+                request_id=request_id, public_label="Correction d'affirmations")
+        except Exception:
+            self._debug("[sheet] targeted repair call failed", force=True)
+            return ""
+        fixed = (result.get("response") or "").strip()
+        # Une « correction » qui explose la taille du passage n'en est pas une :
+        # le modèle a repris la main sur le plan au lieu de corriger.
+        if not fixed or len(fixed) > max(400, len(block) * 3):
+            return ""
+        return fixed
 
     def _sheet_stage(self, conversation_id: str, request_id: str):
         """Emetteur de progression pour l'analyse d'un Google Sheet.
