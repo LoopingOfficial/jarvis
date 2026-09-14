@@ -282,9 +282,19 @@ export async function createAvatarViewer(options = {}) {
     }
     mixer.setTime(previous);
     model.updateWorldMatrix(true, true);
+    if (union.isEmpty()) return measure(model);
     const size = union.getSize(new THREE.Vector3());
     const center = union.getCenter(new THREE.Vector3());
-    return { box: union, size, center, height: size.y, radius: size.length() / 2 };
+    const sampled = { box: union, size, center, height: size.y, radius: size.length() / 2 };
+    // Garde-fou : au tout premier appel, la hiérarchie du glTF n'est pas
+    // toujours à jour et l'échantillonnage renvoie une boîte quasi nulle
+    // (observé : 0,009 m pour un personnage d'1,74 m), ce qui colle la caméra
+    // au modèle. On préfère alors la mesure statique, et `frame()` réessaiera.
+    if (sampled.height < 0.05) {
+      const fallback = measure(model);
+      if (fallback.height > sampled.height) return fallback;
+    }
+    return sampled;
   }
 
   /* ------------------------------------------------------------- cadrage */
@@ -392,6 +402,21 @@ export async function createAvatarViewer(options = {}) {
     if (acc >= 0.5) { fps = Math.round(frames / acc); acc = 0; frames = 0; }
   }
   raf = requestAnimationFrame(loop);
+
+  // Recadrage tant que la mesure reste dégénérée, pendant quelques frames.
+  // Observé à plusieurs reprises : au premier appel la boîte englobante sort à
+  // 0,009 m pour un personnage d'1,74 m — la hiérarchie du glTF n'est pas
+  // encore à jour — et la caméra se retrouve collée au modèle. Une seule frame
+  // de délai ne suffit pas toujours ; on réessaie jusqu'à obtenir une mesure
+  // plausible, dix frames au maximum.
+  let settleTries = 10;
+  (function settleFraming() {
+    if (!running || settleTries-- <= 0) return;
+    if (!framing || framing.height < 0.05) {
+      frame();
+      requestAnimationFrame(settleFraming);
+    }
+  })();
 
   /* ---------------------------------------------------------- libération */
   function dispose() {
