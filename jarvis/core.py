@@ -26,6 +26,8 @@ from .blender import BlenderManager
 from .brain_manager import BrainManager
 from .browser_manager import BrowserManager, set_manager
 from .crm import CrmStore
+from .crm_pipeline import CrmPipeline
+from .vault_credentials import AgentContext, CredentialVault, VaultDenied
 from .attachments import AttachmentStore
 from .calendar import CalendarManager
 from .config import DATA_DIR, LEGACY_CONNECTIONS, SettingsStore, ensure_dirs
@@ -105,6 +107,15 @@ class JarvisCore:
         self.crm = CrmStore(self.db)
         try:
             self.crm.seed_if_empty()
+        except Exception:
+            pass
+        # CRM étendu (sociétés, opportunités, historique, scoring) et coffre-fort
+        # d'identifiants. Le coffre réutilise `self.vault` : une seule
+        # implémentation de chiffrement dans tout le système.
+        self.crm_pipeline = CrmPipeline(self.db, events=self.events)
+        self.credentials = CredentialVault(self.db, self.vault, audit=self.audit, events=self.events)
+        try:
+            self.credentials.sweep_expired()
         except Exception:
             pass
         self.browser = BrowserManager(self)
