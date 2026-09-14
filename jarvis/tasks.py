@@ -140,9 +140,59 @@ class TaskManager:
         with self._lock:
             return task_id in self._cancelled
 
-    def set_plan(self, task_id: str, plan: list[Any]) -> None:
-        self._db.execute("UPDATE tasks SET plan=? WHERE id=?", (dumps(plan), task_id))
-        self._events.emit("task.progress", {"id": task_id, "plan": plan})
+    # -- plan d'exécution ---------------------------------------------------
+    # Contrat avec la checklist du Command Center (spatial_shell.setTaskSteps) :
+    # chaque étape est {key, label, state} avec state ∈ idle|run|done|err.
+    # Règle tenue : on ne publie que des étapes que le backend a réellement
+    # déclarées ou réellement exécutées — jamais une progression décorative.
+    PLAN_STATES = ("idle", "run", "done", "err")
+
+    @staticmethod
+    def _norm_step(step: Any, index: int) -> dict[str, Any]:
+        """Accepte une chaîne, ou un dict {key,label,state} déjà formé."""
+        if isinstance(step, dict):
+            key = str(step.get("key") or step.get("name") or f"s{index}")
+            label = str(step.get("label") or step.get("name") or key)
+            state = str(step.get("state") or "idle")
+        else:
+            key = label = str(step)
+            state = "idle"
+        if state not in TaskManager.PLAN_STATES:
+            state = "idle"
+        return {"key": key[:60], "label": label[:60], "state": state}
+
+    def set_plan(self, task_id: str, plan: list[Any]) -> list[dict[str, Any]]:
+        """Déclare le plan d'une tâche dont les étapes sont connues d'avance."""
+        steps = [self._norm_step(s, i) for i, s in enumerate(plan or [])]
+        self._db.execute("UPDATE tasks SET plan=? WHERE id=?", (dumps(steps), task_id))
+        self._events.emit("task.progress", {"id": task_id, "plan": steps})
+        return steps
+
+    def plan(self, task_id: str) -> list[dict[str, Any]]:
+        row = self._db.one("SELECT plan FROM tasks WHERE id=?", (task_id,))
+        return loads(row["plan"], []) or [] if row else []
+
+    def step(self, task_id: str, key: str, state: str = "run", label: str = "") -> None:
+        """Fait avancer une étape ; l'ajoute si la tâche découvre son plan en route.
+
+        Les tâches dont le plan n'est pas connu d'avance (boucle d'outils du
+        chat : c'est le modèle qui choisit) construisent ainsi une checklist
+        honnête, étape par étape, à mesure que les outils tournent vraiment.
+        """
+        if state not in self.PLAN_STATES:
+            state = "run"
+        key = str(key)[:60]
+        steps = self.plan(task_id)
+        for s in steps:
+            if s.get("key") == key:
+                s["state"] = state
+                if label:
+                    s["label"] = str(label)[:60]
+                break
+        else:
+            steps.append({"key": key, "label": (str(label) or key)[:60], "state": state})
+        self._db.execute("UPDATE tasks SET plan=? WHERE id=?", (dumps(steps), task_id))
+        self._events.emit("task.progress", {"id": task_id, "plan": steps})
 
     def add_tool(self, task_id: str, tool_id: str) -> None:
         row = self._db.one("SELECT tools FROM tasks WHERE id=?", (task_id,))
@@ -162,7 +212,13 @@ class TaskManager:
             "INSERT INTO task_logs(task_id, ts, level, message, data) VALUES(?,?,?,?,?)",
             (task_id, time.time(), level, str(message)[:2000], dumps(data) if data is not None else ""),
         )
-        self._events.emit("task.progress", {"id": task_id, "log": {"level": level, "message": str(message)[:500]}})
+        # `data` voyage aussi sur le SSE : c'est lui qui porte la phase réelle
+        # des pipelines (ex. security_audit → {"phase","completed","total"}).
+        # Sans ça, la progression existe côté backend et se perd en route.
+        entry: dict[str, Any] = {"level": level, "message": str(message)[:500]}
+        if data is not None:
+            entry["data"] = data
+        self._events.emit("task.progress", {"id": task_id, "log": entry})
 
     def logs(self, task_id: str, limit: int = 200) -> list[dict[str, Any]]:
         rows = self._db.query(

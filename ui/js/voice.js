@@ -177,6 +177,15 @@
           else interim += chunk;
         }
         if (interim) {
+          // BARGE-IN : dès que le micro entend l'utilisateur, la parole en
+          // cours est coupée. On n'attend pas la transcription finale — c'est
+          // ce délai-là qui donnait l'impression que JARVIS n'écoutait pas.
+          if (this.state === STATES.SPEAKING && this._bargeInEnabled()) {
+            this.stopSpeaking('barge-in');
+            // L'utilisateur est en train de parler : on affiche l'écoute, pas
+            // un retour en veille.
+            if (this.wantsListening) this.setState(STATES.LISTENING, 'barge-in');
+          }
           J.fire('voice.interim', { text: interim });
           this._armSilenceTimer();
         }
@@ -299,7 +308,7 @@
     }
 
     /* ------------------------------------------------------- soumission */
-    async submit(text, { silent = false, source = silent ? 'text' : 'voice' } = {}) {
+    async submit(text, { silent = false, source = silent ? 'text' : 'voice', attachments = null } = {}) {
       if (!text || !text.trim()) return null;
       // Nouvelle commande utilisateur : on arrête proprement la parole en cours.
       if (this.state === STATES.SPEAKING) this.stopSpeaking('nouvelle commande');
@@ -307,6 +316,10 @@
       J.fire('jarvis.user', { text });
 
       const payload = { text, source };
+      // Commande vocale : rien n'est joint, l'appelant ne passe pas d'ids.
+      // Commande texte : les `attachment_id` déjà uploadés accompagnent le texte.
+      const attached = attachments || [];
+      if (attached.length) payload.attachments = attached;
       if (J.state.conversation) payload.conversation_id = J.state.conversation;
       console.debug('[CHAT-UI] API request started', payload.conversation_id);
       const res = await J.post('/api/command', payload);
@@ -318,7 +331,10 @@
 
       if (res.needs_confirmation) {
         this.setState(STATES.SPEAKING, 'demande de confirmation');
-        this.speak(response, { kind: 'confirmation' });
+        // À l'oral, on pose la question courte fournie par le garde-fou
+        // (« Envoyer un e-mail à Pierre. Tu confirmes ? ») ; l'écran garde la
+        // description complète de l'action et son motif.
+        this.speak(res.needs_confirmation.speech || response, { kind: 'confirmation' });
         J.fire('jarvis.confirmation', res.needs_confirmation);
         return res;
       }
@@ -407,6 +423,12 @@
       // Sanitisation complète côté client (URLs, markdown, nombres…) :
       // garantit que ni le navigateur ni Piper n'énonce de syntaxe brute.
       let clean = window.pipeSpeech ? window.pipeSpeech(text) : String(text);
+      // Le greeting de session est la seule salutation légitime : il vient du
+      // serveur et passe intact. Tout le reste est débarrassé des formules de
+      // courtoisie que le modèle remet à chaque tour.
+      if (kind !== 'greeting' && window.speechStripCourtesy) {
+        clean = window.speechStripCourtesy(clean);
+      }
       if (!clean) return;
       this.lastSpokenText = clean;
       if (!this.ttsAvailable && !this._ttsRemote()) {

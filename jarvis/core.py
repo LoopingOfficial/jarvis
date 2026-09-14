@@ -24,6 +24,9 @@ from .idle_learning import IdleLearningEngine
 from .automations import AutomationManager
 from .blender import BlenderManager
 from .brain_manager import BrainManager
+from .browser_manager import BrowserManager, set_manager
+from .crm import CrmStore
+from .attachments import AttachmentStore
 from .calendar import CalendarManager
 from .config import DATA_DIR, LEGACY_CONNECTIONS, SettingsStore, ensure_dirs
 from .connectors import ConnectorManager
@@ -43,12 +46,16 @@ from .tools import registry
 from .tools.runner import SecureToolRunner
 from .tts import PiperTTS
 from .voice import VoiceSessionManager, VoiceStateMachine
+from .validation import ValidationEngine
 
 from .self_upgrade.service import SelfUpgradeService  # noqa: E402
 
 # Enregistre les outils intégrés (import = enregistrement dans le registre).
 from .tools import (avatar_engine_tools, avatar_tools, avatar_update_tools,  # noqa: F401,E402
-                    blender_tools, image_tools,
+                    blender_tools, browser_tools,
+                    crm_tools, pdf_tools, transcript_tools,
+                    image_tools,
+                    file_analysis_tools,  # noqa: F401,E402
                     jarvis_tools,
                     remote_tools,
                     self_upgrade_tools,
@@ -85,12 +92,23 @@ class JarvisCore:
         self.avatar_live = AvatarLiveManager(self)
         self.gpu = GpuResourceManager(self)
         self.runner = SecureToolRunner(self)
+        self.validation = ValidationEngine()
         self.orchestrator = Orchestrator(self)
         self.voice = VoiceStateMachine(self.events)
         self.sessions = VoiceSessionManager(self.db, self.settings, self.events)
         self.tts = PiperTTS()
         self.registry = registry
         self.brain = BrainManager(self)
+        self.attachments = AttachmentStore(self)
+        # CRM local : le carnet s'amorce au premier démarrage seulement, il
+        # n'écrase jamais des contacts existants.
+        self.crm = CrmStore(self.db)
+        try:
+            self.crm.seed_if_empty()
+        except Exception:
+            pass
+        self.browser = BrowserManager(self)
+        set_manager(self.browser)
         self.auto_learning = AutoLearning(self)
         self.idle_learning = IdleLearningEngine(self)
         self.self_upgrade = SelfUpgradeService(self)
@@ -143,7 +161,14 @@ class JarvisCore:
         self.audit.record(action=f"JARVIS {__version__} démarré", tool="core",
                           detail={"vault": self.vault.backend, "tools": registry.count(),
                                   "build": JARVIS_BUILD_ID})
+        try:
+            self.attachments.cleanup()
+        except Exception:
+            pass
         print(f"[jarvis] JARVIS_BUILD_ID={JARVIS_BUILD_ID}", flush=True)
+        # Plans de synchronisation prepares, indexes par empreinte.
+        # Une application ne peut cibler qu'un plan deja prepare ici.
+        self.sync_plans: dict[str, dict] = {}
         self.events.emit("system.ready", {"version": __version__, "tools": registry.count(),
                                           "build": JARVIS_BUILD_ID})
 
@@ -196,6 +221,7 @@ class JarvisCore:
                 self.audit.prune(int(self.settings.get("security", "audit_retention_days", 90)))
                 self.tasks.prune(int(self.settings.get("automation", "task_retention_days", 30)))
                 self.sessions.prune()
+                self.attachments.cleanup()
                 self.llm.invalidate()
             except Exception:
                 pass

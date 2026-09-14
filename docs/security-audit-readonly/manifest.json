@@ -1,0 +1,77 @@
+[
+  {
+    "file": "jarvis/code_edit.py",
+    "change": "modified",
+    "sha256": "cd2cddeee45fd0fd80e650512abb44859be0d01b91bfe17cf7f4f9d749ddec61"
+  },
+  {
+    "file": "jarvis/document_store.py",
+    "change": "modified",
+    "sha256": "57366850e483cc2d2bcbb8dbdd66ef2c275c7393928117fb3344a19ffa2deda8"
+  },
+  {
+    "file": "jarvis/execution_policy.py",
+    "change": "added",
+    "sha256": "9d45b1d7eca31bc5072272b6a9fb41d357445930f57ead2123fd038ddff5015a"
+  },
+  {
+    "file": "jarvis/file_router.py",
+    "change": "modified",
+    "sha256": "8b734637bfe34a1495c230a76d815595d42d94d6f0eb936377767edb0586b51f"
+  },
+  {
+    "file": "jarvis/goals.py",
+    "change": "modified",
+    "sha256": "542d7a2f001a5feca413d114ec4882c327f2c95eb607cae55307c408b7fdb1f3"
+  },
+  {
+    "file": "jarvis/intents.py",
+    "change": "modified",
+    "sha256": "648fed0b9f4e91612ab58c37318632dca8cd472b477135c18fafe4bd96be06fa"
+  },
+  {
+    "file": "jarvis/orchestrator.py",
+    "change": "modified",
+    "sha256": "f89fc09cc8c190a2a49c5d5fee744bdc54c9829bf197d49e5d12988c93eb1473"
+  },
+  {
+    "file": "jarvis/security_analysis.py",
+    "change": "modified",
+    "sha256": "ddee850576ee35d93e8c851e3d3d061632f3450da5ca534a66d37addc2168536"
+  },
+  {
+    "file": "jarvis/security_audit.py",
+    "change": "added",
+    "sha256": "b8919cec28b583df8afab635b43e388c2ea3f95a2aaec4cc0a98953a935dd337"
+  },
+  {
+    "file": "jarvis/tools/remote_tools.py",
+    "change": "modified",
+    "sha256": "3f95162f3d7de204c379046ccba466ecce0f8bca2aebf47fc8c429a32e5b1193"
+  },
+  {
+    "file": "jarvis/tools/runner.py",
+    "change": "modified",
+    "sha256": "cc01408bed998112cd4ad70805aea4ea4ab15f5b85659c9b2c4c042d6883a1cc"
+  },
+  {
+    "file": "jarvis/tools/system_tools.py",
+    "change": "modified",
+    "sha256": "2646d395d208863e0b4e29164d258a7a4bc0388cea1f7323c5c1912520b6ac4f"
+  },
+  {
+    "file": "tests/test_security_analysis.py",
+    "change": "modified",
+    "sha256": "64bdf07e039d5edea55ae3641b62f46aa489beff1437af758b34dce0e17e054c"
+  },
+  {
+    "file": "tests/test_security_audit_frontend.js",
+    "change": "added",
+    "sha256": "19027c823b57672c196ca14768914131c7a4e5c0461526b090bc4e6963c8602c"
+  },
+  {
+    "file": "ui/js/code_env.js",
+    "change": "modified",
+    "sha256": "0a44dde5b81fffc9b9c5a2669c4e89556f135383574bc287f21a5526017d4078"
+  }
+]

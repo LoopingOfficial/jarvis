@@ -458,3 +458,132 @@ html[data-jarvis-ui='spatial_v5'] .v5-rail button:focus-visible{ outline-offset:
    comprimer pour tenir dans la hauteur — elles défilent. */
 .v5-lib-body > *{ flex:0 0 auto }
 .v5-lib-row{ min-height:52px }
+
+/* ========================================================== KANBAN COURRIER
+   Occupe la bande de travail (rail → gouttière droite). Les variables
+   --v5rail / --v5right viennent du modèle de gouttière posé à la Task 2.1 :
+   c'est ce qui garantit qu'il ne passe jamais sous l'aperçu navigateur ni
+   sous l'Analysis Workspace, tous deux logés dans la colonne droite. */
+.v5-mail{position:fixed;left:var(--v5rail);right:var(--v5right);top:56px;
+  bottom:calc(22px + var(--cmdh,56px) + 18px);z-index:40;
+  display:flex;flex-direction:column;gap:12px;
+  opacity:0;transform:translateY(12px);filter:blur(6px);pointer-events:none;
+  transition:opacity .42s ease, transform .5s cubic-bezier(.16,.9,.3,1), filter .42s ease}
+.v5-mail.in{opacity:1;transform:none;filter:none;pointer-events:auto}
+.v5-mail[hidden]{display:none!important}
+
+.vm-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding-bottom:10px;
+  box-shadow:inset 0 -1px 0 rgba(120,200,230,.1)}
+.vm-kick{font-family:var(--mono5);font-size:8.5px;letter-spacing:.24em;color:var(--faint)}
+.vm-head h2{margin:0;font-size:17px;font-weight:250;letter-spacing:-.01em;color:var(--ink)}
+.vm-state{font-family:var(--mono5);font-size:9px;letter-spacing:.16em;color:var(--mute)}
+.vm-state[data-tone='run']{color:var(--ice)}
+.vm-state[data-tone='ok']{color:var(--ok5)}
+.vm-state[data-tone='err']{color:var(--err5)}
+.vm-run{margin-left:auto;font-family:var(--mono5);font-size:9px;letter-spacing:.18em;
+  padding:7px 13px;border:0;border-radius:8px;cursor:pointer;color:var(--ice);
+  background:rgba(56,223,255,.1);box-shadow:var(--edge5);transition:background .18s,color .18s}
+.vm-run:hover:not([disabled]){background:rgba(56,223,255,.18);color:var(--ink)}
+.vm-run[disabled]{opacity:.45;cursor:default}
+.vm-close{border:0;background:none;color:var(--faint);font-size:13px;cursor:pointer;padding:4px}
+.vm-close:hover{color:var(--ice)}
+.vm-empty{margin:0;color:var(--faint);font-family:var(--mono5);font-size:11px;line-height:1.7}
+.vm-empty[hidden]{display:none!important}
+
+/* Cinq colonnes ; on défile horizontalement plutôt que d'écraser les cartes. */
+.vm-board{flex:1;min-height:0;display:grid;grid-auto-flow:column;
+  grid-auto-columns:minmax(210px,1fr);gap:10px;overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:thin;scrollbar-color:rgba(56,223,255,.18) transparent}
+.vm-board::-webkit-scrollbar{height:6px}
+.vm-board::-webkit-scrollbar-thumb{background:rgba(56,223,255,.18);border-radius:3px}
+
+.vm-col{display:flex;flex-direction:column;min-height:0;border-radius:12px;
+  background:var(--glass5);backdrop-filter:blur(10px);box-shadow:var(--edge5)}
+.vm-col-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:9px 11px;box-shadow:inset 0 -1px 0 rgba(120,200,230,.08)}
+.vm-col-head b{font-family:var(--mono5);font-size:8.5px;letter-spacing:.18em;
+  font-weight:500;color:var(--ice)}
+.vm-col-head em{font-style:normal;font-family:var(--mono5);font-size:10px;color:var(--faint);
+  font-variant-numeric:tabular-nums}
+.vm-col-head em[data-count='0']{opacity:.4}
+.vm-col[data-cat='invoice'] .vm-col-head b{color:var(--amber)}
+.vm-col[data-cat='quote'] .vm-col-head b{color:var(--violet)}
+.vm-col[data-cat='archive'] .vm-col-head b{color:var(--faint)}
+.vm-col-body{flex:1;min-height:0;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:7px;
+  scrollbar-width:thin;scrollbar-color:rgba(56,223,255,.16) transparent}
+.vm-col-body::-webkit-scrollbar{width:4px}
+.vm-col-body::-webkit-scrollbar-thumb{background:rgba(56,223,255,.16);border-radius:3px}
+
+.vm-card{padding:9px 10px;border-radius:9px;background:rgba(6,20,32,.55);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.07);
+  animation:vmCardIn .38s cubic-bezier(.16,.9,.3,1) both}
+@keyframes vmCardIn{from{opacity:0;transform:translateY(8px);filter:blur(3px)}}
+.vm-card.unread{box-shadow:inset 0 0 0 1px rgba(56,223,255,.22)}
+.vm-from{font-family:var(--mono5);font-size:8.5px;letter-spacing:.1em;color:var(--mute);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-subject{font-size:12px;line-height:1.4;color:var(--ink);margin-top:3px}
+.vm-snippet{font-size:10.5px;line-height:1.5;color:var(--faint);margin-top:4px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.vm-meta{display:flex;align-items:center;gap:7px;margin-top:7px;flex-wrap:wrap}
+.vm-reason{font-family:var(--mono5);font-size:8px;letter-spacing:.08em;color:var(--ice);
+  padding:2px 6px;border-radius:5px;background:rgba(56,223,255,.08)}
+.vm-att{font-family:var(--mono5);font-size:8px;letter-spacing:.1em;color:var(--amber)}
+
+@media (max-width:1100px){
+  .vm-board{grid-auto-columns:minmax(190px,1fr)}
+}
+@media (max-width:860px){
+  .v5-mail{top:48px;bottom:150px}
+  .vm-board{grid-auto-columns:minmax(200px,80vw)}
+  .vm-head h2{font-size:15px}
+}
+
+/* ================================================= CARTES MÉTIER (chat) ==
+   Documents générés et désambiguïsation CRM. Rendues dans le flux de
+   conversation, comme les cartes d'image et de modèle 3D. */
+.doccard{border-radius:12px;background:var(--glass5);box-shadow:var(--edge5);
+  padding:12px 14px;max-width:420px;
+  animation:v5modIn .4s cubic-bezier(.16,.9,.3,1) both}
+.doccard-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
+  padding-bottom:9px;box-shadow:inset 0 -1px 0 rgba(120,200,230,.09)}
+.doc-kind{font-family:var(--mono5);font-size:8px;letter-spacing:.24em;color:var(--faint)}
+.doccard[data-kind='invoice'] .doc-kind{color:var(--amber)}
+.doccard[data-kind='quote'] .doc-kind{color:var(--violet)}
+.doc-number{font-family:var(--mono5);font-size:11px;color:var(--ink);font-weight:500}
+.doc-due{margin-left:auto;font-family:var(--mono5);font-size:8.5px;letter-spacing:.1em;color:var(--mute)}
+.doccard-body{padding:10px 0 4px}
+.doc-client{font-size:12px;color:var(--mute);margin-bottom:5px}
+.doc-total{font-size:22px;font-weight:250;letter-spacing:-.02em;color:var(--ink);
+  display:flex;align-items:baseline;gap:7px}
+.doc-total em{font-style:normal;font-family:var(--mono5);font-size:8.5px;
+  letter-spacing:.2em;color:var(--faint)}
+.doc-detail{font-family:var(--mono5);font-size:9px;letter-spacing:.08em;color:var(--faint);margin-top:5px}
+.doccard-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px;
+  padding-top:10px;box-shadow:inset 0 1px 0 rgba(120,200,230,.08)}
+.doc-btn{font-family:var(--mono5);font-size:8.5px;letter-spacing:.16em;text-decoration:none;
+  padding:6px 12px;border-radius:7px;color:var(--mute);background:rgba(120,200,230,.06);
+  transition:background .18s,color .18s}
+.doc-btn:hover{background:rgba(56,223,255,.14);color:var(--ink)}
+.doc-btn.primary{color:var(--ice);background:rgba(56,223,255,.12)}
+.doc-file{font-family:var(--mono5);font-size:8px;letter-spacing:.06em;color:var(--faint);
+  margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}
+
+.clarcard{border-radius:12px;background:var(--glass5);box-shadow:var(--edge5);
+  padding:12px 14px;max-width:420px;
+  animation:v5modIn .4s cubic-bezier(.16,.9,.3,1) both}
+.clar-q{font-size:13px;line-height:1.5;color:var(--ink);margin-bottom:10px}
+.clar-opts{display:flex;flex-direction:column;gap:6px}
+.clar-opt{display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  text-align:left;border:0;cursor:pointer;padding:9px 11px;border-radius:9px;
+  background:rgba(120,200,230,.05);box-shadow:inset 0 0 0 1px rgba(120,200,230,.08);
+  transition:background .18s,box-shadow .18s}
+.clar-opt:hover:not([disabled]){background:rgba(56,223,255,.12);
+  box-shadow:inset 0 0 0 1px rgba(56,223,255,.3)}
+.clar-opt b{font-size:12px;font-weight:400;color:var(--ink)}
+.clar-opt em{font-style:normal;font-family:var(--mono5);font-size:9px;
+  letter-spacing:.06em;color:var(--faint)}
+.clar-opt[disabled]{cursor:default;opacity:.4}
+.clar-opt.chosen{opacity:1;background:rgba(61,240,166,.1);
+  box-shadow:inset 0 0 0 1px rgba(61,240,166,.32)}
+.clar-opt.chosen b{color:var(--ok5)}
+.clarcard[data-resolved] .clar-q{color:var(--mute)}

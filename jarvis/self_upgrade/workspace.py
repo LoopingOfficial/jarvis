@@ -39,6 +39,9 @@ class UpgradeWorkspaceManager:
             return {"ok": False, "error": "Le projet n'est pas un dépôt Git."}
         if not self._git.worktree_add(ws, branch, base):
             return {"ok": False, "error": "Impossible de créer le worktree Git.", "branch": branch}
+        gws = GitManager(ws)
+        gws._git("config", "core.autocrlf", "input")  # éviter les diffs EOL parasites
+        gws._git("config", "core.eol", "lf")
         return {"ok": True, "workspace": str(ws), "branch": branch, "base_commit": base}
 
     def remove(self, upgrade_id: str) -> bool:

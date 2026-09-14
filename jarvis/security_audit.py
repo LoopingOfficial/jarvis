@@ -12,6 +12,7 @@ from .remote_paths import resolveRemotePath
 from .security_analysis import (SourceDocument, READ_ONLY_ALLOWED_TOOLS,
                                 deduplicate_findings, parse_findings, split_into_chunks)
 from .build import READ_ONLY_SECURITY_ROUTING_BUILD_ID
+from .validation import ValidationEngine
 
 AUDIT_SYSTEM = (
     'EXECUTION_POLICY: {"intent":"security_audit_readonly","read_only":true,'
@@ -36,6 +37,20 @@ SEVERITIES = ("critical", "high", "medium", "low", "info")
 class SecurityAuditPipeline:
     def __init__(self, core):
         self.core = core
+        self.validation = getattr(core, "validation", ValidationEngine())
+
+    # Pipeline à phases réellement déclarées d'avance : la checklist du
+    # Command Center peut donc les afficher dès le départ en « en attente ».
+    PLAN = [
+        {"key": "read", "label": "Lecture"},
+        {"key": "chunk", "label": "Analyse"},
+        {"key": "merge", "label": "Fusion des résultats"},
+        {"key": "done", "label": "Rapport"},
+    ]
+    _PLAN_ORDER = [s["key"] for s in PLAN]
+
+    def declare_plan(self, task_id):
+        self.core.tasks.set_plan(task_id, self.PLAN)
 
     def _progress(self, task_id, path, phase, completed=0, total=0, size=0):
         labels = {"read": "Lecture", "chunk": f"Analyse {completed + 1}/{total}",
@@ -43,6 +58,15 @@ class SecurityAuditPipeline:
         label = labels[phase]
         self.core.tasks.log(task_id, label, data={"phase": phase, "completed": completed,
                                                  "total": total})
+        # Entrer dans une phase solde définitivement les précédentes.
+        try:
+            rank = self._PLAN_ORDER.index(phase)
+        except ValueError:
+            rank = -1
+        if rank >= 0:
+            for earlier in self._PLAN_ORDER[:rank]:
+                self.core.tasks.step(task_id, earlier, "done")
+            self.core.tasks.step(task_id, phase, "done" if phase == "done" else "run", label)
         self.core.events.emit("security.analysis.progress", {
             "task_id": task_id, "phase": phase, "label": label, "file": path,
             "size": size, "read_only": True, "completed": completed, "total": total})
@@ -152,6 +176,7 @@ class SecurityAuditPipeline:
                            "read_only": True, "write_allowed": False}):
             try:
                 core.tasks.set_status(task_id, "running", progress=0)
+                self.declare_plan(task_id)
                 doc, read_tool, read_args, origin = self._source(text, policy, task_id, conversation_id, used)
                 core.documents.audit_lock(doc, core.events)
                 locked = True
@@ -222,6 +247,15 @@ class SecurityAuditPipeline:
         )
         # Deterministic aggregation retains ALL findings, without truncating a synthesis prompt.
         response = self.render(report)
+        validation_id = "val_" + __import__("uuid").uuid4().hex[:12]
+        verdict = self.validation.validate(report, {"validators": ["security", "intent"],
+            "audit": True, "read_only": True, "tool_calls": []})
+        core.tasks.log(task_id, f"[validation] validation_id={validation_id} "
+                       f"validators_executed=security,intent error_code={verdict.code} "
+                       f"final_status={'PASS' if verdict.ok else 'BLOCKED'}")
+        if not verdict.ok:
+            report["errors"].append(verdict.message or verdict.code)
+            report["complete"] = False
         report = json.loads(core.vault.scrub(json.dumps(report, ensure_ascii=False)))
         response = core.vault.scrub(response)
         core.active_task_context["last_security_audit"] = report

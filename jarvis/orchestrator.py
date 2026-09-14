@@ -1488,6 +1488,11 @@ class Orchestrator:
                             + json.dumps(self._safe_args(call.arguments), ensure_ascii=False),
                             force=call.name.startswith("image."))
                 core.tasks.log(task_id, f"Outil : {label}", level="tool", data=self._safe_args(call.arguments))
+                # La boucle de chat n'a pas de plan connu d'avance : c'est le
+                # modèle qui choisit ses outils. La checklist se construit donc
+                # au fil des exécutions réelles, jamais par anticipation.
+                step_key = f"{call.name}#{len(used_tools)}"
+                core.tasks.step(task_id, step_key, "run", label)
                 core.agents.set_state("jarvis", "active", action=f"{label}", task_id=task_id)
                 core.events.emit("jarvis.state", {"state": "ACTING", "reason": call.name})
                 core.events.emit("tool.started", {"tool_id": call.name, "name": label})
@@ -1511,6 +1516,8 @@ class Orchestrator:
                     pending_confirmation = {
                         "id": pending.id, "action": pending.action, "risk": pending.risk,
                         "risk_label": RISK_LABELS.get(pending.risk, pending.risk), "reason": pending.reason,
+                        # Question courte pour le TTS ; l'écran garde `action`.
+                        "speech": getattr(pending, "speech", ""),
                     }
                     return {"ok": True, "response": exc.message, "task_id": task_id,
                             "conversation_id": conversation_id, "needs_confirmation": pending_confirmation,
@@ -1612,6 +1619,7 @@ class Orchestrator:
                                             tool_call_id=call.id, name=call.name))
                 core.tasks.log(task_id, f"{label} → {'ok' if result.ok else 'échec'}",
                                level="info" if result.ok else "error", data={"preview": output[:400]})
+                core.tasks.step(task_id, step_key, "done" if result.ok else "err", label)
         else:
             final_text = "J'ai atteint la limite d'étapes pour cette demande."
             self._debug("MAX_ITERATIONS REACHED")
@@ -1715,6 +1723,7 @@ class Orchestrator:
             return {"ok": True, "response": exc.message, "task_id": task_id,
                     "conversation_id": conversation_id, "tools_used": [],
                     "needs_confirmation": {"id": pending.id, "action": pending.action,
+                                        "speech": getattr(pending, "speech", ""),
                                             "risk": pending.risk,
                                             "risk_label": RISK_LABELS.get(pending.risk, pending.risk),
                                             "reason": pending.reason}}
@@ -2074,6 +2083,7 @@ class Orchestrator:
                     core.agents.set_state(agent_id, "standby")
                     return {"ok": False, "output": exc.message, "agent": agent_id,
                             "needs_confirmation": {"id": exc.pending.id, "action": exc.pending.action,
+                                                "speech": getattr(exc.pending, "speech", ""),
                                                    "risk": exc.pending.risk}}
                 used.append(inspect_id)
                 messages.append(ChatMessage(
@@ -2114,6 +2124,7 @@ class Orchestrator:
                     core.agents.set_state(agent_id, "standby")
                     return {"ok": False, "output": exc.message, "agent": agent_id,
                             "needs_confirmation": {"id": exc.pending.id, "action": exc.pending.action,
+                                                "speech": getattr(exc.pending, "speech", ""),
                                                    "risk": exc.pending.risk}}
                 used.append(call.name)
                 if agent_id == "blender":

@@ -32,22 +32,32 @@ class CandidateRunner:
         return self._port
 
     def start(self, boot_wait_s: float = 18.0, attempts: int = 40) -> dict[str, Any]:
+        data_dir = self._ws / "data_candidate"
+        log_file = data_dir / "candidate.log"
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            log_handle = open(log_file, "a", encoding="utf-8", errors="replace")
+        except Exception:
+            log_handle = None
         env = {
             "JARVIS_PORT": str(self._port),
             "JARVIS_HOST": "127.0.0.1",
             "JARVIS_LAUNCH_UI": "0",
-            "JARVIS_DATA_DIR": str(self._ws / "data_candidate"),
+            "JARVIS_DATA_DIR": str(data_dir),
             "JARVIS_CLAP_ENABLED": "0",
         }
         try:
+            # stdout/stderr vers un fichier : un PIPE jamais lu se bloque quand
+            # le buffer se remplit et la candidate n'atteint jamais le serveur HTTP.
             self._proc = subprocess.Popen(
                 [self._python, "jarvis.py"],
                 cwd=str(self._ws), env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace",
+                stdout=log_handle, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception as exc:
+            if log_handle:
+                log_handle.close()
             return {"ok": False, "error": f"lancement impossible: {exc}"}
         time.sleep(boot_wait_s)
         health = {"ok": False}
@@ -56,6 +66,16 @@ class CandidateRunner:
             if health["ok"]:
                 break
             time.sleep(2.0)
+            if self._proc.poll() is not None:
+                break
+        if not health["ok"] and log_handle:
+            try:
+                tail = Path(log_file).read_text(encoding="utf-8", errors="replace")[-3000:]
+                health["candidate_log_tail"] = tail
+            except Exception:
+                pass
+        if log_handle:
+            log_handle.close()
         return {
             "ok": health["ok"],
             "port": self._port,

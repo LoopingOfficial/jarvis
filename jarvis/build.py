@@ -11,8 +11,9 @@ import re
 
 # Keep the repository-wide build marker stable for existing integrations.
 # The image engine exposes its own, more precise build marker below.
-JARVIS_BUILD_ID = "REMOTE_PATH_FIX_20260911_A"
+JARVIS_BUILD_ID = "JARVIS_BRAINROT_SYNC_AUDIT_REFRESH_BATCH_V2_3"
 READ_ONLY_SECURITY_ROUTING_BUILD_ID = "READ_ONLY_SECURITY_ROUTING_20260911_A"
+INTENT_ROUTER_BUILD_ID = "JARVIS_INTENT_ROUTER_CONTEXT_FIX_V1"
 IMAGE_PIPELINE_BUILD_ID = "IMAGE_HYBRID_SDXL_20260911_A"
 
 # Racines génériques INTERDITES comme racine de travail distante de secours.

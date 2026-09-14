@@ -17,6 +17,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from .attachments import AttachmentError
 from .config import UI_DIR
 from .connectors import type_catalog
 from .permissions import RISK_LABELS
@@ -226,7 +227,7 @@ def api_command(req):
     text = str(req["body"].get("text") or "").strip()
     if not text:
         return _err("Commande vide.")
-    print('[CHAT-TRACE] request received conversation_id=' + str(req['body'].get('conversation_id') or '') + ' source=' + str(req['body'].get('source') or 'text'), flush=True)
+    print('[CHAT-TRACE] request received conversation_id=' + str(req['body'].get('conversation_id') or '') + ' source=' + str(req['body'].get('source') or 'text') + ' attachments=' + str(len(req['body'].get('attachments') or [])), flush=True)
     print('[CHAT-TRACE] orchestrator started', flush=True)
     result = CORE.orchestrator.handle(
         text,
@@ -234,9 +235,107 @@ def api_command(req):
         source=str(req["body"].get("source") or "text"),
         confirmation_id=str(req["body"].get("confirmation_id") or ""),
         background=bool(req["body"].get("background", False)),
+        attachments=[str(a) for a in (req["body"].get("attachments") or [])],
     )
     print('[CHAT-TRACE] response ready conversation_id=' + str(result.get('conversation_id') or ''), flush=True)
     return _ok(result)
+
+
+@router.post("/api/brainrot-sync/confirm-scope")
+def api_brainrot_sync_scope(req):
+    """Ouvre une portee de confirmation liee a la selection exacte affichee."""
+    from .brainrot_sync import SyncService
+
+    body = req["body"]
+    plan = CORE.sync_plans.get(str(body.get("plan_hash") or ""))
+    if not plan:
+        return _err("Plan de synchronisation inconnu ou expire.", 409)
+    selection = [str(x) for x in (body.get("selection") or [])]
+    if not selection:
+        return _err("Aucune entree selectionnee.", 400)
+    return _ok(SyncService(CORE).open_confirmation(
+        plan, selection, request_id=str(body.get("request_id") or "")))
+
+
+@router.post("/api/brainrot-sync/refresh")
+def api_brainrot_sync_refresh(req):
+    """Relit Sheet + site et recalcule le plan. Lecture seule."""
+    from .sync_audit import REFRESH_COMPLETED, REFRESH_STARTED, SyncAudit
+
+    audit = SyncAudit(CORE)
+    request_id = str(req["body"].get("request_id") or "")
+    try:
+        audit.emit(REFRESH_STARTED, {"request_id": request_id})
+    except Exception:
+        pass
+    result = CORE.orchestrator.refresh_sync(
+        str(req["body"].get("url") or ""), request_id=request_id,
+        conversation_id=str(req["body"].get("conversation_id") or ""))
+    if not result.get("ok"):
+        return _ok({"ok": False, "error": result.get("error", "REFRESH_FAILED"),
+                    "response": result.get("response", "")})
+    payload = result.get("analysis_workspace") or {}
+    try:
+        audit.emit(REFRESH_COMPLETED, {
+            "request_id": request_id,
+            "plan_id": (payload.get("sync") or {}).get("plan_hash", "")})
+    except Exception:
+        pass
+    return _ok({"ok": True, "comparison": payload.get("comparison"),
+                "sync": payload.get("sync"), "evidence": payload.get("evidence"),
+                "metrics": payload.get("metrics"), "warnings": payload.get("warnings"),
+                "recommendations": payload.get("recommendations"),
+                "duration_ms": payload.get("duration_ms", 0)})
+
+
+@router.post("/api/brainrot-sync/apply")
+def api_brainrot_sync_apply(req):
+    """Applique un plan de synchronisation deja prepare, apres confirmation.
+
+    Trois verrous : le plan doit exister cote serveur (il n'est jamais
+    reconstruit depuis la requete), l'utilisateur doit avoir confirme
+    explicitement, et l'empreinte du plan doit correspondre. Le modele n'a
+    aucun acces a cette route : elle est appelee par l'interface.
+    """
+    from .brainrot_sync import SyncService
+
+    body = req["body"]
+    plan_hash = str(body.get("plan_hash") or "")
+    selection = [str(x) for x in (body.get("selection") or [])]
+    approved = bool(body.get("approved", False))
+    plan = CORE.sync_plans.get(plan_hash)
+    if not plan:
+        return _err("Plan de synchronisation inconnu ou expire. Relance une preparation.", 409)
+    if not approved:
+        return _err("Confirmation explicite requise.", 428)
+    if not selection:
+        return _err("Aucune entree selectionnee.", 400)
+    result = SyncService(CORE).apply(
+        plan, selection,
+        confirmation={"approved": True, "plan_hash": plan_hash,
+                      "at": time.time(), "source": "ui"},
+        request_id=str(body.get("request_id") or ""),
+        # Renvoye par l'interface apres que l'utilisateur a approuve l'invite
+        # d'ecriture du runner. Sans lui, l'invite est simplement remontee.
+        confirmation_id=str(body.get("confirmation_id") or ""),
+        scope_id=str(body.get("scope_id") or ""),
+        idempotency_key=str(body.get("idempotency_key") or ""))
+    if not result.get("ok"):
+        return _ok({**result, "ok": False})
+    return _ok(result)
+
+
+@router.post("/api/brainrot-sync/rollback")
+def api_brainrot_sync_rollback(req):
+    """Restaure une sauvegarde produite par une application precedente."""
+    from .brainrot_sync import SyncService
+
+    backup_path = str(req["body"].get("backup_path") or "")
+    if not backup_path:
+        return _err("backup_path manquant.", 400)
+    return _ok(SyncService(CORE).rollback(
+        backup_path, sync_id=str(req["body"].get("sync_id") or ""),
+        confirmation_id=str(req["body"].get("confirmation_id") or "")))
 
 
 @router.post("/api/confirm")
@@ -464,7 +563,8 @@ def api_tool_run(req, tool_id):
                                  confirmed=bool(req["body"].get("confirmed", False)))
     except ConfirmationRequired as exc:
         return _ok({"needs_confirmation": {"id": exc.pending.id, "action": exc.pending.action,
-                                           "risk": exc.pending.risk, "reason": exc.pending.reason},
+                                           "risk": exc.pending.risk, "reason": exc.pending.reason,
+                                           "speech": getattr(exc.pending, "speech", "")},
                     "message": exc.message})
     return _ok({"result": result.to_dict()})
 
@@ -760,6 +860,9 @@ def api_focus(req):
 # ---------------------------------------------------------------------------
 # Génération d'images
 # ---------------------------------------------------------------------------
+from .imagegen import IMAGE_DIR  # noqa: E402  (routes below need it)
+
+
 @router.get("/api/images")
 def api_images(req):
     conversation_id = req["query"].get("conversation_id", [""])[0]
@@ -812,6 +915,336 @@ def api_image_file(req, job_id):
     return RawResponse(data, ctype)
 
 
+# ---------------------------------------------------------------------------
+# Documents generes (factures / devis)
+# ---------------------------------------------------------------------------
+@router.get("/api/documents")
+def api_documents(req):
+    """Liste les documents deja produits, du plus recent au plus ancien."""
+    from .invoicing import EXPORT_DIR
+
+    items = []
+    try:
+        for path in sorted(EXPORT_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
+            kind, _, number = path.stem.partition("_")
+            items.append({"filename": path.name, "number": number, "kind": kind,
+                          "bytes": path.stat().st_size, "modified_at": path.stat().st_mtime})
+    except Exception:
+        items = []
+    return _ok({"documents": items[:50]})
+
+
+@router.get("/api/documents/<filename>")
+def api_document_file(req, filename):
+    """Sert un document genere.
+
+    `filename` est compare au contenu REEL du dossier d'export : aucun chemin
+    fourni par le client n'est concatene, donc aucune traversee possible.
+    """
+    from .invoicing import EXPORT_DIR
+
+    wanted = str(filename or "")
+    try:
+        match = next((p for p in EXPORT_DIR.iterdir()
+                      if p.is_file() and p.name == wanted), None)
+    except Exception:
+        match = None
+    if match is None:
+        return _err("Document introuvable.", 404)
+    ctype = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8"}.get(
+        match.suffix.lower(), "application/octet-stream")
+    return RawResponse(match.read_bytes(), ctype)
+
+
+@router.post("/api/images/import")
+def api_image_import(req):
+    """Register an uploaded image as an image job so it can be edited.
+
+    Image Edit V3 operates on jobs, so an imported picture becomes a job with
+    ``pipeline_version = "imported"`` rather than a separate code path: the
+    mask, cutout, restyle and upscale routes then work on it unchanged.
+    """
+    import base64
+
+    from .imagegen import IMAGE_DIR, new_id
+
+    body = req["body"]
+    filename = str(body.get("filename") or "").strip()
+    data_b64 = str(body.get("data_b64") or "").strip()
+    if not data_b64:
+        return _err("data_b64 requis.")
+    ext = Path(filename).suffix.lower() or ".png"
+    if ext not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+        return _err("Format d'image non supporté : " + ext)
+    try:
+        raw = base64.b64decode(data_b64, validate=True)
+    except Exception:
+        return _err("Données base64 invalides.")
+    if not raw:
+        return _err("Image vide.")
+    if len(raw) > 25_000_000:
+        return _err("Image trop volumineuse (max 25 Mo).")
+
+    job_id = new_id("img")
+    folder = IMAGE_DIR / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "image.png"
+    path.write_bytes(raw)
+
+    job = {
+        "id": job_id, "conversation_id": str(body.get("conversation_id") or ""),
+        "mode": "imported", "prompt": Path(filename).name or "image importée",
+        "status": "completed", "stage": "COMPLETE", "progress": 1.0,
+        "file_path": str(path), "error": "", "created_at": time.time(),
+        "width": 0, "height": 0, "steps": 0, "seed": 0,
+        "meta": {"pipeline_version": "imported", "original_prompt": filename,
+                 "source": "upload", "bytes": len(raw)},
+    }
+    try:
+        width, height = _png_dimensions(raw)
+        job["width"], job["height"] = width, height
+    except Exception:
+        pass
+    CORE.imagegen._save(job)
+    return _ok({"job": job, "url": f"/api/images/{job_id}/file"})
+
+
+def _png_dimensions(data: bytes) -> tuple[int, int]:
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+    from io import BytesIO
+    from PIL import Image
+    with Image.open(BytesIO(data)) as image:
+        return image.size
+
+
+@router.post("/api/images/<job_id>/edit")
+def api_image_edit(req, job_id):
+    """Run an Image Edit V3 operation on an existing job.
+
+    Segmentation is automatic where the operation needs a selection; the route
+    refuses, with the reason, when the request names a region BiRefNet cannot
+    isolate, instead of editing the wrong area.
+    """
+    from .image_edit_graph import plan_edit
+    from .image_runtime import ComfyClient, ImageRenderer
+    from .imagegen import IMAGE_DIR, new_id
+    from .zimage_graph import GraphBuildError
+
+    source_job = CORE.imagegen.get(job_id) or {}
+    source = str(source_job.get("file_path") or "")
+    if not source:
+        return _err("Image source introuvable.", 404)
+
+    body = req["body"]
+    operation = str(body.get("operation") or "").strip().casefold()
+    prompt = str(body.get("prompt") or "").strip()
+
+    target_id = new_id("img")
+    job = {
+        "id": target_id, "conversation_id": str(body.get("conversation_id") or ""),
+        "mode": "edit", "prompt": prompt or operation,
+        "status": "running", "stage": "PREPARING", "progress": 0.0,
+        "file_path": "", "source_job_id": job_id, "error": "",
+        "created_at": time.time(), "width": 0, "height": 0, "steps": 0, "seed": 0,
+        "meta": {"pipeline_version": "v3", "edit_operation": operation,
+                 "original_prompt": prompt, "source_job_id": job_id},
+    }
+    CORE.imagegen._save(job)
+    CORE.imagegen._emit("image.generation.started", job)
+
+    def on_progress(stage, progress, extra):
+        job["stage"], job["progress"] = stage, round(progress, 3)
+        CORE.imagegen._set(job, stage=stage, progress=progress)
+        CORE.imagegen._emit("image.generation.progress", job,
+                            stage=stage, progress=progress, **extra)
+
+    try:
+        client = ComfyClient(_comfy_base_url())
+        client.health()
+        uploaded = client.upload_image(source)
+        renderer = ImageRenderer(client.base, on_progress=on_progress)
+
+        if operation == "cutout":
+            from .image_segmentation import build_cutout_graph
+            result = renderer._execute(build_cutout_graph(uploaded), budget_s=240,
+                                       expected_stages=["SEGMENTING"])
+            meta = {"operation": "cutout", "segmentation": "birefnet",
+                    "diffusion": False}
+        else:
+            # The source size lets a delivery upscale bound itself instead of
+            # returning ESRGAN's raw x4 (a 1280x1792 source became 5120x7168).
+            try:
+                source_size = _png_dimensions(Path(source).read_bytes())
+            except Exception:
+                source_size = (0, 0)
+            plan = plan_edit(operation, source_image=uploaded, prompt=prompt,
+                             seed=int(body.get("seed") or 0),
+                             mask_image=str(body.get("mask_image") or ""),
+                             pad=tuple(body.get("pad") or (0, 0, 0, 0)),
+                             upscale_to=tuple(body.get("upscale_to") or (0, 0)),
+                             source_size=source_size)
+            result = renderer.edit(plan, filename_prefix=f"jarvis_edit_{target_id}")
+            meta = dict(result.metadata)
+            meta["segmentation"] = "birefnet" if plan.auto_mask else ""
+            meta["auto_mask"] = plan.auto_mask.as_dict() if plan.auto_mask else None
+            job["seed"] = plan.seed
+    except GraphBuildError as exc:
+        job["error"] = str(exc)
+        CORE.imagegen._set(job, status="failed", stage="failed", emit=False)
+        CORE.imagegen._emit("image.generation.failed", job)
+        return _err(str(exc), 422)
+    except Exception as exc:
+        job["error"] = str(exc)[:400]
+        CORE.imagegen._set(job, status="failed", stage="failed", emit=False)
+        CORE.imagegen._emit("image.generation.failed", job)
+        return _err(f"Édition impossible : {exc}", 502)
+
+    folder = IMAGE_DIR / target_id
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "image.png"
+    path.write_bytes(result.images[-1])
+    try:
+        job["width"], job["height"] = _png_dimensions(result.images[-1])
+    except Exception:
+        pass
+    job["file_path"] = str(path)
+    job["meta"].update({"model": meta, "duration_s": result.seconds,
+                        "vram_peak_mb": result.vram_peak_mb,
+                        "stages": result.stages_seen, "bytes": len(result.images[-1])})
+    CORE.imagegen._set(job, status="completed", stage="COMPLETE", progress=1.0,
+                       emit=False)
+    (folder / "image.json").write_text(
+        json.dumps({**job, "url": ""}, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8")
+    try:
+        CORE.imagegen._save_history(job)
+    except Exception:
+        pass
+    CORE.imagegen._emit("image.generation.completed", job, bytes=len(result.images[-1]))
+    return _ok({"job": job, "url": f"/api/images/{target_id}/file"})
+
+
+@router.post("/api/images/<job_id>/mask")
+def api_image_mask(req, job_id):
+    """Preview the automatic selection for an edit, before committing to it.
+
+    Seeing the mask first is what stops a wrong selection from costing a full
+    render and looking like a quality problem.
+    """
+    from .image_runtime import ComfyClient, ImageRenderer
+    from .image_segmentation import (
+        SegmentationUnavailable, build_preview_graph, plan_mask,
+    )
+
+    job = CORE.imagegen.get(job_id) or {}
+    source = str(job.get("file_path") or "")
+    if not source:
+        return _err("Image source introuvable.", 404)
+    body = req["body"]
+    try:
+        plan = plan_mask(
+            str(body.get("operation") or "replace_background"),
+            str(body.get("prompt") or ""),
+            target=str(body.get("target") or ""),
+            grow=body.get("grow"), feather=body.get("feather"))
+    except SegmentationUnavailable as exc:
+        return _err(str(exc), 422)
+    try:
+        client = ComfyClient(_comfy_base_url())
+        client.health()
+        uploaded = client.upload_image(source)
+        graph = build_preview_graph(plan, uploaded)
+        result = ImageRenderer(client.base)._execute(
+            graph, budget_s=180, expected_stages=["GENERATING"])
+    except Exception as exc:
+        return _err(f"Segmentation impossible : {exc}", 502)
+
+    out = IMAGE_DIR / job_id / "mask.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(result.images[-1])
+    return _ok({"plan": plan.as_dict(), "seconds": result.seconds,
+                "url": f"/api/images/{job_id}/mask/file"})
+
+
+@router.get("/api/images/<job_id>/mask/file")
+def api_image_mask_file(req, job_id):
+    path = IMAGE_DIR / job_id / "mask.png"
+    if not path.is_file():
+        return _err("Masque introuvable.", 404)
+    return RawResponse(path.read_bytes(), "image/png")
+
+
+@router.post("/api/images/<job_id>/cutout")
+def api_image_cutout(req, job_id):
+    """Transparent PNG asset. No diffusion, so the subject cannot be altered."""
+    from .image_runtime import ComfyClient, ImageRenderer
+    from .image_segmentation import build_cutout_graph
+
+    job = CORE.imagegen.get(job_id) or {}
+    source = str(job.get("file_path") or "")
+    if not source:
+        return _err("Image source introuvable.", 404)
+    try:
+        client = ComfyClient(_comfy_base_url())
+        client.health()
+        uploaded = client.upload_image(source)
+        result = ImageRenderer(client.base)._execute(
+            build_cutout_graph(uploaded), budget_s=180,
+            expected_stages=["GENERATING"])
+    except Exception as exc:
+        return _err(f"Détourage impossible : {exc}", 502)
+    out = IMAGE_DIR / job_id / "cutout.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(result.images[-1])
+    return _ok({"seconds": result.seconds,
+                "url": f"/api/images/{job_id}/cutout/file"})
+
+
+@router.get("/api/images/<job_id>/cutout/file")
+def api_image_cutout_file(req, job_id):
+    path = IMAGE_DIR / job_id / "cutout.png"
+    if not path.is_file():
+        return _err("Détourage introuvable.", 404)
+    return RawResponse(path.read_bytes(), "image/png")
+
+
+@router.post("/api/images/<job_id>/poster-text")
+def api_image_poster_text(req, job_id):
+    """Composite typography onto a generated poster (Pillow, not diffusion)."""
+    from .poster_text import PosterTextError, compose_poster_text, layout_from_lines
+
+    job = CORE.imagegen.get(job_id) or {}
+    source = str(job.get("file_path") or "")
+    if not source:
+        return _err("Image source introuvable.", 404)
+    lines = req["body"].get("lines")
+    if not isinstance(lines, list) or not any(str(x).strip() for x in lines):
+        return _err("Aucune ligne de texte fournie.")
+    try:
+        out = compose_poster_text(
+            source, layout_from_lines(lines, scrim=float(req["body"].get("scrim") or 0)),
+            IMAGE_DIR / job_id / "poster.png")
+    except PosterTextError as exc:
+        return _err(str(exc), 422)
+    return _ok({"url": f"/api/images/{job_id}/poster/file", "path": str(out)})
+
+
+@router.get("/api/images/<job_id>/poster/file")
+def api_image_poster_file(req, job_id):
+    path = IMAGE_DIR / job_id / "poster.png"
+    if not path.is_file():
+        return _err("Affiche composée introuvable.", 404)
+    return RawResponse(path.read_bytes(), "image/png")
+
+
+def _comfy_base_url() -> str:
+    for backend in CORE.imagegen.backends():
+        if backend.get("kind") == "comfyui":
+            return str(backend.get("base_url") or "http://127.0.0.1:8188")
+    return "http://127.0.0.1:8188"
+
+
 @router.post("/api/images/generate")
 def api_image_generate(req):
     """Génération directe (bouton UI, tests) — même chaîne que l'outil du LLM."""
@@ -822,18 +1255,130 @@ def api_image_generate(req):
     if not prompt:
         return _err("Prompt manquant.")
     try:
+        # width/height default to 0, not 1024: the V2 pipeline picks a
+        # resolution from the image type (a poster is not square), and an
+        # unrequested 1024 would silently override it.
+        source_job_id = str(body.get("source_job_id") or "")
+        source_path = str(body.get("source_path") or "")
+        if source_job_id and not source_path:
+            source = CORE.imagegen.get(source_job_id) or {}
+            source_path = str(source.get("file_path") or "")
+        context = body.get("context") if isinstance(body.get("context"), dict) else {}
         job = CORE.imagegen.generate(
             prompt, conversation_id=str(body.get("conversation_id") or ""),
             mode=str(body.get("mode") or "generate"),
             negative_prompt=str(body.get("negative_prompt") or ""),
-            width=int(body.get("width") or 1024), height=int(body.get("height") or 1024),
+            width=int(body.get("width") or 0), height=int(body.get("height") or 0),
             steps=int(body.get("steps") or 0), seed=int(body.get("seed") or 0),
+            source_job_id=source_job_id, source_path=source_path, context=context,
             raw_request=prompt, engine_mode=str(body.get("engine_mode") or body.get("image_mode")
                                                 or CORE.settings.get("image", "default_mode", "auto")))
     except ImageBackendUnavailable as exc:
         return _err(str(exc), 503)
     return _ok({"job": job}) if job.get("status") == "completed" else (
         {"ok": False, "error": job.get("error") or "Génération échouée.", "job": job}, 502)
+
+
+# ---------------------------------------------------------------------------
+# Pièces jointes (File & Image Analysis)
+# ---------------------------------------------------------------------------
+@router.get("/api/uploads/capabilities")
+def api_uploads_capabilities(req):
+    caps = CORE.attachments.capabilities()
+    vision = CORE.llm.vision_status()
+    caps.update({
+        "max_attachments_per_message": int(CORE.settings.get("files", "max_attachments_per_message", 6)),
+        "vision_available": bool(vision.get("available")),
+        "vision_provider": str(vision.get("provider") or ""),
+        "vision_model": str(vision.get("model") or ""),
+    })
+    return _ok(caps)
+
+
+@router.get("/api/uploads")
+def api_uploads_list(req):
+    return _ok({"attachments": [a.public() for a in CORE.attachments.list()]})
+
+
+@router.post("/api/uploads")
+def api_uploads_create(req):
+    import base64
+
+    body = req["body"]
+    attachments = body.get("attachments")
+    if not isinstance(attachments, list) or not attachments:
+        return _err("attachments requis (liste).")
+    created = []
+    errors = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            errors.append({"error": "élément invalide"})
+            continue
+        filename = str(item.get("filename") or "").strip()
+        data_b64 = str(item.get("data_b64") or "").strip()
+        if not data_b64:
+            errors.append({"filename": filename, "error": "data_b64 manquant"})
+            continue
+        try:
+            raw = base64.b64decode(data_b64, validate=True)
+        except Exception:
+            errors.append({"filename": filename, "error": "Données base64 invalides."})
+            continue
+        try:
+            att = CORE.attachments.store(filename, raw)
+            created.append(att.public())
+        except AttachmentError as exc:
+            errors.append({"filename": filename, "error": str(exc)})
+    return _ok({"attachments": created, "errors": errors})
+
+
+@router.post("/api/uploads/ingest")
+def api_uploads_ingest(req):
+    path = str(req["body"].get("path") or "").strip()
+    filename = str(req["body"].get("filename") or "").strip()
+    if not path:
+        return _err("path requis.")
+    try:
+        att = CORE.attachments.ingest_file(path, filename)
+    except AttachmentError as exc:
+        return _err(str(exc), 400)
+    return _ok({"attachment": att.public()})
+
+
+@router.get("/api/uploads/<att_id>")
+def api_uploads_detail(req, att_id):
+    att = CORE.attachments.resolve([att_id])
+    if not att:
+        return _err("Pièce jointe introuvable.", 404)
+    data = att.public()
+    vox = CORE.llm.vision_status()
+    data["vision_available"] = bool(vox.get("available"))
+    data["extract"] = None
+    return _ok(data)
+
+
+@router.get("/api/uploads/<att_id>/file")
+def api_uploads_file(req, att_id):
+    found = CORE.attachments.serve(att_id)
+    if found is None:
+        return _err("Fichier introuvable.", 404)
+    data, ctype = found
+    return RawResponse(data, ctype)
+
+
+@router.get("/api/uploads/<att_id>/thumb")
+def api_uploads_thumb(req, att_id):
+    thumb = CORE.attachments.thumbnail(att_id)
+    if thumb is None:
+        return _err("Vignette indisponible.", 404)
+    return RawResponse(thumb, "image/png")
+
+
+@router.delete("/api/uploads/<att_id>")
+def api_uploads_delete(req, att_id):
+    if not CORE.attachments.delete(att_id):
+        return _err("Pièce jointe introuvable.", 404)
+    return _ok({"deleted": att_id})
 
 
 # ---------------------------------------------------------------------------
@@ -1285,6 +1830,75 @@ def api_avatar_viseme(req):
         "index": int(body.get("index") or 0),
     })
     return _ok()
+
+
+# ---------------------------------------------------------------------------
+# Live Browser Preview — session Playwright partagée avec l'agent
+# ---------------------------------------------------------------------------
+@router.get("/api/browser/status")
+def api_browser_status(req):
+    return _ok(CORE.browser.status())
+
+
+@router.get("/api/browser/frame")
+def api_browser_frame(req):
+    """Dernière frame JPEG (fallback de rafraîchissement si le SSE décroche).
+
+    L'appel vaut « aperçu visible » : il maintient le stream de frames actif,
+    exactement comme /api/browser/touch.
+    """
+    snap = CORE.browser.frame_snapshot()
+    if not snap:
+        return _err("aucune frame disponible", 404)
+    return _ok(snap)
+
+
+@router.post("/api/browser/start")
+def api_browser_start(req):
+    url = str(req["body"].get("url") or "https://example.com")
+    CORE.browser.start()
+    out = CORE.browser.action("navigate", {"url": url})
+    CORE.browser.touch()
+    return _ok(out)
+
+
+@router.post("/api/browser/action")
+def api_browser_action(req):
+    """Action navigateur : navigate, click, type, scroll, wait, back, forward…"""
+    op = str(req["body"].get("op") or "navigate")
+    args = dict(req["body"].get("args") or {})
+    if not CORE.browser.available():
+        return _err("playwright n'est pas installé (voir README)", 503)
+    CORE.browser.start()
+    CORE.browser.touch()
+    out = CORE.browser.action(op, args)
+    return _ok(out)
+
+
+@router.post("/api/browser/touch")
+def api_browser_touch(req):
+    """L'aperçu est visible : maintient le stream de frames actif."""
+    CORE.browser.touch()
+    return _ok()
+
+
+@router.post("/api/browser/close")
+def api_browser_close(req):
+    CORE.browser.start()
+    out = CORE.browser.action("close")
+    return _ok(out)
+
+
+@router.post("/api/browser/user-action")
+def api_browser_user_action(req):
+    """L'utilisateur a résolu l'action requise (captcha, login…) : on reprend."""
+    action = str(req["body"].get("action") or "")
+    if action == "pause":
+        message = str(req["body"].get("message") or "Action manuelle requise")
+        return _ok(CORE.browser.request_user(message))
+    if action == "resume":
+        return _ok(CORE.browser.resume())
+    return _err("action inconnue", 400)
 
 
 # ---------------------------------------------------------------------------

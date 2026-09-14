@@ -6,6 +6,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from .report import UpgradeReport
 from .supervisor_client import SupervisorClient
 from .testrunner import TestRunner
 from .workspace import RollbackStorage, UpgradeWorkspaceManager
+from ..validation import CodeValidator
 
 DEFAULT_SUPERVISOR_URL = "http://127.0.0.1:8770"
 DEFAULT_CANDIDATE_PORT = 8791
@@ -154,16 +156,36 @@ class SelfUpgradeService:
         cfg = self.config()
         try:
             self._pipeline(upgrade_id, prompt, mode, cfg, conversation_id)
-        except Exception as exc:
-            self.history.set_status(upgrade_id, "failed", str(exc))
-            self._emit("upgrade.failed", {"upgrade_id": upgrade_id, "error": str(exc)[:400]})
+        except Exception:
+            tb = traceback.format_exc()
+            self.history.set_status(upgrade_id, "failed", tb[:4000])
+            self._emit("upgrade.failed", {"upgrade_id": upgrade_id, "error": tb[:400]})
+            try:
+                Path(ROOT / "state" / f"su-{upgrade_id}.trace").write_text(
+                    f"upgrade_id={upgrade_id}\nprompt={prompt}\nmode={mode}\n\n{tb}",
+                    encoding="utf-8")
+            except Exception:
+                pass
         finally:
             with self._lock:
                 self._active = {}
 
     def _log(self, upgrade_id: str, message: str, level: str = "info") -> None:
         self._emit("upgrade.log", {"upgrade_id": upgrade_id, "message": message, "level": level})
-        print(f"[SELF-UPGRADE][{upgrade_id}] {message}", flush=True)
+        line = f"[SELF-UPGRADE][{upgrade_id}] {message}"
+        # Le stdout peut être un pipe invalide (Supervisor) : on journalise aussi
+        # dans state/self_upgrade.log plutôt que de planter le pipeline.
+        try:
+            print(line, flush=True)
+        except OSError:
+            pass
+        try:
+            state_dir = ROOT / "state"
+            state_dir.mkdir(parents=True, exist_ok=True)
+            with (state_dir / "self_upgrade.log").open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except Exception:
+            pass
 
     def _pipeline(self, upgrade_id: str, prompt: str, mode: str, cfg: dict[str, Any],
                   conversation_id: str) -> None:
@@ -233,6 +255,21 @@ class SelfUpgradeService:
         self._emit("upgrade.building", {"upgrade_id": upgrade_id,
                                         "files_changed": self.history.get(upgrade_id).get("files_changed", [])})
 
+        # Candidate gate: model text is not evidence; validate generated Python
+        # deterministically before the already-existing real TestRunner gate.
+        code_validator = CodeValidator()
+        for filename in files_changed:
+            path = workspace / filename
+            if path.suffix.lower() != ".py" or not path.is_file():
+                continue
+            verdict = code_validator.validate(path.read_text(encoding="utf-8"), {"language": "python"})
+            self._log(upgrade_id, f"validation file={filename} code={verdict.code}")
+            if not verdict.ok:
+                self.history.update(upgrade_id, status="build_failed", completed_at=time.time(),
+                                    error=f"validation_failed:{verdict.code}")
+                self._finish(upgrade_id)
+                return
+
         if mode == "build":
             self.history.update(upgrade_id, status="build_done", completed_at=time.time())
             self._emit("upgrade.completed", {"upgrade_id": upgrade_id, "status": "build_done"})
@@ -241,8 +278,8 @@ class SelfUpgradeService:
 
         # -- candidate + health + vérification fonctionnelle
         self.history.set_status(upgrade_id, "candidate")
-        candidate = self._run_candidate(upgrade_id, workspace, cfg, plan)
-        self._finish_candidate(upgrade_id, candidate)
+        candidate, candidate_runner = self._run_candidate(upgrade_id, workspace, cfg, plan)
+        self._finish_candidate(upgrade_id, candidate, candidate_runner)
         if not candidate.get("ok"):
             raise RuntimeError(candidate.get("error", "candidate en échec"))
 
@@ -285,7 +322,7 @@ class SelfUpgradeService:
         return result
 
     def _run_candidate(self, upgrade_id: str, workspace: Path, cfg: dict[str, Any],
-                       plan: dict[str, Any]) -> dict[str, Any]:
+                       plan: dict[str, Any]) -> tuple[dict[str, Any], CandidateRunner]:
         port = int(cfg.get("candidate_port", DEFAULT_CANDIDATE_PORT))
         verification = (plan.get("verification") or "").strip()
         candidate = CandidateRunner(workspace, python=cfg["python"], port=port,
@@ -293,8 +330,11 @@ class SelfUpgradeService:
         started = candidate.start()
         self.history.update(upgrade_id, candidate_port=port)
         if not started.get("ok"):
-            return {"ok": False, "error": f"candidate injoignable: {started.get('error', '?')}",
-                    "health_status": {"ok": False, "error": started.get("error", "?")}}
+            return ({"ok": False,
+                     "error": f"candidate injoignable: {started.get('error', '?')} "
+                              f"{started.get('candidate_log_tail', '')[-1200:]}",
+                     "health_status": {"ok": False, "error": started.get("error", "?")}},
+                    candidate)
         health = started.get("health", {})
         verification_result = None
         if verification and verification.startswith("/"):
@@ -302,17 +342,20 @@ class SelfUpgradeService:
             health_ok = health.get("ok") and verification_result.get("ok")
         else:
             health_ok = health.get("ok")
-        return {"ok": health_ok, "port": port,
-                "health_status": {"ok": health_ok, "health": health,
-                                  "verification": verification_result,
-                                  "error": "" if health_ok else "verification candidature en échec"}}
+        return ({"ok": health_ok, "port": port,
+                 "health_status": {"ok": health_ok, "health": health,
+                                   "verification": verification_result,
+                                   "error": "" if health_ok else "verification candidature en échec"}},
+                candidate)
 
-    def _finish_candidate(self, upgrade_id: str, candidate: dict[str, Any]) -> None:
+    def _finish_candidate(self, upgrade_id: str, candidate: dict[str, Any],
+                          runner: CandidateRunner) -> None:
         self.history.update(upgrade_id, health_status=candidate.get("health_status", {}))
         self._emit("upgrade.candidate", {"upgrade_id": upgrade_id, "candidate": candidate})
-        port = candidate.get("port")
-        if port:
-            CandidateRunner(ROOT, port=port).stop()
+        try:
+            runner.stop()
+        except Exception:
+            pass
 
     def _poll_install(self, upgrade_id: str) -> dict[str, Any]:
         client = SupervisorClient(self.config().get("supervisor_url", DEFAULT_SUPERVISOR_URL))

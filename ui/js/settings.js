@@ -313,7 +313,27 @@ const Settings = {
     const engineText = live.available
       ? engines.map((e) => e.label || e.id).join(' · ') || 'ComfyUI détecté'
       : 'ComfyUI non disponible';
-    pane.innerHTML = `<div class="card" style="margin-bottom:11px"><div class="card-head"><h2>IMAGE ENGINES</h2><span class="tools">${esc(engineText)}</span></div><div class="card-body">
+    const pipeline = String(i.pipeline_version || 'v2').toLowerCase() === 'v1' ? 'v1' : 'v2';
+    const quality = ['FAST', 'BALANCED', 'QUALITY', 'ULTRA']
+      .includes(String(i.default_quality || '').toUpperCase())
+      ? String(i.default_quality).toUpperCase() : 'BALANCED';
+    pane.innerHTML = `<div class="card" style="margin-bottom:11px"><div class="card-head"><h2>IMAGE ENGINE</h2><span class="tools">${esc(engineText)}</span></div><div class="card-body">
+      ${this.field('Moteur', `<select data-k="pipeline_version">
+        <option value="v2" ${pipeline === 'v2' ? 'selected' : ''}>V2 — Z-Image + hi-res + ESRGAN (recommandé)</option>
+        <option value="v1" ${pipeline === 'v1' ? 'selected' : ''}>Legacy V1 — workflow golden figé</option>
+      </select>`, 'V2 est le moteur de production. Legacy V1 reste disponible en secours ; aucun code V1 n\'a été supprimé.')}
+      ${this.field('Profil par défaut', `<select data-k="default_quality">
+        ${[['FAST', 'FAST — 8 steps, 1024², aperçu'],
+           ['BALANCED', 'BALANCED — 12 steps + ESRGAN ×1,5'],
+           ['QUALITY', 'QUALITY — 12 steps + hi-res 0,25'],
+           ['ULTRA', 'ULTRA — base 1152 + hi-res 0,30 + ESRGAN']]
+          .map(([v, l]) => `<option value="${v}" ${quality === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>`, 'Réglages issus de Quality Validation V2. JARVIS choisit seul selon la demande ; ceci est le défaut quand rien ne tranche.')}
+      <p class="hint">Profils validés par mesure — au-delà de 12 steps la qualité ne progresse plus,
+      le denoise hi-res utile est 0,20–0,30, et le sharpening a été supprimé (halos).</p>
+      <button class="btn primary" data-save>Enregistrer</button>
+    </div></div>
+    <div class="card" style="margin-bottom:11px"><div class="card-head"><h2>LEGACY V1 — SDXL</h2><span class="tools">inactif si moteur = V2</span></div><div class="card-body">
       ${this.field('Mode par défaut', `<select data-k="default_mode">
         ${[['auto','Auto (aperçu → fast, final → SDXL)'],['fast','Fast — prévisualisation Z-Image'],['quality','Quality — rendu final SDXL']].map(([v,l]) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>`, 'Un appel peut forcer engine_mode=fast ou engine_mode=quality.')}

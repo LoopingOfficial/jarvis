@@ -70,6 +70,10 @@ READ_ONLY_ALLOWED_TOOLS = {
     "fs.read", "fs.list", "fs.search", "filesystem.read",
     "security.scan_file", "security.scan_project", "security.dependencies", "security.secrets",
     "security.permissions", "security.headers", "security.report",
+    "google.sheets.read",
+    # Mode « lire/appliquer la page » : naviguer et observer reste en LECTURE.
+    "browser.navigate", "browser.wait", "browser.back", "browser.scroll",
+    "browser.pause", "browser.close",
 }
 
 READ_ONLY_DENIED_TOOLS = {

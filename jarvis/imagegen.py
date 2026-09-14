@@ -278,6 +278,8 @@ class ImageGenManager:
         self.workflow_compiler = ComfyWorkflowCompiler()
         self.quality_checker = ImageQualityChecker(self._vision_quality)
         self.pipeline_build_id = IMAGE_PIPELINE_BUILD_ID
+        from .imagegen_v2 import ImageGenV2
+        self._v2 = ImageGenV2(self)
         try:
             IMAGE_DIR.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -448,6 +450,14 @@ class ImageGenManager:
                 "gpu": snapshot}
 
     # -- backends ----------------------------------------------------------
+    def _v2_enabled(self) -> bool:
+        """V2 is the default; Settings can pin the legacy pipeline."""
+        try:
+            version = str(self._core.settings.get("image", "pipeline_version", "v2"))
+        except Exception:
+            version = "v2"
+        return version.strip().casefold() != "v1"
+
     def backends(self) -> list[dict[str, Any]]:
         """Backends réellement configurés (ou détectés), par ordre de préférence."""
         core = self._core
@@ -666,6 +676,29 @@ class ImageGenManager:
                      "engine_decision": initial_decision.__dict__}, "created_at": time.time(),
         }
         self._save(job)
+
+        # --- V2 pipeline -------------------------------------------------
+        # Routed here unless Settings pins the legacy path.  V1 stays intact
+        # and reachable (pipeline_version = "v1") until V2 is validated in
+        # daily use; a V2 failure is reported, never silently retried on V1.
+        if self._v2_enabled() and any(b.get("kind") == "comfyui" for b in backends):
+            comfy = next(b for b in backends if b.get("kind") == "comfyui")
+            job["backend"] = "comfyui"
+            self._emit("image.generation.started", job)
+            self._set(job, status="running", stage="PREPARING", progress=0.02)
+            try:
+                return self._v2.generate(
+                    job, comfy, request=request, mode=mode,
+                    quality_mode=str((context or {}).get("quality_mode") or ""),
+                    image_type=str((context or {}).get("image_type") or ""),
+                    width=width, height=height, seed=seed,
+                    source_path=source_path, user_negative=negative_prompt)
+            except Exception as exc:
+                job["error"] = str(exc)[:400]
+                self._set(job, status="failed", stage="failed", emit=False)
+                self._emit("image.generation.failed", job)
+                _log(f"IMAGE V2 FAILED: {job['id']} {job['error']}")
+                return self.get(job["id"]) or job
 
         if not backends:
             job["error"] = ("ComfyUI n'est pas disponible pour le pipeline golden "

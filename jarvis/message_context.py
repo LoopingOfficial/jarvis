@@ -19,6 +19,7 @@ from typing import Any
 
 from .goals import has_write_intent
 from .intents import detect_read_only_intent, has_read_only_constraint
+from .google_sheets import SHEET_URL_RE
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +92,7 @@ _DO_NOT_EXECUTE = re.compile(
     r"(?:des|d')outils?)\b|"
     r"\b(?:ne\s+modifie\s+pas\s+(?:le\s+)?syst[èe]me|ne\s+modifie\s+rien\s+(?:au|sur\s+le|le)\s+"
     r"syst[èe]me|ne\s+change\s+rien\s+(?:au|sur\s+le|le)\s+syst[èe]me|"
-    r"ne\s+t'ex[ée]cute\s+pas|n'ex[ée]cute\s+rien)\b",
+    r"ne\s+t'ex[ée]cute\s+pas|n'ex[ée]cute\s+rien|ne\s+fais\s+rien\s+d'autre)\b",
     re.IGNORECASE,
 )
 
@@ -206,6 +207,8 @@ class ResolvedIntent:
     trigger_source: str = ""
     reason: str = ""
     model_role: str = "default"
+    resource_type: str = ""
+    selected_action: str = ""
     segments: MessageSegments = field(default_factory=MessageSegments)
 
     def to_policy_dict(self) -> dict[str, Any]:
@@ -221,6 +224,8 @@ class ResolvedIntent:
             "trigger_source": self.trigger_source,
             "reason": self.reason,
             "model_role": self.model_role,
+            "resource_type": self.resource_type,
+            "selected_action": self.selected_action,
         }
 
 
@@ -246,14 +251,20 @@ class MessageContextParser:
             seg.data_payloads.append("<reponse-attendue>")
 
         # Faut-il interpréter les citations comme des instructions rapportées ?
+        # Les guillemets « » et « … » français sont toujours une citation ; les
+        # simples/doubles ne sont retenus que si le message les encadre comme
+        # scénario (formulation, label, benchmark).
         fragments = [m.group(0) for m in _QUOTED.finditer(work)]
         framed = bool(_FRAMING.search(raw) or _LABELED_SECTION.search(raw)
                       or _BENCHMARK_MODE_LINE.search(raw) or _BENCHMARK_FLAGGED.search(raw))
-        if framed:
-            for fragment in fragments:
-                if _VERB_TOKENS.search(fragment):
-                    seg.quoted_instructions.append(fragment)
-                    work = work.replace(fragment, " ")
+        for fragment in fragments:
+            if not _VERB_TOKENS.search(fragment):
+                continue
+            if not (framed or fragment.startswith("«") or fragment.startswith("“")
+                    or fragment.startswith("»")):
+                continue
+            seg.quoted_instructions.append(fragment)
+            work = work.replace(fragment, " ")
 
         # Paires d'accolades ressemblant à du JSON : des données, pas du code.
         work = _strip_braced_objects(work, seg)
@@ -337,6 +348,10 @@ class IntentClassifier:
                                     "analyse d'un extrait fourni dans le message")
 
         executable = seg.executable_instruction
+        # Une ressource explicite prime sur les heuristiques d'audit.
+        if SHEET_URL_RE.search(raw):
+            return self._real(executable or raw, seg, "google_sheet",
+                              "ressource Google Sheets détectée", resource_type="GOOGLE_SHEET")
         has_target = self._has_concrete_target(executable)
 
         if seg.quoted_instructions and not has_target:
@@ -349,6 +364,12 @@ class IntentClassifier:
         low_exec = executable.casefold()
         framed = bool(_FRAMING.search(raw) or _LABELED_SECTION.search(raw))
         explanation = bool(_EXPLANATION.search(executable))
+        # « Question : analyse ça/ce fichier », « Test : sécurité du fichier »,
+        # « Tu pourrais analyser index.php » : on interroge sur une analyse,
+        # on ne lance pas un audit réel. Terminaux avant tout détecteur.
+        if framed and _AUDIT_SIGNAL.search(executable):
+            return self._model_only(seg, "boxed_question",
+                                    "question encadrée/théorique sur une analyse")
         if explanation and not has_target:
             return self._model_only(seg, "explanation",
                                     "demande d'explication sans cible concrète")
@@ -358,6 +379,16 @@ class IntentClassifier:
 
         # Reste du chemin : vraie demande d'action réelle.
         policy = detect_read_only_intent(executable or raw)
+        # `detect_read_only_intent` remains conservative for the legacy audit
+        # API, but the user-facing classifier must not turn a plain content
+        # analysis into SecurityAudit. Require an explicit security signal or
+        # read-only constraint for that terminal route.
+        if policy.intent == "security_audit_readonly":
+            audit_words = bool(re.search(
+                r"\b(?:s[ée]curit[ée]|security|faille\w*|vuln[ée]rabil\w*|injection|owasp|csrf|xss|audit\w*)\b",
+                executable or raw, re.I))
+            if not audit_words and not has_read_only_constraint(executable or raw):
+                policy = type(policy)("read_only", True, False, policy.explicit_constraint, policy.target)
         return self._real(executable or raw, seg, policy.intent,
                           "détection déterministe des actions")
 
@@ -419,9 +450,10 @@ class IntentClassifier:
             segments=seg,
         )
 
-    def _real(self, executable: str, seg: MessageSegments, mode: str, reason: str) -> ResolvedIntent:
+    def _real(self, executable: str, seg: MessageSegments, mode: str, reason: str,
+              resource_type: str = "") -> ResolvedIntent:
         policy = detect_read_only_intent(executable)
-        if mode in {"security_audit_readonly", "file_edit", "read_only", "general"}:
+        if mode in {"security_audit_readonly", "file_edit", "read_only", "general", "google_sheet"}:
             pass
         elif policy.intent in {"security_audit_readonly", "file_edit", "read_only", "general"}:
             mode = policy.intent
@@ -437,6 +469,8 @@ class IntentClassifier:
             trigger_source="detect_read_only",
             reason=reason,
             model_role="default",
+            resource_type=resource_type,
+            selected_action="google_sheet.read" if resource_type == "GOOGLE_SHEET" else "",
             segments=seg,
         )
 

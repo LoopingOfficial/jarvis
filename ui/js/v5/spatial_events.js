@@ -228,25 +228,40 @@
 
       /* ------------------------------------------------------- tâches */
       const taskTitle=(d)=> d?.title || d?.message || d?.name || '';
-      J.on('task.created',  (d)=>{ this._taskAt=Date.now(); S()?.setTask('run', taskTitle(d)||'Travail en cours', taskLabel(d?.kind,'')); });
+      J.on('task.created',  (d)=>{
+        this._taskAt=Date.now();
+        this._taskName=taskTitle(d);
+        S()?.setTask('run', this._taskName||'Travail en cours', taskLabel(d?.kind,''));
+      });
       J.on('task.started',  (d)=>{
         const lab = taskLabel(d?.kind, '');
         if(lab){ this._lastAgent = lab; S()?.activity('AGENT', lab, 'cy'); }
-        S()?.setTask('run', taskTitle(d)||'Travail en cours', lab);
+        this._taskName=taskTitle(d)||this._taskName;
+        S()?.setTask('run', this._taskName||'Travail en cours', lab);
       });
       J.on('task.progress', (d)=>{
         const msg=d?.message||d?.log?.message||'';
-        S()?.setTask('run', taskTitle(d)||msg||'Travail en cours');
+        // Un événement de progression ne porte pas toujours le nom de la
+        // tâche : on ne l'efface pas pour autant.
+        S()?.setTask('run', taskTitle(d)||this._taskName||msg||'Travail en cours');
         const plan=d?.plan;
-        if(Array.isArray(plan) && plan.length){
-          S()?.setTaskSteps(plan.map(p=>({label:String(p.step||p.name||p).slice(0,16),
-            state:p.done||p.status==='done'?'done':p.status==='run'||p.active?'run':'idle'})));
+        if(Array.isArray(plan)){
+          // Contrat backend (tasks.py) : {key, label, state ∈ idle|run|done|err}.
+          // Les formes héritées (chaîne, {step}/{done}) restent acceptées.
+          S()?.setTaskSteps(plan.map(p=>{
+            if(typeof p==='string') return {label:p.slice(0,22), state:'idle'};
+            const st=p.state || (p.done||p.status==='done' ? 'done'
+              : p.status==='err'||p.status==='failed' ? 'err'
+              : p.status==='run'||p.active ? 'run' : 'idle');
+            return {label:String(p.label||p.step||p.name||p.key||'').slice(0,22), state:st};
+          }).filter(s=>s.label));
         }
       });
       J.on('task.completed',(d)=>{
         const sec=this._taskAt?((Date.now()-this._taskAt)/1000).toFixed(1)+' s':'';
         S()?.setTask('done', taskTitle(d)||'Terminé', sec);
-        S()?.setTaskSteps(null);
+        // La checklist n'est pas effacée ici : setTask la retire avec le
+        // bandeau, pour qu'on puisse lire le bilan des étapes.
         this.flash('SUCCESS',1200);
       });
       J.on('task.failed',   (d)=>{ S()?.setTask('err', taskTitle(d)||'Échec'); B()?.setState('ERROR'); });

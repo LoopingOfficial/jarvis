@@ -85,6 +85,10 @@ class PendingConfirmation:
     reason: str
     arguments: dict[str, Any]
     task_id: str = ""
+    # Formulation orale courte (« Envoyer un e-mail à Pierre. Tu confirmes ? »).
+    # `action` reste la description complète affichée à l'écran : on ne fait
+    # pas lire une charge utile entière ni un chemin de fichier à voix haute.
+    speech: str = ""
     created_at: float = field(default_factory=time.time)
     resolved: bool = False
     approved: bool = False
@@ -131,13 +135,14 @@ class PermissionManager:
     # -- confirmations en attente ------------------------------------------
     def create_pending(
         self, *, tool: str, action: str, risk: str, reason: str,
-        arguments: dict[str, Any], task_id: str = "",
+        arguments: dict[str, Any], task_id: str = "", speech: str = "",
     ) -> PendingConfirmation:
         from .db import new_id
 
         pending = PendingConfirmation(
             id=new_id("cfm"), tool=tool, action=action, risk=risk,
             reason=reason, arguments=arguments, task_id=task_id,
+            speech=speech,
         )
         self._pending[pending.id] = pending
         return pending

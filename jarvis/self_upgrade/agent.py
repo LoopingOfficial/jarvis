@@ -33,6 +33,55 @@ CODING_SYSTEM = (
 )
 
 
+def _parse_tool_calls_text(text: str) -> list[dict[str, Any]]:
+    """Extrait des tool calls quand le modèle les émet en JSON dans le texte (qwen2.5-coder)."""
+    import json as _json
+    if not text:
+        return []
+    try:
+        data = _json.loads(text)
+        if isinstance(data, list):
+            out = []
+            for n, c in enumerate(data):
+                if isinstance(c, dict) and c.get("name"):
+                    args = c.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            args = _json.loads(args)
+                        except Exception:
+                            args = {}
+                    out.append({"id": f"t{n}", "name": c["name"], "arguments": args or {}})
+            return out
+        if isinstance(data, dict) and data.get("name"):
+            args = data.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = _json.loads(args)
+                except Exception:
+                    args = {}
+            return [{"id": "t0", "name": data["name"], "arguments": args or {}}]
+    except Exception:
+        pass
+    out: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip().rstrip(",")
+        if not line or line in ("[", "]", "{", "}"):
+            continue
+        try:
+            obj = _json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and obj.get("name"):
+            args = obj.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = _json.loads(args)
+                except Exception:
+                    args = {}
+            out.append({"id": f"t{len(out)}", "name": obj["name"], "arguments": args or {}})
+    return out
+
+
 class LocalCodeAgent:
     def __init__(self, workspace: Path, project_root: Path, python: str = "python",
                  ollama_url: str = "http://127.0.0.1:11434",
@@ -79,6 +128,12 @@ class LocalCodeAgent:
                                     ok=False, summary=final_banner)
             text = resp.get("text", "")
             calls = resp.get("tool_calls") or []
+            if not calls:
+                parsed = _parse_tool_calls_text(text)
+                if parsed:
+                    # Le modèle a émis ses tool calls en JSON dans le texte : on les exécute.
+                    calls = parsed
+                    text = ""
             if text:
                 messages.append({"role": "assistant", "content": text})
             if not calls:
