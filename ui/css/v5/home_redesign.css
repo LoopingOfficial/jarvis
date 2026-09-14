@@ -200,3 +200,22 @@
 @media (max-width: 980px) {
   .jh.jh-layer { left: 14px; bottom: 84px; }
 }
+
+
+/* ==========================================================================
+   Mode veille du decor : ce que le calque recouvre n'a plus a etre composite.
+   `display:none` libere le compositing GPU ; les boucles, elles, sont coupees
+   par JarvisSpatial.setQuiet().
+   ========================================================================== */
+html.v5-quiet .v5-sky,
+html.v5-quiet #v5Leads,
+html.v5-quiet #v5BrainCanvas,
+html.v5-quiet #v5AvatarCv,
+html.v5-quiet #brainStage { display: none !important; }
+
+/* Un seul flou d'arriere-plan, porte par le calque, au lieu d'un par carte :
+   30 elements en backdrop-filter obligeaient le compositeur a autant de
+   passes de flou par frame. Les cartes gardent leur transparence. */
+.jh.jh-layer { backdrop-filter: blur(18px) saturate(130%); -webkit-backdrop-filter: blur(18px) saturate(130%); }
+.jh .jh-card { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(13, 19, 31, .82); }
+.jh .jh-badge { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(6, 9, 14, .86); }

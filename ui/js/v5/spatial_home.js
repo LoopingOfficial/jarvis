@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_4';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_7';
 
 const AVATAR_URL = '/assets/avatar/cartoon_boy.glb';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
@@ -271,6 +271,10 @@ const Home = {
   async enter() {
     this.mount();
     if (this.host) this.host.style.display = '';
+    // Le calque recouvre tout le décor du shell : le laisser peindre ses
+    // étoiles, ses traînées, le cerveau et l'ancien avatar coûtait 4,8 Mpx par
+    // frame pour des pixels que personne ne voit.
+    window.JarvisSpatial?.setQuiet?.(true);
     // Les données d'abord, l'avatar ensuite et EN PARALLÈLE : attendre le
     // chargement du GLB (4,6 Mo, plusieurs secondes) laissait les jauges et les
     // agents à « — » pendant tout ce temps. Un asset 3D ne doit jamais retarder
@@ -282,6 +286,7 @@ const Home = {
   },
 
   leave() {
+    window.JarvisSpatial?.setQuiet?.(false);
     clearInterval(this.timer);
     this.timer = null;
     this.viewer?.pause();          // pas de boucle rAF orpheline hors de l'accueil

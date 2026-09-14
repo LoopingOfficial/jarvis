@@ -979,6 +979,10 @@
         requestAnimationFrame(loop);
         const dt=clamp((now-last)/1000,0,.1); last=now;
         if(document.hidden) return;
+        // `quiet` : une vue plein cadre (l'accueil refondu) recouvre entierement
+        // le decor du shell. Continuer a peindre 4,8 Mpx d'etoiles et de
+        // trainees invisibles coutait l'essentiel du budget de frame.
+        if(this.quiet) return;
         this.mx=lerp(this.mx,this.tx,1-Math.pow(.004,dt));
         this.my=lerp(this.my,this.ty,1-Math.pow(.004,dt));
         this.applyLayout(dt);
@@ -986,6 +990,26 @@
         this.drawWave(now/1000);
       };
       requestAnimationFrame(loop);
+    },
+
+    /** Met en veille le decor du shell (etoiles, trainees, cerveau, avatar).
+     *  Reversible : setQuiet(false) relance tout tel quel. */
+    setQuiet(on){
+      const quiet = !!on;
+      if(this.quiet === quiet) return quiet;
+      this.quiet = quiet;
+      document.documentElement.classList.toggle('v5-quiet', quiet);
+      try{
+        const brain = window.ObsidianBrain;
+        if(brain){ quiet ? brain.stop?.() : brain.start?.(); }
+      }catch(_){}
+      try{
+        // L'avatar du shell expose `rendering` : « hors ecran, on ne simule ni
+        // ne rend ». On s'en sert plutot que de le detruire.
+        const av = this._avatar || window.JarvisAvatarInstance;
+        if(av && 'rendering' in av) av.rendering = !quiet;
+      }catch(_){}
+      return quiet;
     },
   };
 
