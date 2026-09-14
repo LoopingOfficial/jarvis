@@ -498,9 +498,33 @@ goto(page, options = {}) {
     const actions = document.createElement('div');
     actions.className = 'actions';
     actions.innerHTML = `<button class="btn sm primary" data-open-workspace>${icon('eye', 11)} Ouvrir l'Analysis Workspace</button>`;
-    actions.querySelector('button').onclick = () => window.AnalysisWorkspace?.open(payload);
+    // Le bouton reste le filet de securite : meme si l'ouverture automatique
+    // echoue, le resultat de l'analyse n'est jamais perdu.
+    actions.querySelector('button').onclick = () => this.openWorkspaceSafely(payload);
     el?.appendChild(actions);
-    window.AnalysisWorkspace?.open(payload);
+    this.openWorkspaceSafely(payload, el);
+  },
+
+  /* Ouverture du Workspace : une exception ici ne doit jamais faire disparaitre
+     l'analyse en silence. On trace, et le message porte de quoi la rouvrir. */
+  openWorkspaceSafely(payload, el) {
+    const AW = window.AnalysisWorkspace;
+    try {
+      if (!AW || typeof AW.open !== 'function') throw new Error('AnalysisWorkspace indisponible');
+      AW.open(payload);
+      if (!AW.isOpen?.()) throw new Error('Workspace monte mais non visible');
+      console.debug('[SHEET-UI] workspace_rendered', payload?.intent, (payload?.sections || []).length);
+      return true;
+    } catch (error) {
+      console.error('[SHEET-UI] workspace_render_failed', error);
+      if (el) {
+        const note = document.createElement('div');
+        note.className = 'actions';
+        note.textContent = 'Analyse terminee — ouvrir le Workspace';
+        el.appendChild(note);
+      }
+      return false;
+    }
   },
 
   async send(text) {
