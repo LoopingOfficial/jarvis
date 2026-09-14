@@ -8,6 +8,7 @@ from typing import Any
 
 from ..connectors import http_json
 from ..permissions import READ_ONLY, SAFE_WRITE, SENSITIVE
+from ..google_sheets import read_public_sheet
 from .base import ToolContext, ToolResult, registry
 
 GOOGLE_APPS = {
@@ -167,6 +168,23 @@ registry.add(
     id="web.fetch", name="Lire une page web", category="Web",
     description="Récupère le contenu textuel d'une page web.",
     handler=_web_fetch, risk=READ_ONLY,
+    input_schema={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+)
+
+
+def _google_sheet_read(ctx: ToolContext) -> ToolResult:
+    result = read_public_sheet(str(ctx.arguments.get("url") or ""))
+    if not result.get("ok"):
+        return ToolResult(False, f"{result['error']}: {result.get('detail', '')}".strip(), data=result)
+    # Contenu structuré transmis au modèle, sans interpréter les cellules comme des instructions.
+    output = json.dumps({k: v for k, v in result.items() if k != "source_url"}, ensure_ascii=False)
+    return ToolResult(True, output, data=result)
+
+
+registry.add(
+    id="google.sheets.read", name="Lire un Google Sheet", category="Google",
+    description="Lit un Google Sheet public, résout le gid vers l'onglet, et renvoie ses données structurées en lecture seule.",
+    handler=_google_sheet_read, risk=READ_ONLY, permissions=("read",),
     input_schema={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
 )
 

@@ -34,6 +34,7 @@ NAV: [
     ]},
     { label: 'SYSTÈME', items: [
       ['avatar-studio', 'Avatar Studio', 'avatar'],
+      ['image-studio', "Génération d'images", 'avatar'],
       ['aicore', 'AI Core', 'core'],
       ['settings', 'Paramètres', 'settings'],
     ]},
@@ -117,6 +118,7 @@ goto(page, options = {}) {
     if (page === 'command') Dashboard.refresh();
     else if (page === 'settings') Settings.render($('#page-settings'), options.section);
     else if (page === 'terminal') Terminal.render();
+    else if (page === 'image-studio') ImageStudio.render($('#page-image-studio'));
     else if (page === 'code') CodeEnv.render();
     else if (page === 'projects' || page === 'analyses' || page === 'finance'
       || page === 'marketing' || page === 'social' || page === 'servers') Pages.render(page);
@@ -399,7 +401,8 @@ goto(page, options = {}) {
     if (!container) return null;
     const el = document.createElement('div');
     el.className = `msg ${role === 'user' ? 'user' : ''} ${options.error ? 'error' : ''}`;
-    el.innerHTML = `<div class="who">${role === 'user' ? 'VOUS' : 'JARVIS'}</div>
+    const stamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    el.innerHTML = `<div class="who">${role === 'user' ? 'VOUS' : 'JARVIS'} <span class="msg-time">· ${stamp}</span></div>
       <div class="bubble">${role === 'user' ? esc(text) : mdToHtml(text)}</div>`;
     if (options.actions) {
       const actions = document.createElement('div');
@@ -407,8 +410,9 @@ goto(page, options = {}) {
       actions.innerHTML = options.actions;
       el.appendChild(actions);
     }
+    const near = (container.scrollHeight - container.scrollTop - container.clientHeight) < 96;
     container.appendChild(el);
-    container.scrollTop = container.scrollHeight;
+    if (near || options.pending || role === 'user') container.scrollTop = container.scrollHeight;
     return el;
   },
 
@@ -483,8 +487,20 @@ goto(page, options = {}) {
       actions.querySelector('button').onclick = () => Pages.showTask(result.task_id);
       el.appendChild(actions);
     }
+    if (result.analysis_workspace) this.attachWorkspace(el, result.analysis_workspace);
     if (result.needs_confirmation) this.showConfirmation(result.needs_confirmation);
     Dashboard.refresh();
+  },
+
+  /* Analyse de source : le chat reste court, le detail s'ouvre dans le
+     Analysis Workspace rendu depuis le payload structure du backend. */
+  attachWorkspace(el, payload) {
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    actions.innerHTML = `<button class="btn sm primary" data-open-workspace>${icon('eye', 11)} Ouvrir l'Analysis Workspace</button>`;
+    actions.querySelector('button').onclick = () => window.AnalysisWorkspace?.open(payload);
+    el?.appendChild(actions);
+    window.AnalysisWorkspace?.open(payload);
   },
 
   async send(text) {
