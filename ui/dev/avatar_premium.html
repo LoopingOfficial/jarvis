@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>JARVIS · Avatar Premium</title>
+<script type="importmap">
+{ "imports": { "three": "../vendor/three.module.js", "three/addons/": "../vendor/" } }
+</script>
+<style>
+:root{--bg:#050811;--cyan:#22d3ee;--ink:#dbeafe;--dim:#7c93b5;--faint:#4d617d;
+  --mono:"JetBrains Mono","Fira Code",ui-monospace,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:
+  radial-gradient(120% 90% at 50% 0%,rgba(34,211,238,.07),transparent 60%),
+  radial-gradient(80% 60% at 50% 110%,rgba(59,130,246,.09),transparent 60%),
+  linear-gradient(transparent 95%,rgba(34,211,238,.045) 95%) 0 0/100% 34px,
+  linear-gradient(90deg,transparent 95%,rgba(34,211,238,.045) 95%) 0 0/34px 100%,
+  var(--bg);
+  color:var(--ink);font-family:var(--mono);font-size:12px;overflow:hidden}
+#stage{position:fixed;inset:0}
+.hud{position:fixed;pointer-events:none;font-size:10px;letter-spacing:.18em;color:var(--dim)}
+#top{top:14px;left:16px;right:16px;display:flex;align-items:center;gap:14px;text-transform:uppercase}
+#top b{color:#eaf6ff;letter-spacing:.3em;font-size:12px}
+.chip{border:1px solid rgba(34,211,238,.2);border-radius:999px;padding:3px 9px;
+  background:rgba(8,14,26,.6);backdrop-filter:blur(10px)}
+#panel{position:fixed;right:16px;top:52px;width:236px;pointer-events:auto;
+  background:rgba(8,14,26,.66);border:1px solid rgba(34,211,238,.16);border-radius:12px;
+  backdrop-filter:blur(14px);padding:12px}
+#panel h2{margin:0 0 9px;font-size:9px;letter-spacing:.22em;color:var(--faint);text-transform:uppercase}
+label{display:block;font-size:9px;letter-spacing:.14em;color:var(--faint);margin:9px 0 3px;text-transform:uppercase}
+input[type=range]{width:100%;accent-color:var(--cyan)}
+.row{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);padding:2px 0}
+.row b{color:var(--ink);font-weight:400}
+button{font:inherit;font-size:9.5px;letter-spacing:.1em;padding:4px 9px;border-radius:7px;cursor:pointer;
+  background:rgba(34,211,238,.07);border:1px solid rgba(34,211,238,.25);color:var(--dim);margin:3px 3px 0 0}
+button:hover{color:#eaf6ff;border-color:var(--cyan)}
+#boot{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:5;
+  letter-spacing:.3em;color:var(--cyan);font-size:11px;transition:opacity .6s}
+#boot.gone{opacity:0;pointer-events:none}
+#err{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:620px;z-index:6;
+  display:none;background:rgba(251,113,133,.08);border:1px solid rgba(251,113,133,.35);
+  border-radius:12px;padding:16px;color:#fb7185;line-height:1.7;letter-spacing:.02em}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div class="hud" id="top">
+  <b>AVATAR</b>
+  <span class="chip" id="cModel">chargement…</span>
+  <span class="chip" id="cFps">— fps</span>
+  <span class="chip" id="cSize">—</span>
+</div>
+
+<div id="panel">
+  <h2>Rendu</h2>
+  <div class="row"><span>Hauteur</span><b id="mH">—</b></div>
+  <div class="row"><span>Centre (x,z)</span><b id="mC">—</b></div>
+  <div class="row"><span>Triangles</span><b id="mT">—</b></div>
+  <div class="row"><span>Animation</span><b id="mA">—</b></div>
+  <label>Bloom — intensité <span id="vS">0.55</span></label>
+  <input type="range" id="rS" min="0" max="2" step="0.05" value="0.55" />
+  <label>Bloom — seuil <span id="vT">0.85</span></label>
+  <input type="range" id="rT" min="0" max="1" step="0.01" value="0.85" />
+  <label>Bloom — rayon <span id="vR">0.5</span></label>
+  <input type="range" id="rR" min="0" max="1.5" step="0.05" value="0.5" />
+  <div style="margin-top:10px">
+    <button id="bRot">Rotation auto</button>
+    <button id="bFit">Recadrer</button>
+    <button id="bDispose">Détruire</button>
+  </div>
+</div>
+
+<div id="boot">CHARGEMENT DE L'AVATAR…</div>
+<div id="err"></div>
+
+<script type="module">
+import { createAvatarViewer } from '../js/avatar/premium_viewer.js';
+
+const $ = (s) => document.querySelector(s);
+const fmt = (n) => (Math.round(n * 100) / 100).toFixed(2);
+
+try {
+  // ?model=<nom.glb> pour comparer plusieurs modèles sans toucher au code.
+  const wanted = new URLSearchParams(location.search).get('model') || 'jarvis_v2_3_high.glb';
+  const url = wanted.startsWith('/') ? wanted : `/assets/avatar/${wanted}`;
+  const viewer = await createAvatarViewer({ host: $('#stage'), url, autoRotate: false });
+  window.__viewer = viewer;                        // inspection depuis la console
+
+  const f = viewer.framing;
+  $('#mH').textContent = fmt(f.height) + ' m';
+  $('#mC').textContent = `${fmt(f.center.x)}, ${fmt(f.center.z)}`;
+  let tris = 0;
+  viewer.model.traverse((n) => { if (n.isMesh && n.geometry?.index) tris += n.geometry.index.count / 3; });
+  $('#mT').textContent = tris.toLocaleString('fr-FR');
+  $('#mA').textContent = viewer.action ? `${viewer.action.getClip().tracks.length} canaux` : 'aucune';
+  $('#cModel').textContent = url.split('/').pop();
+  $('#boot').classList.add('gone');
+
+  setInterval(() => {
+    $('#cFps').textContent = viewer.fps + ' fps';
+    const c = viewer.renderer.domElement;
+    $('#cSize').textContent = `${c.width}×${c.height}`;
+  }, 500);
+
+  const bind = (range, label, key) => $(range).addEventListener('input', (e) => {
+    const v = Number(e.target.value);
+    $(label).textContent = v;
+    viewer.setBloom({ [key]: v });
+  });
+  bind('#rS', '#vS', 'strength');
+  bind('#rT', '#vT', 'threshold');
+  bind('#rR', '#vR', 'radius');
+
+  let rot = false;
+  $('#bRot').addEventListener('click', () => { rot = !rot; viewer.setAutoRotate(rot); });
+  $('#bFit').addEventListener('click', () => viewer.recenter());
+  $('#bDispose').addEventListener('click', () => {
+    viewer.dispose();
+    $('#boot').textContent = 'VIEWER DÉTRUIT — MÉMOIRE LIBÉRÉE';
+    $('#boot').classList.remove('gone');
+  });
+} catch (error) {
+  $('#boot').classList.add('gone');
+  $('#err').style.display = 'block';
+  $('#err').innerHTML = `<b>Chargement impossible</b><br>${String(error && error.message || error)}`;
+  console.error(error);
+}
+</script>
+</body>
+</html>
