@@ -103,6 +103,13 @@ try {
     $('#cFps').textContent = viewer.fps + ' fps';
     const c = viewer.renderer.domElement;
     $('#cSize').textContent = `${c.width}×${c.height}`;
+    // Le cadrage se stabilise sur quelques frames : on relit la mesure plutôt
+    // que d'afficher éternellement celle du chargement.
+    const cur = viewer.framing;
+    if (cur) {
+      $('#mH').textContent = fmt(cur.height) + ' m';
+      $('#mC').textContent = `${fmt(cur.center.x)}, ${fmt(cur.center.z)}`;
+    }
   }, 500);
 
   const bind = (range, label, key) => $(range).addEventListener('input', (e) => {
