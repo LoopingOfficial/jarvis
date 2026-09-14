@@ -55,7 +55,7 @@ from .self_upgrade.service import SelfUpgradeService  # noqa: E402
 # Enregistre les outils intégrés (import = enregistrement dans le registre).
 from .tools import (avatar_engine_tools, avatar_tools, avatar_update_tools,  # noqa: F401,E402
                     blender_tools, browser_tools,
-                    crm_tools, pdf_tools, transcript_tools,
+                    crm_tools, discord_tools, pdf_tools, transcript_tools,
                     image_tools,
                     file_analysis_tools,  # noqa: F401,E402
                     jarvis_tools,
