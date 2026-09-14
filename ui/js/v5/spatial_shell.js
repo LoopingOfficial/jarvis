@@ -680,11 +680,17 @@
     _dev(){
       try{ return localStorage.getItem('JARVIS_DEV')==='1'; }catch(_){ return false; }
     },
+    /* Marqueurs de prompt interne : ces textes sont destines au modele
+       (contenu du classeur, politique de sources, consignes de grounding) et ne
+       doivent JAMAIS atteindre le bandeau. Le backend les filtre deja a
+       l'emission ; ce garde-fou couvre tout autre emetteur. */
+    INTERNAL_MARKERS: /CONTENU STRUCTUR|SOURCE_POLICY|ANALYSE_DETERMINISTE|DETERMINISTIC_WORKBOOK|PERIMETRE_OBLIGATOIRE|FORMAT_REPONSE_ANALYSE|DEMANDE DE L'UTILISATEUR|VALIDATION_FAILED|FAITS_VERIFIES|PASSAGE_A_CORRIGER|VALEURS_REFUSEES/i,
     _publicTitle(raw){
       const s=String(raw||'').trim();
       if(!s) return '';
       if(!this._dev() && /^(task_|agt_|agent_)?[a-f0-9-]{8,}$/i.test(s.replace(/\s/g,''))) return '';
       if(!this._dev() && /^task_/i.test(s)) return '';
+      if(this.INTERNAL_MARKERS.test(s)) return 'Analyse des donnees';
       return s.slice(0,72);
     },
 

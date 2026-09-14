@@ -29,10 +29,13 @@ const DEFAULTS = {
   // évite la contre-plongée disgracieuse d'une caméra centrée sur le nombril.
   fitMargin: 1.25,
   lookAtRatio: 0.62,
-  bloom: { strength: 0.55, radius: 0.5, threshold: 0.85 },
+  // Seuil haut volontairement : à 0.85 un vêtement blanc passe au-dessus et
+  // le personnage entier se met à rayonner. Le bloom doit souligner les accents
+  // néon de la scène, pas repeindre le sujet.
+  bloom: { strength: 0.38, radius: 0.55, threshold: 0.92 },
   accent: 0x22d3ee,        // cyan JARVIS
   rim: 0x3b82f6,           // bleu froid pour le contre-jour
-  exposure: 1.05,
+  exposure: 0.95,
   shadows: true,
   autoRotate: false,
   platform: true,
@@ -213,7 +216,12 @@ export async function createAvatarViewer(options = {}) {
     // Un FBX importé se fragmente en un clip par chaîne d'os : ici 19 clips,
     // dont 18 ne portent que 3 canaux sur des os terminaux. Le vrai mouvement
     // est celui qui pilote le plus de canaux — on ne prend donc pas [0].
-    clip = gltf.animations.reduce((best, c) => (c.tracks.length > best.tracks.length ? c : best));
+    // Une T-pose ou une A-pose est une pose de RÉFÉRENCE, pas une animation :
+    // l'afficher donne un mannequin bras en croix. On l'écarte s'il existe
+    // autre chose, puis on prend le clip qui pilote le plus de canaux.
+    const usable = gltf.animations.filter((c) => !/t[-_ ]?pose|a[-_ ]?pose|bind/i.test(c.name || ''));
+    const pool = usable.length ? usable : gltf.animations;
+    clip = pool.reduce((best, c) => (c.tracks.length > best.tracks.length ? c : best));
 
     // Pistes d'échelle : à retirer sur ce type de rig.
     //
