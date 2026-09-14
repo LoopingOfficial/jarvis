@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>JARVIS_SPATIAL_OS_V5_CONCEPT — HOME</title>
+<style>
+/* ==========================================================================
+   JARVIS_SPATIAL_OS_V5_CONCEPT — maquette HOME isolée.
+   Aucune dépendance, aucune API : les valeurs affichées sont des MOCKS
+   destinés à juger la composition, la profondeur et la mise en scène.
+   ========================================================================== */
+:root{
+  --void:#01050a;
+  --deep:#030c16;
+  --ink:#f2fbff;
+  --mute:#7d94a8;
+  --faint:#42586b;
+  --cy:#38dfff;
+  --ice:#9df4ff;
+  --amber:#ffb057;
+  --violet:#9b8cff;
+  --ok:#3df0a6;
+  --err:#ff5b6e;
+  --mono:'JetBrains Mono','Cascadia Mono',ui-monospace,SFMono-Regular,monospace;
+  --sans:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--void);color:var(--ink);font-family:var(--sans);overflow:hidden}
+body{-webkit-font-smoothing:antialiased}
+
+/* ---------------------------------------------------------------- SCÈNE */
+.scene{position:fixed;inset:0;perspective:1400px;overflow:hidden}
+
+/* plan 0 : ciel profond */
+.sky{position:absolute;inset:-8%;
+  background:
+    radial-gradient(58% 46% at 50% 44%, rgba(20,86,140,.30), transparent 62%),
+    radial-gradient(40% 34% at 78% 78%, rgba(120,92,255,.13), transparent 70%),
+    radial-gradient(46% 40% at 14% 16%, rgba(0,120,160,.12), transparent 70%),
+    linear-gradient(180deg,#01060c 0%, #030d17 46%, #01060c 100%);
+  will-change:transform}
+#stars{position:absolute;inset:0;width:100%;height:100%}
+
+/* plan 1 : sol en perspective */
+.floor{position:absolute;left:50%;bottom:-6vh;width:260vw;height:62vh;translate:-50% 0;
+  transform:rotateX(74deg);transform-origin:50% 100%;
+  background:
+    repeating-linear-gradient(90deg, rgba(70,205,245,.26) 0 1px, transparent 1px 86px),
+    repeating-linear-gradient(0deg, rgba(70,205,245,.17) 0 1px, transparent 1px 86px);
+  -webkit-mask-image:radial-gradient(56% 78% at 50% 96%, #000 0%, transparent 78%);
+  mask-image:radial-gradient(56% 78% at 50% 96%, #000 0%, transparent 78%);
+  opacity:.75;will-change:transform}
+
+/* plan 4 : atmosphère / vignette / grain */
+.atmos{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(78% 62% at 50% 46%, transparent 38%, rgba(1,5,10,.82) 100%)}
+.noise{position:absolute;inset:0;pointer-events:none;opacity:.16;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+
+/* --------------------------------------------------------------- HUD haut */
+.hud{position:fixed;top:0;left:0;right:0;height:38px;z-index:40;
+  display:flex;align-items:center;gap:26px;padding:0 20px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.1em;color:var(--mute)}
+.hud-id{display:flex;align-items:center;gap:8px;color:var(--ink);letter-spacing:.34em;font-size:10px}
+.hud-id i{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 9px var(--ok);
+  animation:pulseDot 3.2s ease-in-out infinite}
+@keyframes pulseDot{0%,100%{opacity:.45}50%{opacity:1}}
+.hud-sys{display:flex;align-items:center;gap:18px;background:none;border:0;color:inherit;
+  font:inherit;letter-spacing:.1em;cursor:pointer;padding:6px 10px;border-radius:8px;transition:background .18s,color .18s}
+.hud-sys:hover{background:rgba(56,223,255,.07);color:var(--ice)}
+.hud-sys b{color:var(--ink);font-weight:500}
+.hud-spacer{flex:1}
+.hud-time{font-variant-numeric:tabular-nums;color:var(--ink);letter-spacing:.14em}
+
+/* ------------------------------------------------------------ NAV (rail) */
+.rail{position:fixed;left:14px;top:50%;translate:0 -50%;z-index:40;
+  display:flex;flex-direction:column;gap:2px;padding:8px 6px;border-radius:999px;
+  background:rgba(4,16,26,.4);backdrop-filter:blur(9px);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.07)}
+.rail button{position:relative;width:38px;height:38px;display:grid;place-items:center;
+  border:0;border-radius:50%;background:none;color:var(--faint);cursor:pointer;transition:color .18s,background .18s}
+.rail button svg{width:17px;height:17px}
+.rail button:hover{color:var(--ice);background:rgba(56,223,255,.08)}
+.rail button.on{color:var(--cy)}
+.rail button.on::before{content:'';position:absolute;left:-6px;top:50%;translate:0 -50%;
+  width:2px;height:16px;border-radius:2px;background:var(--cy);box-shadow:0 0 8px var(--cy)}
+.rail button::after{content:attr(data-label);position:absolute;left:46px;white-space:nowrap;
+  font-family:var(--mono);font-size:9px;letter-spacing:.18em;color:var(--ice);
+  padding:5px 9px;border-radius:6px;background:rgba(3,14,24,.9);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.12);
+  opacity:0;translate:-6px 0;pointer-events:none;transition:opacity .16s,translate .16s}
+.rail button:hover::after{opacity:1;translate:0 0}
+
+/* ------------------------------------------------------------------ CORE */
+.stage{position:absolute;inset:0;display:grid;place-items:center;z-index:20}
+.core-rig{position:relative;width:min(46vw,46vh,440px);aspect-ratio:1;will-change:transform}
+#core{position:absolute;inset:-40%;width:180%;height:180%}
+
+/* satellites d'information en orbite */
+.sat{position:absolute;z-index:25;display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--mute);
+  white-space:nowrap;opacity:0;animation:satIn .8s ease forwards;pointer-events:none}
+.sat b{color:var(--ink);font-weight:500}
+.sat i{width:4px;height:4px;border-radius:50%;background:var(--cy);box-shadow:0 0 7px var(--cy)}
+.sat.amber i{background:var(--amber);box-shadow:0 0 7px var(--amber)}
+.sat.ok i{background:var(--ok);box-shadow:0 0 7px var(--ok)}
+@keyframes satIn{to{opacity:1}}
+
+/* salutation */
+.greet{position:absolute;z-index:26;left:50%;translate:-50% 0;text-align:center;pointer-events:none}
+.greet h1{margin:0;font-size:clamp(26px,3vw,40px);font-weight:200;letter-spacing:-.015em;
+  color:var(--ink);text-shadow:0 0 40px rgba(56,223,255,.22)}
+.greet h1 span{font-weight:400}
+.greet p{margin:9px 0 0;font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--mute)}
+.greet .state{margin-top:16px;display:inline-flex;align-items:center;gap:9px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.26em;color:var(--cy)}
+.greet .state s{width:26px;height:1px;background:linear-gradient(90deg,transparent,var(--cy));text-decoration:none}
+
+/* ---------------------------------------------------- modules contextuels */
+.mods{position:fixed;right:18px;top:50%;translate:0 -50%;z-index:35;
+  display:flex;flex-direction:column;gap:8px;width:262px;pointer-events:none}
+.mod{pointer-events:auto;padding:12px 14px;border-radius:12px;
+  background:linear-gradient(180deg,rgba(8,26,40,.62),rgba(3,12,20,.5));
+  backdrop-filter:blur(12px);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.09), 0 24px 60px -30px rgba(0,0,0,.9);
+  opacity:0;translate:18px 0;filter:blur(6px);
+  animation:modIn .5s cubic-bezier(.16,.9,.3,1) forwards}
+.mod.out{animation:modOut .34s ease forwards}
+@keyframes modIn{to{opacity:1;translate:0 0;filter:blur(0)}}
+@keyframes modOut{to{opacity:0;translate:14px 0;filter:blur(5px)}}
+.mod h4{margin:0 0 8px;font-family:var(--mono);font-size:9px;letter-spacing:.22em;
+  color:var(--mute);font-weight:500;display:flex;align-items:center;gap:7px}
+.mod h4 i{width:4px;height:4px;border-radius:50%;background:var(--cy);box-shadow:0 0 7px var(--cy)}
+.mod .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  padding:5px 0;font-size:11.5px;color:var(--mute)}
+.mod .row b{color:var(--ink);font-weight:400;font-family:var(--mono);font-size:11px}
+.mod .row + .row{box-shadow:inset 0 1px 0 rgba(120,200,230,.06)}
+
+/* carte outil éphémère près du core */
+.toolcard{position:fixed;z-index:30;left:50%;translate:-50% 0;
+  padding:10px 14px;border-radius:11px;font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+  background:linear-gradient(180deg,rgba(10,30,44,.8),rgba(4,14,22,.7));backdrop-filter:blur(10px);
+  box-shadow:inset 0 0 0 1px rgba(56,223,255,.2), 0 0 36px -12px rgba(56,223,255,.5);
+  animation:toolIn .42s cubic-bezier(.16,.9,.3,1)}
+.toolcard.out{animation:toolOut .32s ease forwards}
+@keyframes toolIn{from{opacity:0;translate:-50% 14px;filter:blur(6px)}}
+@keyframes toolOut{to{opacity:0;translate:-50% -10px;filter:blur(6px)}}
+.toolcard .t{color:var(--cy);letter-spacing:.2em;font-size:9px}
+.toolcard .d{color:var(--ink);margin-top:4px;letter-spacing:.04em}
+
+/* --------------------------------------------------------- COMMAND BAR */
+.cmd{position:fixed;left:50%;bottom:34px;translate:-50% 0;z-index:45;
+  width:clamp(420px,62vw,860px);
+  display:flex;align-items:center;gap:12px;padding:9px 10px 9px 14px;border-radius:999px;
+  background:linear-gradient(180deg,rgba(9,27,41,.66),rgba(3,12,20,.72));
+  backdrop-filter:blur(16px);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.12), 0 30px 70px -34px rgba(0,0,0,.95);
+  transition:width .5s cubic-bezier(.16,.9,.3,1), box-shadow .3s, transform .4s}
+.cmd.focus{box-shadow:inset 0 0 0 1px rgba(56,223,255,.4), 0 0 44px -14px rgba(56,223,255,.55), 0 30px 70px -34px rgba(0,0,0,.95)}
+.cmd.mini{width:clamp(320px,40vw,520px);transform:translateY(6px) scale(.97)}
+.cmd .mic{width:34px;height:34px;flex:0 0 auto;border-radius:50%;border:0;cursor:pointer;
+  display:grid;place-items:center;color:var(--ice);background:rgba(56,223,255,.09);transition:.2s}
+.cmd .mic:hover{background:rgba(56,223,255,.18)}
+.cmd .mic.live{color:#03141c;background:var(--cy);box-shadow:0 0 22px rgba(56,223,255,.6)}
+.cmd .mic svg{width:16px;height:16px}
+.cmd input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--ink);
+  font-family:var(--sans);font-size:14px;letter-spacing:.01em;padding:6px 0}
+.cmd input::placeholder{color:#4d6478}
+#wave{flex:1;height:30px;display:none}
+.cmd.listening input{display:none}
+.cmd.listening #wave{display:block}
+.cmd .send{width:34px;height:34px;flex:0 0 auto;border-radius:50%;border:0;cursor:pointer;
+  display:grid;place-items:center;color:#02141c;background:linear-gradient(180deg,var(--ice),var(--cy));
+  box-shadow:0 0 20px -4px rgba(56,223,255,.7)}
+.cmd .send svg{width:15px;height:15px}
+.cmd .hint{font-family:var(--mono);font-size:9px;letter-spacing:.18em;color:var(--faint);padding-right:4px}
+
+/* ------------------------------------------------------- démo des états */
+.demo{position:fixed;left:70px;bottom:10px;z-index:46;display:flex;flex-wrap:wrap;max-width:300px;gap:3px;
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;opacity:.34;transition:opacity .25s}
+.demo:hover{opacity:1}
+.demo button{border:0;background:none;color:var(--faint);cursor:pointer;padding:4px 7px;border-radius:5px;
+  font:inherit;letter-spacing:.16em}
+.demo button:hover{color:var(--ice);background:rgba(56,223,255,.08)}
+.demo button.on{color:var(--cy)}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important}
+  .floor,.noise{display:none}
+}
+@media (max-width:820px){
+  .mods{display:none}
+  .rail{left:50%;top:auto;bottom:96px;translate:-50% 0;flex-direction:row}
+  .rail button::after{display:none}
+  .cmd{width:calc(100vw - 28px);bottom:26px}
+  .core-rig{width:64vw}
+}
+</style>
+</head>
+<body>
+
+<div class="scene" id="scene">
+  <div class="sky" data-depth="2"><canvas id="stars"></canvas></div>
+  <div class="floor" data-depth="6"></div>
+
+  <div class="stage">
+    <div class="core-rig" id="coreRig" data-depth="14">
+      <canvas id="core"></canvas>
+    </div>
+  </div>
+
+  <div class="atmos"></div>
+  <div class="noise"></div>
+</div>
+
+<!-- ------------------------------------------------------------ HUD ---- -->
+<header class="hud">
+  <div class="hud-id"><i></i>JARVIS</div>
+  <button class="hud-sys" id="hudSys" title="Ouvrir System Diagnostics">
+    <span>CPU <b>38%</b></span><span>RAM <b>63%</b></span><span>GPU <b>14%</b></span><span><b>95</b> TOOLS</span>
+  </button>
+  <div class="hud-spacer"></div>
+  <div class="hud-time" id="clock">--:--:--</div>
+</header>
+
+<!-- ------------------------------------------------------------ RAIL --- -->
+<nav class="rail" id="rail"></nav>
+
+<!-- -------------------------------------------------- SALUTATION + SATS - -->
+<div class="greet" id="greet">
+  <h1>Bonsoir, <span>Jérôme</span>.</h1>
+  <p>Tous les systèmes sont opérationnels</p>
+  <div class="state"><s></s><span id="stateLabel">IDLE</span><s style="transform:scaleX(-1)"></s></div>
+</div>
+
+<div id="sats"></div>
+<div id="mods" class="mods"></div>
+<div id="tools"></div>
+
+<!-- ----------------------------------------------------- COMMAND BAR --- -->
+<div class="cmd" id="cmd">
+  <button class="mic" id="mic" title="Parler">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+      <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M19 11v1a7 7 0 0 1-14 0v-1"/><path d="M12 19v2"/></svg>
+  </button>
+  <input id="cmdInput" placeholder="Demandez quelque chose à JARVIS…" autocomplete="off" spellcheck="false" />
+  <canvas id="wave"></canvas>
+  <span class="hint">⌘K</span>
+  <button class="send" id="send" title="Envoyer">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+  </button>
+</div>
+
+<div class="demo" id="demo"></div>
+
+<script>
+/* ==========================================================================
+   1. NOYAU — rendu 3D projeté (canvas 2D, perspective réelle)
+   Anneaux inclinés, particules triées en profondeur, arcs mécaniques,
+   ondes, radar, flux de données. L'état pilote une signature complète.
+   ========================================================================== */
+const TAU = Math.PI * 2;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp = (a,b,t)=>a+(b-a)*t;
+const reduced = ()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const PAL = {
+  cy:[56,223,255], ice:[157,244,255], blue:[40,130,235],
+  amber:[255,176,87], violet:[155,140,255], ok:[61,240,166], err:[255,91,110],
+};
+
+/* Signature visuelle par état — chaque paramètre a un rôle lisible. */
+const STATES = {
+  IDLE:      {hue:'cy',    spin:.16, breath:.05, bhz:.24, seg:.16, part:.5,  stream:0,  wave:0,  radar:0,  turb:.25, glow:.55, jitter:0},
+  LISTENING: {hue:'ice',   spin:.22, breath:.08, bhz:.9,  seg:.3,  part:.7,  stream:0,  wave:1,  radar:0,  turb:.35, glow:.85, jitter:0},
+  THINKING:  {hue:'cy',    spin:1.15,breath:.05, bhz:.5,  seg:.95, part:1,   stream:.35,wave:0,  radar:0,  turb:.8,  glow:.95, jitter:0},
+  SEARCHING: {hue:'blue',  spin:.5,  breath:.04, bhz:.5,  seg:.6,  part:.7,  stream:.2, wave:0,  radar:1,  turb:.5,  glow:.9,  jitter:0},
+  CODING:    {hue:'violet',spin:.6,  breath:.05, bhz:.6,  seg:.8,  part:.8,  stream:1,  wave:0,  radar:0,  turb:.6,  glow:.9,  jitter:0},
+  READING:   {hue:'ice',   spin:.34, breath:.04, bhz:.5,  seg:.5,  part:.6,  stream:1,  wave:0,  radar:0,  turb:.4,  glow:.85, jitter:0},
+  SYNCING:   {hue:'amber', spin:.9,  breath:.07, bhz:.8,  seg:1,   part:.8,  stream:.7, wave:0,  radar:0,  turb:.7,  glow:1,   jitter:0},
+  SPEAKING:  {hue:'ice',   spin:.3,  breath:.12, bhz:1.2, seg:.4,  part:.7,  stream:0,  wave:.6, radar:0,  turb:.5,  glow:.95, jitter:0},
+  SUCCESS:   {hue:'ok',    spin:.35, breath:.1,  bhz:.8,  seg:.9,  part:.9,  stream:0,  wave:.8, radar:0,  turb:.4,  glow:1,   jitter:0},
+  ERROR:     {hue:'err',   spin:.12, breath:.14, bhz:1.6, seg:.5,  part:.4,  stream:0,  wave:0,  radar:0,  turb:.9,  glow:1,   jitter:1},
+};
+
+const core = {
+  cv:document.getElementById('core'), ctx:null, w:0,h:0,dpr:1,
+  state:'IDLE', p:{...STATES.IDLE}, target:{...STATES.IDLE},
+  colFrom:[...PAL.cy], colTo:[...PAL.cy], colT:1,
+  t:0, rot:{x:0,y:0}, aim:{x:0,y:0}, level:0,
+  rings:[], parts:[], streams:[], waves:[],
+};
+core.ctx = core.cv.getContext('2d');
+
+/* ------------------------------------------------ géométrie 3D minimale */
+function rot3(p, ax, ay, az){
+  let {x,y,z}=p, c,s;
+  c=Math.cos(ax); s=Math.sin(ax); let y1=y*c-z*s, z1=y*s+z*c; y=y1; z=z1;
+  c=Math.cos(ay); s=Math.sin(ay); let x1=x*c+z*s; z1=-x*s+z*c; x=x1; z=z1;
+  c=Math.cos(az); s=Math.sin(az); x1=x*c-y*s; y1=x*s+y*c; x=x1; y=y1;
+  return {x,y,z};
+}
+const FOV = 1500;
+function proj(p){ const s = FOV/(FOV+p.z); return {x:p.x*s, y:p.y*s, s, z:p.z}; }
+
+/* Anneaux : rayon, inclinaison propre, vitesse, style (plein/segmenté). */
+function buildRings(){
+  core.rings = [
+    {r:1.06, ax:1.18, az:0.00, sp: .18, w:1.1, a:.55, seg:0,  dash:[2,7]},
+    {r:0.88, ax:0.42, az:0.55, sp:-.34, w:1.7, a:.72, seg:12, gap:.42},
+    {r:0.72, ax:1.34, az:-0.3, sp: .52, w:1.1, a:.50, seg:0,  dash:[1,4]},
+    {r:0.58, ax:0.22, az:0.18, sp:-.78, w:2.4, a:.9,  seg:5,  gap:.66},
+    {r:0.42, ax:1.05, az:0.90, sp: 1.1, w:1.4, a:.75, seg:3,  gap:.5},
+  ];
+  core.parts = Array.from({length:150},()=>({
+    r:.42+Math.random()*.85, a:Math.random()*TAU,
+    ax:Math.random()*Math.PI, az:Math.random()*Math.PI,
+    sp:(.1+Math.random()*.5)*(Math.random()<.3?-1:1),
+    sz:.5+Math.random()*1.6, o:.2+Math.random()*.6,
+  }));
+  core.streams = Array.from({length:16},()=>({
+    a:Math.random()*TAU, ax:Math.random()*Math.PI, az:Math.random()*Math.PI,
+    p:Math.random(), sp:.3+Math.random()*.5, len:.16+Math.random()*.18,
+  }));
+}
+buildRings();
+
+function setState(name){
+  if(!STATES[name] || core.state===name) return;
+  core.state = name;
+  core.colFrom = curCol(); core.colTo = PAL[STATES[name].hue]; core.colT = 0;
+  core.target = STATES[name];
+  document.getElementById('stateLabel').textContent = name;
+  document.querySelectorAll('#demo button').forEach(b=>b.classList.toggle('on', b.dataset.s===name));
+  onStateChange(name);
+}
+function curCol(){ return core.colT>=1 ? core.colTo : core.colFrom; }
+
+function resize(){
+  const r = core.cv.getBoundingClientRect();
+  const dpr = clamp(devicePixelRatio||1,1,2);
+  const w=Math.round(r.width), h=Math.round(r.height);
+  if(w===core.w && h===core.h && dpr===core.dpr) return;
+  core.w=w; core.h=h; core.dpr=dpr;
+  core.cv.width=Math.round(w*dpr); core.cv.height=Math.round(h*dpr);
+}
+
+/* ---------------------------------------------------------------- rendu */
+function frame(dt){
+  resize();
+  if(!core.w) return;
+  const red = reduced();
+  const ctx = core.ctx, P = core.p, T = core.target;
+  const k = 1-Math.pow(.0015, dt);
+  for(const key in T) if(typeof T[key]==='number') P[key]=lerp(P[key]??T[key], T[key], k);
+  core.colT = clamp(core.colT + dt*1.5, 0, 1);
+  const col = core.colFrom.map((c,i)=>Math.round(lerp(c, core.colTo[i], core.colT)));
+  const C = (a)=>`rgba(${col[0]},${col[1]},${col[2]},${a})`;
+  core.t += dt;
+
+  // caméra : suit la souris avec inertie (profondeur perçue)
+  core.rot.x = lerp(core.rot.x, core.aim.y*0.26, 1-Math.pow(.002,dt));
+  core.rot.y = lerp(core.rot.y, core.aim.x*0.34, 1-Math.pow(.002,dt));
+
+  const cx = core.cv.width/2, cy = core.cv.height/2;
+  const R  = Math.min(core.cv.width, core.cv.height)*0.345;
+  const breath = red?0:Math.sin(core.t*TAU*P.bhz)*P.breath;
+  const jit = P.jitter? (Math.random()-.5)*6*P.jitter : 0;
+  const S = R*(1+breath+core.level*.14);
+
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,core.cv.width,core.cv.height);
+  ctx.save();
+  ctx.translate(cx+jit, cy);
+  ctx.globalCompositeOperation='lighter';
+
+  const back=[], front=[];   // tri en profondeur autour de la sphère
+
+  /* --- anneaux ---------------------------------------------------- */
+  core.rings.forEach((ring,i)=>{
+    if(!red) ring.phase = (ring.phase||0) + dt*ring.sp*(0.4+P.spin*1.5);
+    const steps = 116;
+    let prev=null;
+    for(let j=0;j<=steps;j++){
+      const th = (j/steps)*TAU;
+      let p = {x:Math.cos(th)*S*ring.r, y:Math.sin(th)*S*ring.r, z:0};
+      p = rot3(p, ring.ax, ring.phase||0, ring.az);
+      p = rot3(p, core.rot.x, core.rot.y, 0);
+      const q = proj(p);
+      if(prev){
+        let draw = true;
+        if(ring.seg){                                  // segments mécaniques
+          const u = (th/TAU + (ring.phase||0)*.12)%1;
+          draw = (u*ring.seg)%1 < ring.gap;
+        }
+        if(draw){
+          const depth = clamp((q.z+S)/(2*S),0,1);      // 0 = derrière, 1 = devant
+          const alpha = ring.a*(0.25+depth*0.95)*(0.45+P.glow*0.55);
+          const seg = {x1:prev.x,y1:prev.y,x2:q.x,y2:q.y,
+                       w:ring.w*core.dpr*(0.5+depth), a:alpha, z:q.z,
+                       dash:ring.dash};
+          (q.z<0?back:front).push(seg);
+        }
+      }
+      prev=q;
+    }
+    // arc lumineux qui parcourt l'anneau quand l'activité monte
+    if(P.seg>.35){
+      const th = (core.t*(0.5+P.spin)*1.4 + i)%TAU;
+      for(let j=0;j<14;j++){
+        const t2 = th + j*0.016;
+        let p = rot3({x:Math.cos(t2)*S*ring.r, y:Math.sin(t2)*S*ring.r, z:0}, ring.ax, ring.phase||0, ring.az);
+        p = rot3(p, core.rot.x, core.rot.y, 0);
+        const q = proj(p);
+        (q.z<0?back:front).push({dot:true,x:q.x,y:q.y,r:1.7*core.dpr*q.s,
+          a:P.seg*(1-j/14)*0.9, z:q.z});
+      }
+    }
+  });
+
+  /* --- particules -------------------------------------------------- */
+  for(const pt of core.parts){
+    if(!red) pt.a += dt*pt.sp*(0.3+P.spin*.8);
+    let p = rot3({x:Math.cos(pt.a)*S*pt.r, y:Math.sin(pt.a)*S*pt.r, z:0}, pt.ax, pt.az, 0);
+    p = rot3(p, core.rot.x, core.rot.y, 0);
+    const q = proj(p);
+    const depth = clamp((q.z+S)/(2*S),0,1);
+    (q.z<0?back:front).push({dot:true,x:q.x,y:q.y,
+      r:pt.sz*core.dpr*q.s*(0.4+depth), a:pt.o*P.part*(0.15+depth*0.85), z:q.z});
+  }
+
+  /* --- flux de données entrants (READING / CODING / SYNC) ---------- */
+  if(P.stream>.04){
+    for(const s of core.streams){
+      if(!red) s.p = (s.p + dt*s.sp)%1;
+      const r0 = lerp(1.5,.22,s.p), r1 = r0 - s.len;
+      const mk = (rr)=>{
+        let p = rot3({x:Math.cos(s.a)*S*rr, y:Math.sin(s.a)*S*rr, z:0}, s.ax, s.az, 0);
+        return proj(rot3(p, core.rot.x, core.rot.y, 0));
+      };
+      const q0=mk(r0), q1=mk(r1);
+      (q0.z<0?back:front).push({x1:q0.x,y1:q0.y,x2:q1.x,y2:q1.y,
+        w:1.5*core.dpr, a:.55*P.stream*(1-Math.abs(s.p-.5)*.7), z:q0.z});
+    }
+  }
+
+  const paint = (list)=>{
+    for(const s of list){
+      if(s.dot){
+        ctx.beginPath(); ctx.arc(s.x,s.y,Math.max(.3,s.r),0,TAU);
+        ctx.fillStyle=C(s.a); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.setLineDash(s.dash?s.dash.map(d=>d*core.dpr):[]);
+        ctx.moveTo(s.x1,s.y1); ctx.lineTo(s.x2,s.y2);
+        ctx.lineWidth=s.w; ctx.strokeStyle=C(s.a); ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+  };
+
+  paint(back);
+
+  /* --- halo volumétrique + sphère --------------------------------- */
+  const halo = ctx.createRadialGradient(0,0,S*.04,0,0,S*1.25);
+  halo.addColorStop(0, C(.16*P.glow));
+  halo.addColorStop(.22, C(.055*P.glow));
+  halo.addColorStop(1, C(0));
+  ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(0,0,S*1.25,0,TAU); ctx.fill();
+
+  const nR = S*0.155*(1+core.level*.22);
+  // turbulence interne : 3 lobes en rotation → matière, pas un disque plat
+  for(let i=0;i<3;i++){
+    const a = core.t*(0.5+P.turb*1.6)*(i%2?-1:1) + i*2.1;
+    const ox = Math.cos(a)*nR*0.34*P.turb, oy = Math.sin(a*1.3)*nR*0.3*P.turb;
+    const g = ctx.createRadialGradient(ox,oy,0,ox,oy,nR*1.25);
+    g.addColorStop(0, `rgba(255,255,255,${0.30*(0.5+P.glow*.5)})`);
+    g.addColorStop(.45, C(.22));
+    g.addColorStop(1, C(0));
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(ox,oy,nR*1.25,0,TAU); ctx.fill();
+  }
+  const nuc = ctx.createRadialGradient(0,0,0,0,0,nR);
+  nuc.addColorStop(0,'rgba(255,255,255,.92)');
+  nuc.addColorStop(.34, C(.88));
+  nuc.addColorStop(1, C(0));
+  ctx.fillStyle=nuc; ctx.beginPath(); ctx.arc(0,0,nR,0,TAU); ctx.fill();
+  // rim net : la sphere doit avoir un bord, pas un flou
+  ctx.beginPath(); ctx.arc(0,0,nR*1.34,0,TAU);
+  ctx.lineWidth=1.1*core.dpr; ctx.strokeStyle=C(.45+P.glow*.3); ctx.stroke();
+
+  /* --- radar (SEARCHING) ------------------------------------------ */
+  if(P.radar>.05){
+    const a0 = (core.t*1.5)%TAU;
+    const g = ctx.createConicGradient ? ctx.createConicGradient(a0,0,0) : null;
+    if(g){ g.addColorStop(0, C(.20*P.radar)); g.addColorStop(.14, C(0)); g.addColorStop(1, C(0));
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,S*0.98,0,TAU); ctx.fill(); }
+  }
+
+  /* --- ondes concentriques (LISTENING / SPEAKING / SUCCESS) -------- */
+  if(P.wave>.05){
+    if(!red && core.t - (core._lastWave||0) > .58/Math.max(.3,P.wave)){
+      core._lastWave = core.t; core.waves.push({r:.3,a:1});
+    }
+    core.waves = core.waves.filter(w=>w.a>0.02);
+    for(const w of core.waves){
+      w.r += dt*.85; w.a -= dt*.62;
+      ctx.beginPath(); ctx.arc(0,0,S*w.r*1.5,0,TAU);
+      ctx.lineWidth=1.2*core.dpr; ctx.strokeStyle=C(w.a*.5*P.wave); ctx.stroke();
+    }
+  }
+
+  paint(front);
+
+  /* --- projections holographiques (petits tirets HUD) -------------- */
+  ctx.globalCompositeOperation='lighter';
+  const ticks=48;
+  for(let i=0;i<ticks;i++){
+    const th=(i/ticks)*TAU + core.t*0.06;
+    const on = ((i*7 + Math.floor(core.t*6))%11) < (2+P.seg*6);
+    const r0=S*1.30, r1=r0+(on?9:4)*core.dpr;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(th)*r0, Math.sin(th)*r0*0.42+ (core.rot.x*40));
+    ctx.lineTo(Math.cos(th)*r1, Math.sin(th)*r1*0.42+ (core.rot.x*40));
+    ctx.lineWidth=1*core.dpr; ctx.strokeStyle=C(on?0.3:0.09); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ==========================================================================
+   2. CIEL — étoiles de profondeur (plan lointain, très discret)
+   ========================================================================== */
+const starCv=document.getElementById('stars'), sctx=starCv.getContext('2d');
+let stars=[];
+function seedStars(){
+  const dpr=clamp(devicePixelRatio||1,1,2);
+  starCv.width=innerWidth*dpr; starCv.height=innerHeight*dpr;
+  stars=Array.from({length:Math.round(innerWidth*innerHeight/14000)},()=>({
+    x:Math.random()*starCv.width, y:Math.random()*starCv.height,
+    r:(Math.random()*1.1+.2)*dpr, o:.12+Math.random()*.5, tw:Math.random()*TAU,
+  }));
+}
+function drawStars(t){
+  sctx.clearRect(0,0,starCv.width,starCv.height);
+  for(const s of stars){
+    const o = s.o*(0.65+0.35*Math.sin(t*1.1+s.tw));
+    sctx.beginPath(); sctx.arc(s.x,s.y,s.r,0,TAU);
+    sctx.fillStyle=`rgba(180,225,245,${o})`; sctx.fill();
+  }
+}
+seedStars(); addEventListener('resize', seedStars);
+
+/* ==========================================================================
+   3. PARALLAX — plans distincts pilotés par la souris
+   ========================================================================== */
+const layers=[...document.querySelectorAll('[data-depth]')];
+let mx=0,my=0,tx=0,ty=0;
+addEventListener('pointermove',e=>{
+  tx=(e.clientX/innerWidth-.5)*2; ty=(e.clientY/innerHeight-.5)*2;
+  core.aim.x=tx; core.aim.y=ty;
+});
+function parallax(dt){
+  mx=lerp(mx,tx,1-Math.pow(.004,dt)); my=lerp(my,ty,1-Math.pow(.004,dt));
+  for(const l of layers){
+    const d=+l.dataset.depth;
+    l.style.transform = (l.classList.contains('floor')
+      ? `rotateX(74deg) translate3d(${-mx*d}px,${-my*d}px,0)`
+      : `translate3d(${-mx*d}px,${-my*d}px,0)`);
+  }
+}
+
+/* ==========================================================================
+   4. SATELLITES D'INFORMATION — en orbite, jamais en cartes
+   ========================================================================== */
+const SATS=[
+  {k:'95',  l:'OUTILS',   cls:'',      ang:-163},
+  {k:'7',   l:'AGENTS PRÊTS', cls:'', ang:-118},
+  {k:'34',  l:'NŒUDS MÉMOIRE', cls:'',ang:-62},
+  {k:'SSH', l:'CONNECTÉ', cls:'ok',    ang:-17},
+  {k:'OLLAMA', l:'PRÊT',  cls:'ok',    ang:22},
+  {k:'FTP', l:'CONNECTÉ', cls:'amber', ang:158},
+];
+const satHost=document.getElementById('sats');
+SATS.forEach((s,i)=>{
+  const el=document.createElement('div');
+  el.className='sat '+s.cls;
+  el.style.animationDelay=(0.5+i*0.09)+'s';
+  el.innerHTML=`<i></i><b>${s.k}</b>${s.l}`;
+  satHost.appendChild(el); s.el=el;
+});
+function layoutSats(){
+  const rig=document.getElementById('coreRig').getBoundingClientRect();
+  const cx=rig.left+rig.width/2, cy=rig.top+rig.height/2;
+  const rx=rig.width*0.92, ry=rig.height*0.62;
+  for(const s of SATS){
+    const a=s.ang*Math.PI/180;
+    const x=cx+Math.cos(a)*rx, y=cy+Math.sin(a)*ry;
+    const right = Math.cos(a)>0;
+    s.el.style.left=(x - (right?0:s.el.offsetWidth))+'px';
+    s.el.style.top=(y-8)+'px';
+    s.el.style.position='fixed';
+  }
+  const g=document.getElementById('greet');
+  // la salutation ne doit jamais passer sous la command bar
+  g.style.top=Math.min(cy + rig.height*0.52, innerHeight - 210)+'px';
+  g.style.left=(cx)+'px';
+}
+
+/* ==========================================================================
+   5. MODULES CONTEXTUELS — n'existent que pour le contexte demandé
+   ========================================================================== */
+const MODULES={
+  system:[{t:'DIAGNOSTIC SYSTÈME',rows:[['Processeur','38 %'],['Mémoire','63 % / 32 Go'],['GPU','14 % · RTX'],['Disque','85 %'],['Uptime','9 min']]},
+          {t:'LIAISONS',rows:[['SSH','connecté'],['Ollama','22 modèles'],['FTP / FTPS','connecté'],['ComfyUI','erreur']]}],
+  memory:[{t:'BRAIN ATLAS',rows:[['Nœuds','34'],['Liaisons','124'],['Savoirs','23'],['Dernier rappel','il y a 19 s']]}],
+  agents:[{t:'AGENTS',rows:[['JARVIS Core','actif'],['Coding Agent','veille'],['Research Agent','veille'],['Browser Agent','veille'],['System Agent','veille']]}],
+  data:[{t:'ANALYSES',rows:[['Sheet suivi','13 onglets'],['Dernière analyse','03:12'],['Écarts détectés','7 create'],['Preuves','42']]}],
+};
+const modHost=document.getElementById('mods');
+function showModules(key){
+  [...modHost.children].forEach(c=>{ c.classList.add('out'); setTimeout(()=>c.remove(),340); });
+  const defs=MODULES[key]; if(!defs) return;
+  defs.forEach((d,i)=>{
+    const el=document.createElement('div');
+    el.className='mod'; el.style.animationDelay=(i*0.08)+'s';
+    el.innerHTML=`<h4><i></i>${d.t}</h4>`+d.rows.map(r=>`<div class="row"><span>${r[0]}</span><b>${r[1]}</b></div>`).join('');
+    modHost.appendChild(el);
+  });
+}
+
+/* ==========================================================================
+   6. NAVIGATION — rail d'icônes, label au survol uniquement
+   ========================================================================== */
+const NAV=[
+  ['home','HOME','<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8.6" opacity=".5"/>'],
+  ['chat','CHAT','<path d="M20 15a2 2 0 0 1-2 2H8l-4 3V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>'],
+  ['data','DATA','<path d="M4 18V9M10 18V4M16 18v-6M21 21H3"/>'],
+  ['agents','AGENTS','<circle cx="12" cy="5" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M12 7 6.4 15.6M12 7l5.6 8.6M7 18h10" opacity=".6"/>'],
+  ['memory','MEMORY','<path d="M12 3a4 4 0 0 0-4 4 3 3 0 0 0-1 5.8V15a4 4 0 0 0 8 0v-2.2A3 3 0 0 0 16 7a4 4 0 0 0-4-4z"/>'],
+  ['system','SYSTEM','<rect x="3.5" y="4.5" width="17" height="12" rx="2"/><path d="M9 20h6"/>'],
+];
+const rail=document.getElementById('rail');
+NAV.forEach(([id,label,path],i)=>{
+  const b=document.createElement('button');
+  b.dataset.label=label; b.dataset.id=id; b.title=label;
+  if(i===0) b.classList.add('on');
+  b.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+  b.onclick=()=>{
+    rail.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    showModules(id==='home'?null:id);
+    if(id==='data') setState('READING');
+    else if(id==='agents') setState('THINKING');
+    else if(id==='memory') setState('SEARCHING');
+    else setState('IDLE');
+  };
+  rail.appendChild(b);
+});
+document.getElementById('hudSys').onclick=()=>{
+  rail.querySelectorAll('button').forEach(x=>x.classList.toggle('on', x.dataset.id==='system'));
+  showModules('system');
+};
+
+/* ==========================================================================
+   7. CARTE OUTIL ÉPHÉMÈRE — apparaît près du Core, puis se retire
+   ========================================================================== */
+function toolCard(tag, detail, ms=3200){
+  const rig=document.getElementById('coreRig').getBoundingClientRect();
+  const el=document.createElement('div');
+  el.className='toolcard';
+  el.style.top=(rig.top - 54)+'px';
+  el.innerHTML=`<div class="t">${tag}</div><div class="d">${detail}</div>`;
+  document.getElementById('tools').appendChild(el);
+  setTimeout(()=>{ el.classList.add('out'); setTimeout(()=>el.remove(),320); }, ms);
+}
+function onStateChange(name){
+  const cmd=document.getElementById('cmd');
+  cmd.classList.toggle('mini', name==='SPEAKING');
+  if(name==='READING')  toolCard('SSH · brainrot-fortnite','Lecture de marketplace.php');
+  if(name==='CODING')   toolCard('CODING AGENT','Modification de google_sheets.py');
+  if(name==='SEARCHING')toolCard('WEB','Recherche : disponibilité Eternals');
+  if(name==='SYNCING')  toolCard('SYNC · 7 CREATE','BACKUP → HASH → WRITE → VERIFY');
+}
+
+/* ==========================================================================
+   8. COMMAND BAR + waveform
+   ========================================================================== */
+const cmd=document.getElementById('cmd'), input=document.getElementById('cmdInput');
+const mic=document.getElementById('mic'), waveCv=document.getElementById('wave');
+const wctx=waveCv.getContext('2d');
+input.addEventListener('focus',()=>cmd.classList.add('focus'));
+input.addEventListener('blur',()=>cmd.classList.remove('focus'));
+addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); input.focus(); }
+});
+let listening=false;
+mic.onclick=()=>{
+  listening=!listening;
+  mic.classList.toggle('live',listening);
+  cmd.classList.toggle('listening',listening);
+  setState(listening?'LISTENING':'IDLE');
+};
+document.getElementById('send').onclick=()=>send();
+input.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); send(); }});
+function send(){
+  if(!input.value.trim()) return;
+  input.value='';
+  setState('THINKING');
+  setTimeout(()=>setState('READING'),1600);
+  setTimeout(()=>setState('SPEAKING'),3600);
+  setTimeout(()=>setState('IDLE'),6200);
+}
+function drawWave(t){
+  const dpr=clamp(devicePixelRatio||1,1,2);
+  const r=waveCv.getBoundingClientRect();
+  if(waveCv.width!==Math.round(r.width*dpr)){ waveCv.width=Math.round(r.width*dpr); waveCv.height=Math.round(r.height*dpr); }
+  wctx.clearRect(0,0,waveCv.width,waveCv.height);
+  const bars=Math.floor(waveCv.width/(5*dpr));
+  for(let i=0;i<bars;i++){
+    const n=Math.sin(t*7+i*0.42)*Math.sin(t*2.3+i*0.11);
+    const h=(0.12+Math.abs(n)*0.8)*waveCv.height*0.8;
+    const x=i*5*dpr+1.5*dpr, y=(waveCv.height-h)/2;
+    wctx.fillStyle=`rgba(56,223,255,${0.25+Math.abs(n)*0.7})`;
+    wctx.fillRect(x,y,2.2*dpr,h);
+  }
+  core.level = 0.25+Math.abs(Math.sin(t*4))*0.5;
+}
+
+/* ==========================================================================
+   9. DÉMO DES ÉTATS (maquette uniquement — en production, ces états
+      viennent des événements SSE réels de JARVIS)
+   ========================================================================== */
+const demo=document.getElementById('demo');
+Object.keys(STATES).forEach(s=>{
+  const b=document.createElement('button'); b.textContent=s; b.dataset.s=s;
+  if(s==='IDLE') b.classList.add('on');
+  b.onclick=()=>setState(s);
+  demo.appendChild(b);
+});
+
+/* ---------------------------------------------------------------- boucle */
+let last=performance.now();
+function loop(now){
+  requestAnimationFrame(loop);
+  const dt=clamp((now-last)/1000,0,.1); last=now;
+  if(document.hidden) return;
+  const t=now/1000;
+  parallax(dt);
+  frame(dt);
+  drawStars(t);
+  if(listening) drawWave(t); else core.level=lerp(core.level,0,1-Math.pow(.01,dt));
+  const c=document.getElementById('clock');
+  c.textContent=new Date().toLocaleTimeString('fr-FR');
+}
+requestAnimationFrame(loop);
+addEventListener('resize',layoutSats);
+setTimeout(layoutSats,60);
+setTimeout(layoutSats,700);
+</script>
+</body>
+</html>

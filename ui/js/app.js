@@ -507,12 +507,19 @@ goto(page, options = {}) {
     return this.sendJarvisMessage(text, 'text');
   },
 
-  async sendJarvisMessage(text, source = 'text') {
+  async sendJarvisMessage(text, source = 'text', attachments = null) {
     text = String(text || '').trim();
+    // Les pièces jointes sont prélevées ici, au moment où l'utilisateur
+    // envoie : la barre se vide tout de suite, mais si l'envoi est mis en
+    // file (envoi déjà en cours) les ids voyagent avec le message.
+    if (attachments === null) {
+      attachments = window.AttachmentsUI?.takeIds() || [];
+      if (attachments.length) window.AttachmentsUI.clear();
+    }
     if (!text) return;
     if (this.sending) {
       return new Promise((resolve) => {
-        (this.sendQueue ||= []).push({ text, source, resolve });
+        (this.sendQueue ||= []).push({ text, source, attachments, resolve });
       });
     }
     this.sending = true;
@@ -523,7 +530,7 @@ goto(page, options = {}) {
     this.pushMessage('user', text);
     console.debug('[CHAT-UI] user message added', source);
     this.pendingReply = this.pushMessage('jarvis', '…', { pending: true });
-    const res = await VoiceManager.submit(text, { silent: true, source });
+    const res = await VoiceManager.submit(text, { silent: true, source, attachments });
     if (!res) { this.clearPendingReply(); return; }
     if (res.needs_confirmation) return;
     const response = res.response || res.error || 'Terminé.';
@@ -541,7 +548,7 @@ goto(page, options = {}) {
       this.sending = false;
       J.state.chatStatus = 'idle';
       const next = this.sendQueue?.shift();
-      if (next) this.sendJarvisMessage(next.text, next.source).then(next.resolve);
+      if (next) this.sendJarvisMessage(next.text, next.source, next.attachments).then(next.resolve);
     }
   },
 
@@ -878,6 +885,8 @@ async showNodeDetails(node) {
     window.ModelMessages?.bind();
     // Refonte d'avatar : le composant dedie ecoute avatar.update_*
     window.AvatarStudio?.init();
+    // Pièces jointes : bouton 📎, drag & drop et collage sur la barre de commande.
+    window.AttachmentsUI?.init();
 
     J.on('feed.new', () => Dashboard.refresh());
     J.on('task.completed', () => Dashboard.refresh());

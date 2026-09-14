@@ -41,7 +41,10 @@ class AgentContext:
 
     def log(self, level: str, message: str) -> None:
         self.logs.append({"ts": time.time(), "level": level, "message": message})
-        print(f"[SU-AGENT][{level.upper()}] {message}", flush=True)
+        try:
+            print(f"[SU-AGENT][{level.upper()}] {message}", flush=True)
+        except OSError:
+            pass
 
 
 def _check_path(ctx: AgentContext, rel: str) -> str | None:
@@ -104,7 +107,7 @@ def tool_code_write(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
     try:
         if not target.parent.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        target.write_text(content.replace("\r\n", "\n"), encoding="utf-8", newline="\n")
     except Exception as exc:
         return {"ok": False, "output": f"Erreur écriture {rel}: {exc}"}
     ctx.tools_used.append("code.write")
@@ -127,7 +130,7 @@ def tool_code_patch(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
         if old == new:
             return {"ok": True, "output": f"old == new : rien à changer dans {rel}."}
         updated = orig.replace(old, new, 1)
-        target.write_text(updated, encoding="utf-8")
+        target.write_text(updated.replace("\r\n", "\n"), encoding="utf-8", newline="\n")
         ctx.tools_used.append("code.patch")
         return {"ok": True, "output": f"Patch appliqué à {rel} (remplacement simple)."}
     if old and old not in orig:
@@ -270,6 +273,61 @@ def tool_browser_screenshot(ctx: AgentContext, args: dict[str, Any]) -> dict[str
         return {"ok": True, "output": f"Capture : {out}"}
     except Exception as exc:
         return {"ok": False, "output": f"Capture impossible : {exc}"}
+
+
+def _live_browser(op: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Outil navigateur live : pilote la session partagée de l'aperçu."""
+    from ..browser_manager import get_manager
+    mgr = get_manager()
+    if mgr is None:
+        return {"ok": False, "output": "Session navigateur live indisponible."}
+    out = mgr.action(op, args)
+    if out.get("ok"):
+        target = out.get("target") or out.get("url") or out.get("title") or ""
+        if target:
+            return {"ok": True, "output": target}
+        return {"ok": True, "output": "OK"}
+    return {"ok": False, "output": out.get("error") or out.get("gate") or "erreur navigateur"}
+
+
+def tool_browser_navigate(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.navigate")
+    return _live_browser("navigate", args)
+
+
+def tool_browser_click(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.click")
+    return _live_browser("click", args)
+
+
+def tool_browser_type(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.type")
+    return _live_browser("type", args)
+
+
+def tool_browser_scroll(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.scroll")
+    return _live_browser("scroll", args)
+
+
+def tool_browser_wait(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.wait")
+    return _live_browser("wait", args)
+
+
+def tool_browser_back(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.back")
+    return _live_browser("back", args)
+
+
+def tool_browser_pause(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.pause")
+    return _live_browser("pause", args)
+
+
+def tool_browser_close(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
+    ctx.tools_used.append("browser.close")
+    return _live_browser("close", args)
 
 
 def tool_upgrade_request_promotion(ctx: AgentContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -427,6 +485,80 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "browser.navigate",
+            "description": "Ouvre une URL dans la session live (l'utilisateur voit l'aperçu).",
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string"}}, "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.click",
+            "description": "Clique sur un élément visible (texte, libellé ou sélecteur CSS).",
+            "parameters": {"type": "object", "properties": {
+                "selector": {"type": "string", "description": "texte visible ou sélecteur CSS"}},
+                    "required": ["selector"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.type",
+            "description": "Saisit une valeur dans un champ. Mettre private=true pour un mot de passe/token.",
+            "parameters": {"type": "object", "properties": {
+                "selector": {"type": "string"},
+                "value": {"type": "string"},
+                "private": {"type": "boolean", "description": "champ sensible (password, token…)"}},
+                    "required": ["selector", "value"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.scroll",
+            "description": "Défile la page de y pixels.",
+            "parameters": {"type": "object", "properties": {
+                "y": {"type": "number"}}, "required": ["y"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.wait",
+            "description": "Attend ms millisecondes (chargement, animation…).",
+            "parameters": {"type": "object", "properties": {
+                "ms": {"type": "number"}}, "required": ["ms"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.back",
+            "description": "Retour à la page précédente de la session.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.pause",
+            "description": "Demande une action manuelle à l'utilisateur (captcha, login…).",
+            "parameters": {"type": "object", "properties": {
+                "message": {"type": "string"}}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser.close",
+            "description": "Ferme la session navigateur live.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "upgrade.request_promotion",
             "description": "Demande la mise en production de cette candidate une fois tout validé.",
             "parameters": {"type": "object", "properties": {
@@ -451,5 +583,13 @@ HANDLERS: dict[str, Callable[[AgentContext, dict[str, Any]], dict[str, Any]]] = 
     "app.healthcheck": tool_app_healthcheck,
     "browser.open": tool_browser_open,
     "browser.screenshot": tool_browser_screenshot,
+    "browser.navigate": tool_browser_navigate,
+    "browser.click": tool_browser_click,
+    "browser.type": tool_browser_type,
+    "browser.scroll": tool_browser_scroll,
+    "browser.wait": tool_browser_wait,
+    "browser.back": tool_browser_back,
+    "browser.pause": tool_browser_pause,
+    "browser.close": tool_browser_close,
     "upgrade.request_promotion": tool_upgrade_request_promotion,
 }

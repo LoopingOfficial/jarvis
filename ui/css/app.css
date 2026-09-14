@@ -1571,6 +1571,36 @@ textarea { resize: vertical; min-height: 64px; line-height: 1.55; }
 .composer-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .composer-actions .send { align-self: center; padding: 7px 13px; }
 
+/* ---- pièces jointes ---- */
+.attach-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 4px 7px 4px 5px; border-radius: 7px;
+  border: 1px solid var(--line-soft);
+  background: rgba(14, 26, 48, .6); color: var(--text-dim);
+  font-size: 10.5px;
+}
+.attach-chip.image { border-color: rgba(34, 211, 238, .35); color: var(--text); }
+.attach-chip svg { flex: none; color: var(--cyan); }
+.att-thumb { width: 22px; height: 22px; border-radius: 5px; object-fit: cover; flex: none; }
+.att-cc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-remove {
+  flex: none; border: 0; background: transparent; color: var(--text-faint);
+  font-size: 13px; line-height: 1; cursor: pointer; padding: 0 1px;
+}
+.att-remove:hover { color: var(--danger); }
+.attach-drop-zone {
+  border: 1px dashed rgba(34, 211, 238, .4); border-radius: 8px;
+  padding: 10px; text-align: center; font-size: 11px; color: var(--cyan); letter-spacing: .5px;
+  background: rgba(34, 211, 238, .05);
+}
+.attach-btn:active { transform: scale(.94); }
+
+/* pièces jointes affichées dans les messages */
+.msg .att-region { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg .att-region .att-chip { pointer-events: none; }
+.msg .att-region .att-chip a.att-open { pointer-events: auto; color: var(--cyan); text-decoration: none; }
+
 /* ---- messages : plus sobres ---- */
 .msg .bubble { border-radius: 10px; font-size: 12.5px; }
 .msg.user .bubble { border-radius: 10px; }

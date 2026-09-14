@@ -3,6 +3,17 @@
    Tout est porté par html[data-jarvis-ui='spatial_v5'] : si le mode retombe
    sur legacy_v4, aucune de ces règles ne s'applique et l'UI V4 reste intacte.
    ========================================================================== */
+/* --brow enregistrée comme longueur : garantit une valeur typée et un 0px
+   initial même si spatial_browser ne l'a pas encore écrite (max() et calc()
+   ne peuvent alors pas recevoir de jeton invalide).
+
+   Pas de transition ici, ni sur left/right/width : une transition dont la
+   valeur dérive d'une custom property ne se relance pas quand la variable
+   change — la propriété reste figée sur son ancienne valeur utilisée
+   (constaté : `right` bloqué à 174px alors que le calcul donnait 464px).
+   Le dock, lui, anime sa propre largeur : le mouvement reste lisible. */
+@property --brow{ syntax:'<length>'; inherits:true; initial-value:0px; }
+
 html[data-jarvis-ui='spatial_v5']{
   --void:#01050a; --ink:#f2fbff;   --mute:#93a8ba; --faint:#4a6174;
   --cy:#38dfff; --ice:#9df4ff; --amber:#ffb057; --violet:#9b8cff;
@@ -11,6 +22,27 @@ html[data-jarvis-ui='spatial_v5']{
   --sans5:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
   --glass5:linear-gradient(180deg,rgba(8,26,40,.6),rgba(3,12,20,.48));
   --edge5:inset 0 0 0 1px rgba(120,200,230,.09);
+
+  /* ---------------------------------------------------- MODÈLE DE GOUTTIÈRE
+     Le Command Center reste une composition d'overlays `fixed` (le canvas de
+     l'Avatar et celui du Brain en dépendent), mais toutes les régions
+     négocient désormais leur place par ces variables au lieu de coordonnées
+     en dur. Une seule source de vérité pour la colonne droite : --v5right.
+
+       --brow  largeur réelle du dock navigateur, écrite par
+               spatial_browser.setBrow() ; 0 quand l'aperçu est fermé.
+       --rpw   largeur du panneau d'état droit (0 quand il est masqué).
+       --cmdh  hauteur mesurée de la barre de commande (spatial_shell).
+
+     --v5right est la gouttière que le bloc central ne doit jamais franchir :
+     le dock et le panneau d'état partagent la même colonne, on réserve donc
+     le plus large des deux. */
+  --v5rail:64px;
+  --v5edge:18px;
+  --rpw:172px;
+  --brow:0px;
+  --v5right:calc(var(--v5edge) + max(var(--brow), var(--rpw)));
+  --v5ease:.45s cubic-bezier(.16,.9,.3,1);
 }
 
 /* La coque héritée (sidebar/header/footer V4) sort de la vue mais reste dans
@@ -163,7 +195,10 @@ html[data-jarvis-ui='spatial_v5'] body{
 .v5-sat[data-tone='err'] i{background:var(--err5);box-shadow:0 0 7px var(--err5)}
 
 /* ============================================================ COMMAND BAR */
-.v5-cmd{position:fixed;left:50%;bottom:22px;translate:-50% 0;z-index:60;width:clamp(440px,48vw,760px);
+/* Même bande que le chat : la barre de commande reste alignée sur le fil de
+   conversation quand le dock s'ouvre, au lieu de rester centrée sur l'écran. */
+.v5-cmd{position:fixed;left:var(--v5rail);right:var(--v5right);bottom:22px;z-index:60;
+  width:auto;max-width:clamp(440px,48vw,760px);margin-inline:auto;
   display:flex;align-items:center;gap:11px;padding:9px 10px 9px 16px;border-radius:999px;
   background:linear-gradient(180deg,rgba(9,27,41,.72),rgba(3,12,20,.82));backdrop-filter:blur(20px);
   box-shadow:inset 0 0 0 1px rgba(120,200,230,.16),0 18px 50px -28px rgba(0,0,0,.9);
@@ -204,7 +239,11 @@ html[data-jarvis-ui='spatial_v5'] #convForm .btn.primary.send span{display:none}
   letter-spacing:.1em;color:var(--mute);animation:v5actIn .3s ease both;transition:opacity .8s}
 .v5-act.fade{opacity:0}
 .v5-act b{color:var(--ink);font-weight:500}
-.v5-task{position:fixed;left:50%;bottom:78px;translate:-50% 0;z-index:59;width:clamp(440px,48vw,760px);
+/* Ancré au-dessus de la barre de commande (--cmdh, mesuré par spatial_shell)
+   pour que la checklist ne glisse jamais derrière le composeur. */
+.v5-task{position:fixed;left:var(--v5rail);right:var(--v5right);
+  bottom:calc(22px + var(--cmdh,56px) + 10px);
+  z-index:59;width:auto;max-width:clamp(440px,48vw,760px);margin-inline:auto;
   display:flex;align-items:center;gap:10px;pointer-events:none;font-family:var(--mono5)}
 .v5-task[hidden]{display:none!important}
 .v5-task i{width:7px;height:7px;border-radius:50%;background:var(--cy);box-shadow:0 0 8px var(--cy);flex:0 0 auto}
@@ -214,9 +253,19 @@ html[data-jarvis-ui='spatial_v5'] #convForm .btn.primary.send span{display:none}
 .v5-task b{display:block;font-size:9px;letter-spacing:.18em;color:var(--ice);font-weight:500}
 .v5-task span{display:block;font-size:11px;letter-spacing:.02em;color:var(--ink);margin-top:1px}
 .v5-task em{margin-left:auto;font-style:normal;font-size:9px;letter-spacing:.08em;color:var(--mute)}
-.v5-steps{display:flex;gap:8px;margin-left:12px;font-size:8px;letter-spacing:.12em;color:var(--faint)}
-.v5-steps span[data-st='done']{color:var(--ok5)}
-.v5-steps span[data-st='run']{color:var(--ice)}
+/* Checklist d'exécution : rangée complète sous la ligne de titre. Les libellés
+   sont désormais lisibles ("[2/4] Fusion des résultats ●"), donc on enroule au
+   lieu de déborder du bandeau. */
+.v5-task{flex-wrap:wrap}
+.v5-steps{flex:0 0 100%;display:flex;flex-wrap:wrap;gap:4px 10px;margin:6px 0 0 17px;
+  font-size:8.5px;letter-spacing:.12em}
+.v5-steps span{display:inline-block!important;font-size:8.5px!important;margin-top:0!important;
+  color:var(--faint);transition:color .3s ease,opacity .3s ease}
+.v5-steps span[data-st='idle']{opacity:.55}
+.v5-steps span[data-st='done']{color:var(--ok5)!important}
+.v5-steps span[data-st='run']{color:var(--ice)!important;animation:v5stepRun 1.6s ease-in-out infinite}
+.v5-steps span[data-st='err']{color:var(--err5)!important}
+@keyframes v5stepRun{0%,100%{opacity:.62}50%{opacity:1}}
 @keyframes v5actIn{from{opacity:0;transform:translateX(-6px)}}
 
 /* Carte outil éphémère près du Brain */
@@ -235,9 +284,15 @@ html[data-jarvis-ui='spatial_v5'] #convForm .btn.primary.send span{display:none}
 .v5-view{position:fixed;z-index:30;opacity:0;pointer-events:none;
   transition:opacity .5s ease, transform .55s cubic-bezier(.16,.9,.3,1), filter .5s ease}
 .v5-view.in{opacity:1;pointer-events:auto}
-.v5-chat{left:50%;width:min(860px,calc(100vw - 320px - var(--brow,0px)));
-  margin-left:calc(min(860px,calc(100vw - 320px - var(--brow,0px)))/-2);
-  top:56px;bottom:128px;transform:translateY(16px);filter:blur(6px)}
+/* Le fil de conversation occupe la bande disponible (entre le rail et la
+   gouttière droite) et s'y centre tout seul : plus aucune largeur calculée à
+   la main, donc plus de chevauchement possible avec le dock. */
+/* width:auto + left/right → la bande ; max-width (valeur absolue) la plafonne.
+   Surtout pas de pourcentage ici : sur un élément `fixed` il se résout sur le
+   viewport, pas sur la bande, et le fil déborderait sous le dock. */
+.v5-chat{left:var(--v5rail);right:var(--v5right);width:auto;max-width:860px;margin-inline:auto;
+  top:56px;bottom:128px;transform:translateY(16px);filter:blur(6px);
+  transition:opacity .5s ease, transform .55s cubic-bezier(.16,.9,.3,1), filter .5s ease}
 .v5-chat.in{transform:none;filter:none}
 html[data-jarvis-ui='spatial_v5'] #convLog{height:100%;max-height:none;overflow:auto;display:flex;
   flex-direction:column;gap:18px;padding:0 8px 0 0;background:none!important;border:0!important;
@@ -283,7 +338,10 @@ html[data-jarvis-ui='spatial_v5'] #convLog .msg .bubble code{font-family:var(--m
 /* =============================== ESPACE DE TRAVAIL (pages héritées) ===== */
 /* Les pages existantes (Analyse, Sync, Agents, Memory, Tools, Settings…)
    restent fonctionnelles et sont posées sur la scène, sans chrome de carte. */
-.v5-work{position:fixed;left:64px;right:18px;top:56px;bottom:132px;z-index:28;overflow:auto;
+/* L'espace de travail (Analysis Workspace, pages héritées) respecte la même
+   gouttière : il ne glisse plus sous le dock navigateur ni sous le panneau
+   d'état. C'était le chevauchement principal du « panneau droit ». */
+.v5-work{position:fixed;left:var(--v5rail);right:var(--v5right);top:56px;bottom:132px;z-index:28;overflow:auto;
   opacity:0;pointer-events:none;transform:scale(.99) translateY(12px);filter:blur(6px);
   transition:opacity .5s ease, transform .55s cubic-bezier(.16,.9,.3,1), filter .5s ease;
   scrollbar-width:thin;scrollbar-color:rgba(56,223,255,.18) transparent}
@@ -341,37 +399,44 @@ html[data-jarvis-ui='spatial_v5'] #modalRoot .modal{border:0!important;backgroun
   backdrop-filter:blur(16px);box-shadow:var(--edge5),0 40px 90px -40px #000;border-radius:16px}
 
 /* ============================================================ RESPONSIVE */
+/* Les largeurs ne sont plus calculées à la main : seul le plafond du fil de
+   conversation change, la bande disponible s'occupe du reste. */
 @media (max-width:1600px){
-  .v5-chat{width:min(760px,calc(100vw - 300px - var(--brow,0px)));
-    margin-left:calc(min(760px,calc(100vw - 300px - var(--brow,0px)))/-2)}
+  .v5-chat{max-width:760px}
 }
 @media (max-width:1440px){
   .v5-mods{width:228px} .v5-hud-sys span:nth-child(n+4){display:none}
   .v5-mini-meta{display:none}
   .v5-rpanel{width:160px;right:12px}
+  html[data-jarvis-ui='spatial_v5']{--rpw:160px}
   .v5-rpanel .rp-ctx{display:none}
 }
 @media (max-width:1366px){
-  .v5-chat{width:min(680px,calc(100vw - 200px - var(--brow,0px)));
-    margin-left:calc(min(680px,calc(100vw - 200px - var(--brow,0px)))/-2)}
-  .v5-work{left:58px;right:14px}
+  .v5-chat{max-width:680px}
+  html[data-jarvis-ui='spatial_v5']{--v5rail:58px;--v5edge:14px}
   html[data-context='chat'] .v5-brain-wrap{opacity:.35!important}
 }
 @media (max-width:1100px){
   .v5-mods{display:none}
   .v5-rpanel{display:none}
+  /* Le panneau d'état disparaît : il ne réserve plus rien à droite. */
+  html[data-jarvis-ui='spatial_v5']{--rpw:0px}
   html[data-context='chat'] .v5-brain-wrap, html[data-context='chat'] .v5-avatar{opacity:0!important;pointer-events:none}
-  .v5-chat{width:calc(100vw - 48px);margin-left:calc((100vw - 48px)/-2)}
+  .v5-chat{max-width:none}
 }
 @media (max-width:860px){
   .v5-avatar{opacity:0!important}
   .v5-rail{left:50%;top:auto;bottom:92px;translate:-50% 0;flex-direction:row;max-width:calc(100vw - 24px);
     overflow-x:auto}
   .v5-rail-sep{width:1px;height:auto;margin:7px 5px}
-  .v5-cmd{width:calc(100vw - 24px);bottom:20px}
+  /* Le rail passe en bas : la bande occupe toute la largeur, moins le dock
+     s'il est ouvert (--brow reste honoré, le panneau d'état est masqué). */
+  html[data-jarvis-ui='spatial_v5']{--v5rail:12px;--v5edge:12px;--rpw:0px}
+  .v5-cmd{max-width:none;bottom:20px}
   .v5-activity{display:none}
-  .v5-chat{left:12px;right:12px;top:52px;bottom:150px}
-  .v5-work{left:12px;right:12px;top:48px;bottom:150px}
+  .v5-chat{max-width:none;top:52px;bottom:150px}
+  .v5-work{top:48px;bottom:150px}
+  .v5-task{max-width:none}
   .v5-grain{display:none}
 }
 @media (prefers-reduced-motion:reduce){
@@ -384,7 +449,10 @@ html[data-jarvis-ui='spatial_v5'] #modalRoot .modal{border:0!important;backgroun
 }
 
 /* ======================================================== APERÇU NAVIGATEUR */
-.v5-browser{position:fixed;top:200px;right:16px;bottom:132px;z-index:70;width:36vw;max-width:640px;min-width:320px;
+/* Le dock s'aligne sur --v5edge, la même marge que celle réservée par
+   --v5right. Une constante en dur ici laissait 2 px de recouvrement
+   avec la bande centrale aux points de rupture où --v5edge change. */
+.v5-browser{position:fixed;top:200px;right:var(--v5edge);bottom:132px;z-index:70;width:36vw;max-width:640px;min-width:320px;
   display:flex;flex-direction:column;border-radius:14px;background:rgba(4,16,26,.86);backdrop-filter:blur(16px);
   box-shadow:inset 0 0 0 1px rgba(120,200,230,.16),0 30px 80px -30px rgba(0,0,0,.95);
   overflow:hidden;opacity:0;translate:24px 0;filter:blur(6px);pointer-events:none;

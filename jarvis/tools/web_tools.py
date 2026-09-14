@@ -456,6 +456,49 @@ registry.add(
 )
 
 
+def _email_process_inbox(ctx: ToolContext) -> ToolResult:
+    """Lit la boîte et classe chaque message. Ne modifie jamais la boîte."""
+    from ..mail import MailProcessor, summarize
+
+    args = ctx.arguments
+    use_mock = args.get("use_mock")
+    result = MailProcessor(ctx.core).process(
+        limit=int(args.get("limit") or 20),
+        unread_only=bool(args.get("unread_only", False)),
+        connector_id=str(args.get("connector_id") or ""),
+        use_mock=None if use_mock is None else bool(use_mock),
+        task_id=ctx.task_id,
+    )
+    if not result.get("ok"):
+        return ToolResult(False, summarize(result))
+    return ToolResult(True, summarize(result), data={
+        "source": result["source"], "total": result["total"],
+        "counts": result["counts"], "cards": result["cards"],
+    })
+
+
+registry.add(
+    id="email.process_inbox", name="Trier la boîte de réception", category="Communication",
+    description=(
+        "Lit les messages reçus et les classe en cinq catégories : à répondre, "
+        "à transférer, factures, devis, archives. Chaque message est rendu avec "
+        "le motif de son classement. Lecture seule : rien n'est envoyé, déplacé "
+        "ni supprimé. Utilise le connecteur IMAP configuré, ou la boîte de "
+        "démonstration locale si aucun n'est disponible."
+    ),
+    # Le connecteur est résolu par MailProcessor (IMAP réel ou mock local) :
+    # on ne déclare pas connector_type, sinon l'absence de connecteur IMAP
+    # rendrait l'outil inappelable même avec la boîte de démonstration.
+    handler=_email_process_inbox, risk=READ_ONLY, agents=("jarvis", "email"),
+    input_schema={"type": "object", "properties": {
+        "connector_id": {"type": "string", "description": "Connecteur IMAP à utiliser (optionnel)."},
+        "limit": {"type": "integer", "description": "Nombre maximum de messages à trier (défaut 20)."},
+        "unread_only": {"type": "boolean", "description": "Ne trier que les messages non lus."},
+        "use_mock": {"type": "boolean", "description": "Forcer la boîte de démonstration locale."}},
+        "required": []},
+)
+
+
 # --- Météo (Open-Meteo, gratuit sans clé) -----------------------------------
 _WMO_CODES = {
     0: "ciel dégagé", 1: "peu nuageux", 2: "partiellement nuageux", 3: "couvert",

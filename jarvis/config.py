@@ -207,6 +207,15 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "speak_important": False,
         "levels": ["info", "warn", "error", "live", "tip"],
     },
+    "files": {
+        # Pièces jointes envoyées à JARVIS depuis la command bar.
+        "max_upload_size_mb": 25,
+        "max_image_size_mb": 15,
+        "max_attachments_per_message": 6,
+        "attachment_ttl_hours": 24,
+        "text_context_chars": 30000,
+        "pdf_page_context": 25,
+    },
     "developer": {
         "debug": False,
         "log_level": "INFO",

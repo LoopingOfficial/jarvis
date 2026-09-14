@@ -20,6 +20,8 @@ import { AvatarFaceController } from './face_controller.js';
 import { GazeController, GesturePlanner, HumanBehaviorController, LipSyncController }
   from './behavior.js';
 import { CameraDirector, LocomotionController, Stage } from './locomotion.js';
+import { RoomEnvironment } from '../../vendor/RoomEnvironment.js';
+import { JarvisAnimationStateController } from './animation_state.js';
 
 const clamp = THREE.MathUtils.clamp;
 
@@ -70,7 +72,7 @@ export class JarvisAvatar {
   constructor(options = {}) {
     this.canvas = options.canvas;
     this.quality = QUALITY[options.quality] ? options.quality : 'balanced';
-    this.modelUrl = options.modelUrl || '/assets/avatar/jarvis_avatar.glb';
+    this.modelUrl = options.modelUrl || '/assets/avatar/jarvis_premium.glb';
     this.viewMode = options.viewMode || 'CALL';   // CALL | FULL_BODY
     this.state = 'IDLE';
     this.reason = '';
@@ -85,6 +87,9 @@ export class JarvisAvatar {
     this._fpsSamples = [];
     this.fps = 0;
     this.gpuBusy = false;
+    this.contextLost = false;
+    this._visible = true;      // onglet au premier plan
+    this._onScreen = true;     // canvas dans le viewport
 
     this._initScene();
     this._load();
@@ -111,6 +116,22 @@ export class JarvisAvatar {
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2(0x05080f, 0.14);
     this.camera = new THREE.PerspectiveCamera(34, width / height, 0.05, 60);
+
+    // IBL — SANS LUI, RIEN N'EST PBR.
+    // Les matériaux portaient déjà `envMapIntensity`, mais `scene.environment`
+    // n'était jamais défini : la peau et les yeux ne recevaient donc AUCUNE
+    // réflexion spéculaire et tout paraissait en plastique mat. C'est la
+    // correction la plus rentable de tout le pipeline.
+    this._pmrem = new THREE.PMREMGenerator(this.renderer);
+    this._pmrem.compileEquirectangularShader();
+    const room = new RoomEnvironment();
+    this._envRT = this._pmrem.fromScene(room, 0.035);
+    this.scene.environment = this._envRT.texture;
+    room.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      const list = Array.isArray(o.material) ? o.material : [o.material];
+      list.forEach((m) => m?.dispose?.());
+    });
 
     // Éclairage portrait : clé chaude, remplissage froid, contre-jour cyan.
     const hemi = new THREE.HemisphereLight(0x9fbce8, 0x0a0f18, 0.72);
@@ -191,6 +212,67 @@ export class JarvisAvatar {
 
     this._resizeObserver = new ResizeObserver(() => this._resize());
     this._resizeObserver.observe(canvas);
+    this._bindLifecycle();
+  }
+
+  /**
+   * Le GPU sert aussi Ollama/ComfyUI et l'utilisateur change d'onglet : rendre
+   * un avatar que personne ne regarde est du GPU volé. On suspend le rendu
+   * sans toucher à l'horloge logique, et on encaisse proprement une perte de
+   * contexte WebGL (pilote qui redémarre, mise en veille) au lieu de mourir.
+   */
+  _bindLifecycle() {
+    const canvas = this.canvas;
+
+    this._onContextLost = (event) => {
+      event.preventDefault();          // sinon le contexte n'est jamais restauré
+      this.contextLost = true;
+      console.warn('[avatar] contexte WebGL perdu — rendu suspendu');
+    };
+    this._onContextRestored = () => {
+      this.contextLost = false;
+      // L'IBL vit dans le contexte perdu : il faut le régénérer.
+      try {
+        this._envRT?.dispose();
+        this._pmrem?.dispose();
+        this._pmrem = new THREE.PMREMGenerator(this.renderer);
+        const room = new RoomEnvironment();
+        this._envRT = this._pmrem.fromScene(room, 0.035);
+        this.scene.environment = this._envRT.texture;
+      } catch (err) {
+        console.warn('[avatar] IBL non régénéré', err);
+      }
+      this._clock.getDelta();          // absorbe le dt accumulé
+      console.info('[avatar] contexte WebGL restauré');
+    };
+    canvas.addEventListener('webglcontextlost', this._onContextLost, false);
+    canvas.addEventListener('webglcontextrestored', this._onContextRestored, false);
+
+    this._onVisibility = () => {
+      this._visible = document.visibilityState !== 'hidden';
+      if (this._visible) this._clock.getDelta();
+    };
+    // L'etat initial compte : `visibilitychange` ne se declenche qu'au
+    // CHANGEMENT. Construit dans un document deja masque, l'avatar se croyait
+    // visible et `rendering` mentait — y compris a la sonde de performance,
+    // qui rendait alors un diagnostic errone.
+    this._visible = document.visibilityState !== 'hidden';
+    document.addEventListener('visibilitychange', this._onVisibility);
+
+    if (typeof IntersectionObserver === 'function') {
+      this._io = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          this._onScreen = e.isIntersecting;
+          if (this._onScreen) this._clock.getDelta();
+        }
+      }, { threshold: 0.01 });
+      this._io.observe(canvas);
+    }
+  }
+
+  /** Le rendu ne coûte du GPU que s'il sert réellement à quelqu'un. */
+  get rendering() {
+    return !this.contextLost && this._visible && this._onScreen;
   }
 
   _resize() {
@@ -220,6 +302,11 @@ export class JarvisAvatar {
         this.model, this.mixer, this.avatarRoot, this.stage);
       this.locomotion.bindRig(this.rig);
 
+      // Une seule table etat -> animation, lisible et testable, plutot que la
+      // logique eparpillee entre STATE_PROFILE, locomotion et gestes.
+      this.animation = new JarvisAnimationStateController(
+        this.model, this.locomotion, this.gestures, this.mixer);
+
       this.behavior.onPostureChange = () => this.locomotion.cycleIdle();
       this.locomotion.playIdle();
       this.setState('IDLE');
@@ -247,8 +334,13 @@ export class JarvisAvatar {
     }
     this.model = null;
     this.ready = false;
-    const base = (modelUrl || this.modelUrl).split('?')[0];
-    this.modelUrl = `${base}?v=${Date.now()}`;
+    // Un horodatage force le retelechargement A CHAQUE rechargement et annule
+    // tout cache. On conserve la version portee par l'URL quand il y en a une
+    // (avatar_source.js), et on ne force que si elle est absente.
+    const requested = modelUrl || this.modelUrl;
+    this.modelUrl = requested.includes('?v=')
+      ? requested
+      : `${requested.split('?')[0]}?v=${Date.now()}`;
     await this._load();
   }
 
@@ -267,21 +359,51 @@ export class JarvisAvatar {
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const mat of mats) {
         if (!mat) continue;
-        if (mat.name === 'Accent') {
+        const mname = mat.name || '';
+
+        // Le GLB exporte TOUT en doubleSided. Sur un volume fermé c'est inutile
+        // (double coût de fill) et surtout destructeur pour la peau : les faces
+        // arrière s'ombrent avec une normale inversée et salissent le visage.
+        mat.side = THREE.FrontSide;
+        mat.envMapIntensity = 1.0;
+
+        if (mname === 'Accent') {
           // Le rappel cyan doit rester un détail, pas une enseigne.
-          // Un « rappel JARVIS » doit se deviner, pas s'annoncer.
           mat.emissiveIntensity = 0.05;
           mat.color.setHex(0x1f6f7d);
         }
-        if (/Skin/.test(mat.name || '')) {
-          mat.roughness = 0.58;
-          mat.envMapIntensity = 1.15;
-        }
-        if (/Sclera|Iris|Pupil/.test(mat.name || '')) {
-          // Un œil sans reflet spéculaire paraît mort.
-          mat.roughness = 0.12;
+        if (/Skin/.test(mname)) {
+          // Peau : la rugosité uniforme est ce qui donne l'aspect « mannequin ».
+          // Sans carte de rugosité (le mesh n'a pas d'UV), on compense par un
+          // spéculaire faible mais présent, nourri par l'IBL.
+          mat.roughness = 0.52;
           mat.metalness = 0.0;
+          mat.envMapIntensity = 1.25;
         }
+        if (/Hair/.test(mname)) {
+          // Les cheveux sont un volume solide : un spéculaire large et doux
+          // suggère la mèche là où la géométrie ne peut pas la décrire.
+          mat.roughness = 0.34;
+          mat.metalness = 0.12;
+          mat.envMapIntensity = 1.5;
+        }
+        if (/Sclera/.test(mname)) {
+          mat.roughness = 0.08;
+          mat.metalness = 0.0;
+          mat.envMapIntensity = 2.2;
+        }
+        if (/Iris|Pupil|Cornea/.test(mname)) {
+          // Un œil sans reflet spéculaire paraît mort : c'est le point de vie
+          // le plus rentable de tout le visage.
+          mat.roughness = 0.05;
+          mat.metalness = 0.0;
+          mat.envMapIntensity = 2.6;
+        }
+        if (/Brows/.test(mname)) {
+          mat.roughness = 0.75;
+          mat.envMapIntensity = 0.6;
+        }
+        mat.needsUpdate = true;
       }
     }
     // Frustum d'ombre serré autour du personnage : bien plus de texels utiles
@@ -314,13 +436,8 @@ export class JarvisAvatar {
       this.behavior.setEnergy(profile.energy);
     }
     if (this.gaze) this.gaze.attention = profile.attention ?? 0.6;
-    if (this.locomotion && profile.idle) this.locomotion.playIdle(profile.idle);
-
-    // Un geste marquant n'est joué qu'à l'entrée dans l'état, jamais en boucle.
-    if (profile.gesture && profile.gestureEvery >= 99 && this.gestures) {
-      this.gestures.play('gesture_' + profile.gesture, 0.75);
-    }
-    this._gestureTimer = profile.gestureEvery || 6;
+    // Clip de base + geste marquant : delegue au controleur d'animation.
+    if (this.animation) this.animation.setState(next);
 
     if (next === 'SPEAKING' && this.behavior) this.behavior.triggerBlink();
     if (this.onStateChange) this.onStateChange(next, extra);
@@ -345,6 +462,48 @@ export class JarvisAvatar {
 
   setAudioLevel(level) {
     if (this.lipsync) this.lipsync.setAmplitude(level);
+  }
+
+  /**
+   * Émotion explicite, indépendante de l'état machine.
+   * Un état dit ce que JARVIS FAIT ; une émotion dit sur quel TON il le fait.
+   * Les deux sont volontairement dissociés : on peut penser sereinement ou
+   * annoncer une erreur sans grimace.
+   */
+  setEmotion(emotion, { intensity = 1 } = {}) {
+    if (!this.behavior) return false;
+    const MOODS = ['neutral', 'friendly', 'attentive', 'thinking',
+      'concerned', 'pleased', 'focused'];
+    const ALIAS = { positive: 'pleased', happy: 'pleased', calm: 'neutral',
+      serious: 'focused', worried: 'concerned' };
+    const key = String(emotion || '').toLowerCase();
+    const mood = MOODS.includes(key) ? key : ALIAS[key];
+    if (!mood) return false;
+    this.behavior.setMood(mood);
+    this.behavior.setEnergy(clamp(0.3 + intensity * 0.45, 0, 1));
+    this.emotion = mood;
+    return true;
+  }
+
+  /**
+   * Retour à l'état neutre : coupe la parole, relâche les gestes, efface les
+   * morphs faciaux et ramène le regard caméra. Utilisé entre deux échanges et
+   * par les tests — après `reset()`, aucune frame antérieure ne doit subsister.
+   */
+  reset() {
+    if (!this.ready) return false;
+    this.lipsync?.stop({ fade: 0 });
+    this.gestures?.release(0.15);
+    this.face?.clearMouth();
+    this.face?.setBlink(0, 0);
+    this.model?.clearMorphs();
+    this.behavior?.setMood('neutral');
+    this.behavior?.setEnergy(0.35);
+    this.emotion = 'neutral';
+    this.state = '';                 // force la transition dans setState
+    this.setState('IDLE');
+    this.locomotion?.playIdle();
+    return true;
   }
 
   /** API publique stable pour les expressions/visèmes externes (TTS/UI). */
@@ -444,6 +603,12 @@ export class JarvisAvatar {
   _animate() {
     if (this._destroyed) return;
     requestAnimationFrame(() => this._animate());
+    if (!this.rendering) {
+      // Onglet caché, avatar hors écran ou contexte perdu : on ne simule ni ne
+      // rend. L'horloge est relue à la reprise pour éviter un saut de dt.
+      this._clock.getDelta();
+      return;
+    }
     const dt = Math.min(this._clock.getDelta(), 0.06);
     this._update(dt);
     this.renderer.render(this.scene, this.camera);
@@ -463,6 +628,9 @@ export class JarvisAvatar {
     this.avatarRoot.updateMatrixWorld(true);
     this._updateGazeTarget(dt);
     this.gaze.update(dt);
+
+    // 3 bis. sourcils : ils suivent browUp/browDown sans etre fusionnes
+    this._updateBrows();
 
     // 4. parole
     this.lipsync.update(dt);
@@ -485,8 +653,8 @@ export class JarvisAvatar {
     this.avatarRoot.updateMatrixWorld(true);
     this.locomotion.applyFootIK();
 
-    // gestes conversationnels occasionnels
-    this._updateAmbientGesture(dt);
+    // recouvrements conversationnels occasionnels
+    if (this.animation) this.animation.update(dt);
     this.gestures.update(dt);
 
     // 7. caméra : elle suit le corps, jamais l'inverse
@@ -504,6 +672,29 @@ export class JarvisAvatar {
       this.ring.material.opacity = pulse
         + Math.sin(performance.now() / 900) * 0.04;
     }
+  }
+
+  /**
+   * Les sourcils sont un objet SEPARE, rigidement attache a l'os `head` : les
+   * fusionner dans le corps (pour qu'ils heritent des morphs) produisait une
+   * geometrie qui n'etait plus rendue du tout. On les fait donc suivre le
+   * morph par un simple decalage de transform, en repere local de l'os.
+   *
+   * L'amplitude reprend celle de la shape key browUp mesuree au build
+   * (4,5 mm de course) : les sourcils et l'arcade restent solidaires.
+   */
+  _updateBrows() {
+    if (!this.model) return;
+    if (this._brows === undefined) {
+      this._brows = this.model.root.getObjectByName('JARVIS_Brows') || null;
+      if (this._brows) this._browRest = this._brows.position.clone();
+    }
+    if (!this._brows) return;
+    const up = this.model.getMorph('browUp');
+    const down = this.model.getMorph('browDown');
+    // repere glTF : Y vers le haut une fois converti par le chargeur
+    this._brows.position.copy(this._browRest);
+    this._brows.position.y += (up * 0.0045) - (down * 0.0040);
   }
 
   _updateGazeTarget(dt) {
@@ -578,7 +769,13 @@ export class JarvisAvatar {
   dispose() {
     this._destroyed = true;
     if (this._resizeObserver) this._resizeObserver.disconnect();
+    if (this._io) this._io.disconnect();
+    document.removeEventListener('visibilitychange', this._onVisibility);
+    this.canvas?.removeEventListener('webglcontextlost', this._onContextLost);
+    this.canvas?.removeEventListener('webglcontextrestored', this._onContextRestored);
     if (this.model) this.model.dispose();
+    this._envRT?.dispose();
+    this._pmrem?.dispose();
     if (this.renderer) this.renderer.dispose();
   }
 }

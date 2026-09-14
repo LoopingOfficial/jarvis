@@ -150,6 +150,13 @@ class BrainManager:
         # Nœuds persistés supplémentaires (brain_nodes).
         for row in core.db.query("SELECT * FROM brain_nodes ORDER BY updated_at DESC LIMIT 150"):
             meta = loads(row["meta"], {})
+            # La référence d'origine (ref_type/ref_id) est publiée : sans elle,
+            # l'interface ne peut pas savoir qu'un nœud persisté et une fiche
+            # de connaissance décrivent le même concept, et les afficherait en
+            # double. Ajout purement additif : aucun champ existant ne change.
+            if row["ref_type"] or row["ref_id"]:
+                meta = {**meta, "ref_type": row["ref_type"], "ref_id": row["ref_id"]}
+            meta = {**meta, "created_at": row["created_at"], "updated_at": row["updated_at"]}
             add_node(row["id"], row["family"], row["label"][:60], kind=row["kind"],
                      weight=float(row["weight"] or 1.0), meta=meta)
             if row["family"] == "KNOWLEDGE" or row["kind"] == "procedure":

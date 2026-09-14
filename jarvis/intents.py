@@ -71,12 +71,18 @@ def detect_read_only_intent(text: str) -> ReadOnlyIntent:
     # Do not interpret filenames such as security.php or write-test.php as verbs.
     words = _ANALYSIS_TARGET.sub(" ", value)
     editing = has_write_intent(value)
+    # « analyse »/« inspecte » décrivent souvent une lecture de contenu.
+    # Une demande d'inspection/analyse bornée sur un fichier est historiquement
+    # traitée par l'audit read-only. Le routeur principal garde priorité aux
+    # ressources (notamment Google Sheet) et à MODEL_ONLY avant cette politique.
     audit = bool(re.search(
-        r"\b(?:analys\w*|audit\w*|inspect\w*|review|revue|failles?|"
-        r"vuln[ée]rabilit[ée]s?|s[ée]curit[ée]|security)\b", words, re.I))
+        r"\b(?:audit\w*|failles?|vuln[ée]rabilit[ée]s?|s[ée]curit[ée]|security|"
+        r"injection|owasp|csrf|xss|secrets?|permissions?)\b", words, re.I))
     reading = bool(_READ_ONLY_REQUEST.search(words) or
                    re.search(r"\b(?:comment|pourquoi|propose|sugg[èe]re)\b", words, re.I))
-    if constrained or (audit and not editing):
+    audit_request = audit or constrained or (target and bool(re.search(
+        r"\b(?:analyse\w*|inspect\w*|readonly|read\s*only)\b", words, re.I)))
+    if audit_request and not editing:
         mode = "security_audit_readonly"
     elif editing:
         mode = "file_edit"

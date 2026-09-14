@@ -106,6 +106,23 @@ CREATE INDEX IF NOT EXISTS idx_feed_ts ON feed(ts);
 
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, type TEXT, payload TEXT);
 
+-- CRM local. Table additive : `CREATE TABLE IF NOT EXISTS` est rejoué à chaque
+-- ouverture, donc les bases existantes la reçoivent sans migration.
+CREATE TABLE IF NOT EXISTS crm_contacts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  company TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  vat_number TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at REAL,
+  updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_crm_name ON crm_contacts(name);
+CREATE INDEX IF NOT EXISTS idx_crm_company ON crm_contacts(company);
+
 CREATE TABLE IF NOT EXISTS workflows (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT DEFAULT '',
   trigger TEXT NOT NULL DEFAULT '{}', steps TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1,

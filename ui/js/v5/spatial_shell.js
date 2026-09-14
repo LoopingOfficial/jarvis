@@ -68,7 +68,8 @@
     home:[['ACCUEIL'],['command','Command Center']],
     chat:[['CONVERSATION'],['chat','Chat'],['__voice','Mode Vocal']],
     brain:[['BRAIN ATLAS'],['memory','Brain & Mémoire'],['knowledge','Connaissances'],['conversations','Conversations']],
-    agents:[['AGENTS & TÂCHES'],['agents','Agents IA'],['tasks','Tâches'],['projects','Projets']],
+    agents:[['AGENTS & TÂCHES'],['agents','Agents IA'],['tasks','Tâches'],['projects','Projets'],
+      ['COURRIER'],['__mail','Kanban Courrier']],
     tools:[['OUTILS'],['tools','Catalogue d\'outils'],['terminal','Terminal'],['calendar','Calendrier'],['learning','Apprentissage']],
     sync:[['SYNCHRONISATION'],['servers','Sites & Serveurs'],['workflows','Automatisations']],
     workspace:[['ESPACE DE TRAVAIL'],['code','Fichiers & Code'],['analyses','Observatoire / Analyses'],['__workspace','Analysis Workspace']],
@@ -238,6 +239,16 @@
       }
       const input = byId('convInput');
       if(input) input.setAttribute('placeholder','Demandez quelque chose à JARVIS…');
+
+      // La barre de commande change de hauteur (saisie multi-lignes, mode
+      // écoute). Le bandeau de tâche s'ancre dessus via --cmdh plutôt que sur
+      // une constante : sans ça, la checklist passe derrière le composeur.
+      if(cmd && typeof ResizeObserver === 'function'){
+        const sync = () => document.documentElement.style.setProperty(
+          '--cmdh', Math.round(cmd.getBoundingClientRect().height) + 'px');
+        new ResizeObserver(sync).observe(cmd);
+        sync();
+      }
     },
 
     mountBrain(){
@@ -379,6 +390,12 @@
         const mode=String(target).split('|')[1];
         try{ localStorage.setItem(MODE_KEY, mode); }catch(_){ /* stockage indisponible */ }
         location.reload();
+        return;
+      }
+      if(target==='__mail'){
+        // Le Kanban est un panneau autonome : il ne remplace pas la page
+        // courante, il s'ouvre dans la bande de travail.
+        window.JarvisMailKanban?.show();
         return;
       }
       if(target==='__workspace'){
@@ -685,7 +702,10 @@
       if(meta) meta.textContent=extra||'';
       byId('v5Cmd')?.classList.toggle('busy', status==='run');
       clearTimeout(this._taskT);
-      if(status==='done'||status==='err') this._taskT=setTimeout(()=>{ el.hidden=true; byId('v5Cmd')?.classList.remove('busy'); }, 4200);
+      if(status==='done'||status==='err') this._taskT=setTimeout(()=>{
+        el.hidden=true; byId('v5Cmd')?.classList.remove('busy');
+        this.setTaskSteps(null);   // la checklist reste lisible jusqu'ici
+      }, 4200);
       this._syncRpanelAgent(status, pub);
     },
     _syncRpanelAgent(status, title){
@@ -708,17 +728,27 @@
       const el=byId('v5RpCtx');
       if(el) el.textContent='—';
     },
+    /* Checklist d'exécution — chaque ligne correspond à une étape que le
+       backend a réellement déclarée (pipeline à phases) ou réellement
+       exécutée (boucle d'outils). Aucune étape n'est anticipée ici. */
     setTaskSteps(steps){
       const host=byId('v5TaskSteps'); if(!host) return;
       if(!steps||!steps.length){ host.hidden=true; host.replaceChildren(); return; }
+      const GLYPH={done:'✓', run:'●', err:'✕', idle:'○'};
+      const done=steps.filter(s=>s.state==='done').length;
+      const total=steps.length;
       host.hidden=false;
       host.replaceChildren();
-      steps.forEach(s=>{
+      steps.forEach((s,i)=>{
+        const st=GLYPH[s.state]?s.state:'idle';
         const n=document.createElement('span');
-        n.dataset.st=s.state||'';
-        n.textContent=s.label+(s.state==='done'?' ✓':s.state==='run'?' ●':' ○');
+        n.dataset.st=st;
+        n.title=s.label||'';
+        n.textContent=`[${i+1}/${total}] ${s.label} ${GLYPH[st]}`;
         host.appendChild(n);
       });
+      const meta=byId('v5TaskMeta');
+      if(meta && done<total) meta.textContent=`${done}/${total}`;
     },
 
     /* --------------------------------------------- activité & cartes outil */

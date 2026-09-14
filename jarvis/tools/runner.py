@@ -16,6 +16,7 @@ Le LLM ne voit jamais un secret : il ne manipule qu'un `connector_id`.
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 import posixpath
@@ -180,17 +181,20 @@ class SecureToolRunner:
                     and resolved.task_id == task_id):
                 confirmed = True
             else:
-                action_desc = self._describe(tool, arguments, connector)
+                readable = self._readable_arguments(arguments)
+                action_desc = self._describe(tool, readable, connector)
+                speech_desc = self._describe_speech(tool, readable, connector)
                 reason = tool.dangerous_hint or (
                     "Cette action est irréversible." if risk == DESTRUCTIVE else "Cette action modifie un système."
                 )
                 pending = core.permissions.create_pending(
                     tool=tool_id, action=action_desc, risk=risk, reason=reason,
-                    arguments=arguments, task_id=task_id,
+                    arguments=arguments, task_id=task_id, speech=speech_desc,
                 )
                 core.events.emit("task.waiting_confirmation", {
                     "confirmation_id": pending.id, "tool": tool_id, "action": action_desc,
-                    "risk": risk, "risk_label": RISK_LABELS.get(risk, risk), "reason": reason, "task_id": task_id,
+                    "risk": risk, "risk_label": RISK_LABELS.get(risk, risk), "reason": reason,
+                    "speech": speech_desc, "task_id": task_id,
                 })
                 core.audit.record(action=f"Confirmation demandée: {action_desc}", tool=tool_id, agent=agent,
                                   connector_id=(connector or {}).get("id", ""), status="pending", task_id=task_id)
@@ -262,13 +266,74 @@ class SecureToolRunner:
         # connexion n'est modifié que par un vrai test de connectivité.
         return result
 
+
+    # Un identifiant interne (« ct_sophie_renard ») n'a aucun sens dans une
+    # question de confirmation, et encore moins lu à voix haute. On le remplace
+    # par le nom réel quand on peut le résoudre ; sinon on le retire, plutôt
+    # que de faire énoncer une chaîne technique.
+    _RE_INTERNAL_ID = re.compile(r"^[a-z]{2,8}_[a-z0-9_]{3,}$")
+
+    def _readable_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        out = dict(arguments)
+        for key in ("contact", "client", "contact_id"):
+            value = out.get(key)
+            if not isinstance(value, str) or not self._RE_INTERNAL_ID.match(value):
+                continue
+            label = ""
+            try:
+                store = getattr(self._core, "crm", None)
+                record = store.get(value) if store else None
+                if record:
+                    label = str(record.get("name") or "").strip()
+                    company = str(record.get("company") or "").strip()
+                    if company:
+                        label = f"{label} ({company})" if label else company
+            except Exception:
+                label = ""
+            if label:
+                out[key] = label
+            else:
+                out.pop(key, None)
+        return out
+
     @staticmethod
     def _describe(tool: Tool, arguments: dict[str, Any], connector: dict[str, Any] | None) -> str:
         bits = [tool.name]
         if connector:
             bits.append(f"→ {connector['name']}")
-        for key in ("command", "path", "query", "url", "workflow", "message", "task", "name"):
+        for key in ("command", "path", "query", "url", "workflow", "message", "task", "name",
+                    "contact", "to"):
             if arguments.get(key):
                 bits.append(f": {str(arguments[key])[:160]}")
                 break
         return " ".join(bits)[:400]
+
+    # Cibles lisibles à l'oral, par ordre de préférence. On ne dicte jamais un
+    # corps de message, une commande shell ou un chemin absolu : seul un
+    # destinataire ou un nom court a du sens à voix haute.
+    # « à Pierre » pour un destinataire ; « pour facture.pdf » pour un objet.
+    _SPEECH_RECIPIENT_KEYS = ("to", "recipient", "contact")
+    _SPEECH_OBJECT_KEYS = ("name", "workflow", "task")
+
+    @staticmethod
+    def _describe_speech(tool: Tool, arguments: dict[str, Any], connector: dict[str, Any] | None) -> str:
+        """Question de confirmation courte et directe, destinée au TTS."""
+
+        def pick(keys):
+            for key in keys:
+                value = arguments.get(key)
+                if (value and isinstance(value, str) and len(value) <= 60
+                        and "\n" not in value and not value.startswith(("http", "/", "\\"))):
+                    return value.strip()
+            return ""
+
+        phrase = tool.name
+        recipient = pick(SecureToolRunner._SPEECH_RECIPIENT_KEYS)
+        obj = pick(SecureToolRunner._SPEECH_OBJECT_KEYS)
+        if recipient:
+            phrase += f" à {recipient}"
+        elif obj:
+            phrase += f" pour {obj}"
+        elif connector:
+            phrase += f" via {connector['name']}"
+        return f"{phrase}. Tu confirmes ?"[:180]
