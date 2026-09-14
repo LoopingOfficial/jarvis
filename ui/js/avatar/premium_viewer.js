@@ -22,6 +22,10 @@ import { RenderPass } from 'three/addons/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/OutputPass.js';
 
+// Un avatar de vitrine n'a pas besoin du plein ratio de pixels : a 1.5 le
+// gain visuel est nul a cette taille, le cout de remplissage baisse de 44 %.
+const PIXEL_RATIO = Math.min(devicePixelRatio || 1, 1.5);
+
 const DEFAULTS = {
   url: '/assets/avatar/rp_manuel_dancing.glb',
   // Cadrage : marge autour du sujet, et hauteur visée du regard (0 = pieds,
@@ -39,7 +43,11 @@ const DEFAULTS = {
   // très vite en ACESFilmic, et la lumière écrase alors tout le modelé du
   // visage et des plis du vêtement.
   exposure: 0.72,
-  shadows: true,
+  // Ombre portee temps reel : DESACTIVEE par defaut. Elle oblige a rendre le
+  // maillage skinne une seconde fois par frame dans la shadow map — sur un rig
+  // de 724 os et 100 000 triangles, c'est le poste le plus cher de la scene,
+  // pour une tache floue qu'une ombre peinte rend aussi bien.
+  shadows: false,
   autoRotate: false,
   platform: true,
   // Ancre la racine : l'avatar danse sur place au lieu de traverser la scène.
@@ -137,7 +145,7 @@ export async function createAvatarViewer(options = {}) {
   const renderer = new THREE.WebGLRenderer({
     antialias: true, alpha: true, powerPreference: 'high-performance',
   });
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));   // au-delà de 2 : coût x2 pour rien
+  renderer.setPixelRatio(PIXEL_RATIO);   // au-delà de 2 : coût x2 pour rien
   renderer.setClearColor(0x000000, 0);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;           // OutputPass la relit
   renderer.toneMappingExposure = opts.exposure;
@@ -170,7 +178,7 @@ export async function createAvatarViewer(options = {}) {
   key.position.set(2.6, 4.2, 3.2);
   if (opts.shadows) {
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.mapSize.set(1024, 1024);   // 2048 quadruplait le cout pour une ombre floue
     key.shadow.bias = -0.0008;                                  // supprime le moiré d'ombre
     key.shadow.normalBias = 0.02;
     const c = key.shadow.camera;
@@ -193,13 +201,36 @@ export async function createAvatarViewer(options = {}) {
   /* ------------------------------------------------ plateforme HUD au sol */
   const floorGroup = new THREE.Group();
   if (opts.platform) {
-    const shadowCatcher = new THREE.Mesh(
-      new THREE.PlaneGeometry(14, 14),
-      new THREE.ShadowMaterial({ opacity: 0.45 }),               // invisible sauf l'ombre
-    );
-    shadowCatcher.rotation.x = -Math.PI / 2;
-    shadowCatcher.receiveShadow = true;
-    floorGroup.add(shadowCatcher);
+    if (opts.shadows) {
+      const shadowCatcher = new THREE.Mesh(
+        new THREE.PlaneGeometry(14, 14),
+        new THREE.ShadowMaterial({ opacity: 0.45 }),             // invisible sauf l'ombre
+      );
+      shadowCatcher.rotation.x = -Math.PI / 2;
+      shadowCatcher.receiveShadow = true;
+      floorGroup.add(shadowCatcher);
+    } else {
+      // Tache d'ombre peinte : un degrade radial en additif inverse. Coût nul,
+      // et a cette distance l'oeil ne distingue pas une ombre calculee.
+      const blob = document.createElement('canvas');
+      blob.width = blob.height = 128;
+      const bx = blob.getContext('2d');
+      const grd = bx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      grd.addColorStop(0, 'rgba(0,0,0,.72)');
+      grd.addColorStop(0.55, 'rgba(0,0,0,.28)');
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      bx.fillStyle = grd; bx.fillRect(0, 0, 128, 128);
+      const tex = new THREE.CanvasTexture(blob);
+      const shade = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.7, 1.7),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.85, depthWrite: false }),
+      );
+      shade.rotation.x = -Math.PI / 2;
+      shade.position.y = 0.004;
+      floorGroup.add(shade);
+      // Pas de liste de libération ici : dispose() parcourt la scène et libère
+      // géométries, matériaux et textures, celle-ci comprise.
+    }
 
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(0.92, 1.0, 96),
@@ -416,8 +447,11 @@ export async function createAvatarViewer(options = {}) {
   /* -------------------------------------------------- post-processing */
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
+  // Le bloom travaille en demi-resolution : c'est un flou, personne ne voit la
+  // difference, et il traite quatre fois moins de pixels par passe.
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(1, 1), opts.bloom.strength, opts.bloom.radius, opts.bloom.threshold);
+  bloom.resolution.set(1, 1);
   composer.addPass(bloom);
   // OutputPass applique le tone mapping et la conversion sRGB EN FIN de chaîne.
   // Sans lui, avec un composer, l'image ressort délavée et trop claire.
@@ -429,12 +463,12 @@ export async function createAvatarViewer(options = {}) {
     const w = box.clientWidth || 1;
     const h = box.clientHeight || 1;
     if (!w || !h) return;                       // conteneur non encore disposé : ne rien figer
-    const ratio = Math.min(devicePixelRatio || 1, 2);
+    const ratio = PIXEL_RATIO;
     renderer.setPixelRatio(ratio);
     renderer.setSize(w, h, false);
     composer.setPixelRatio(ratio);
     composer.setSize(w, h);
-    bloom.setSize(w, h);
+    bloom.setSize(Math.max(2, Math.round(w / 2)), Math.max(2, Math.round(h / 2)));
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     // Le cadrage dépend de l'aspect : sans ce recadrage, passer en fenêtre
