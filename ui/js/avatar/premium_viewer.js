@@ -78,6 +78,50 @@ function fitDistance(camera, radius, margin) {
   return Math.max(forVertical, forHorizontal) * margin;
 }
 
+/* -------------------------------------------------------------------------
+   Poses figées et vie du personnage
+   ------------------------------------------------------------------------- */
+
+/** Bones de déformation utiles, par motif. Un rig Rigify exporté en glTF ne
+ *  conserve QUE les os `DEF-` comme os de skinning : les contrôleurs FK/IK
+ *  sortent inertes, les animer n'aurait aucun effet visible. */
+function findBones(model) {
+  let skeleton = null;
+  model.traverse((n) => { if (!skeleton && n.isSkinnedMesh) skeleton = n.skeleton; });
+  if (!skeleton) return {};
+  const by = (re) => skeleton.bones.find((b) => re.test(b.name)) || null;
+  return {
+    skeleton,
+    hips: by(/^(DEF-)?(pelvis|hips)$/i) || by(/pelvis|hips/i),
+    spine: by(/^DEF-spine$/i) || by(/^spine$/i),
+    chest: by(/^DEF-spine00[23]$/i) || by(/chest/i),
+    head: by(/^DEF-spine006$/i) || by(/^DEF-head$/i) || by(/head/i),
+    armL: by(/^DEF-upper_arm.*L$/i) || by(/upper_?arm.*l$/i),
+    armR: by(/^DEF-upper_arm.*R$/i) || by(/upper_?arm.*r$/i),
+    handL: by(/^DEF-handL$/i), handR: by(/^DEF-handR$/i),
+  };
+}
+
+/** Pose la plus « au repos » : mains les plus basses par rapport au bassin. */
+function pickRestPose(model, mixer, clips) {
+  const bones = findBones(model);
+  if (!bones.hips || !bones.handL || !bones.handR) return null;
+  const tmp = new THREE.Vector3();
+  let best = null, bestScore = Infinity;
+  for (const candidate of clips) {
+    mixer.stopAllAction();
+    mixer.clipAction(candidate).play();
+    mixer.setTime(candidate.duration || 0.01);
+    model.updateWorldMatrix(true, true);
+    const hipY = bones.hips.getWorldPosition(tmp).y;
+    const score = (bones.handL.getWorldPosition(new THREE.Vector3()).y - hipY)
+                + (bones.handR.getWorldPosition(new THREE.Vector3()).y - hipY);
+    if (score < bestScore) { bestScore = score; best = candidate; }
+  }
+  mixer.stopAllAction();
+  return best;
+}
+
 export async function createAvatarViewer(options = {}) {
   const opts = { ...DEFAULTS, ...options, bloom: { ...DEFAULTS.bloom, ...(options.bloom || {}) } };
   const host = opts.host;
@@ -221,16 +265,25 @@ export async function createAvatarViewer(options = {}) {
   const mixer = new THREE.AnimationMixer(model);
   let action = null;
   let clip = null;
+  let poses = [];            // bibliothèque de poses figées, si c'en est une
   if (gltf.animations?.length) {
     // Un FBX importé se fragmente en un clip par chaîne d'os : ici 19 clips,
     // dont 18 ne portent que 3 canaux sur des os terminaux. Le vrai mouvement
     // est celui qui pilote le plus de canaux — on ne prend donc pas [0].
-    // Une T-pose ou une A-pose est une pose de RÉFÉRENCE, pas une animation :
-    // l'afficher donne un mannequin bras en croix. On l'écarte s'il existe
-    // autre chose, puis on prend le clip qui pilote le plus de canaux.
+    // Une T-pose ou une A-pose est une pose de RÉFÉRENCE, pas une animation.
     const usable = gltf.animations.filter((c) => !/t[-_ ]?pose|a[-_ ]?pose|bind/i.test(c.name || ''));
     const pool = usable.length ? usable : gltf.animations;
-    clip = pool.reduce((best, c) => (c.tracks.length > best.tracks.length ? c : best));
+
+    // Certains modèles n'embarquent que des POSES FIGÉES (durée quasi nulle) :
+    // en jouer une laisse le personnage bloqué dedans pour toujours. On choisit
+    // alors la plus reposante — celle dont les mains sont le plus bas par
+    // rapport au bassin — au lieu de prendre la première venue, qui ici était
+    // une main posée sur la tête.
+    const isPoseLibrary = pool.every((c) => (c.duration || 0) < 0.5);
+    clip = isPoseLibrary
+      ? pickRestPose(model, mixer, pool) || pool[0]
+      : pool.reduce((best, c) => (c.tracks.length > best.tracks.length ? c : best));
+    poses = isPoseLibrary ? pool : [];
 
     // Pistes d'échelle : à retirer sur ce type de rig.
     //
@@ -372,8 +425,9 @@ export async function createAvatarViewer(options = {}) {
 
   /* ------------------------------------------------------ redimensionnement */
   function resize() {
-    const w = host.clientWidth || 1;
-    const h = host.clientHeight || 1;
+    const box = renderer.domElement.parentElement || host;
+    const w = box.clientWidth || 1;
+    const h = box.clientHeight || 1;
     if (!w || !h) return;                       // conteneur non encore disposé : ne rien figer
     const ratio = Math.min(devicePixelRatio || 1, 2);
     renderer.setPixelRatio(ratio);
@@ -397,6 +451,97 @@ export async function createAvatarViewer(options = {}) {
   resize();
 
   /* ------------------------------------------------------ boucle de rendu */
+  /* --------------------------------------------------- vie du personnage */
+  // Le modèle n'embarque que des poses figées : sans cela il resterait
+  // strictement immobile, ce qui se remarque tout de suite et rend l'avatar
+  // mort. On superpose donc un mouvement PROCÉDURAL aux rotations posées par
+  // le mixer — respiration, report d'appui, micro-mouvements de tête.
+  const rig = findBones(model);
+  const idleState = { activity: 0, target: 0, gestureUntil: 0, nextLook: 0, look: { x: 0, y: 0 } };
+  const qTmp = new THREE.Quaternion();
+  const eTmp = new THREE.Euler();
+
+  // Rotation de repos de chaque os, capturée une fois. INDISPENSABLE : les
+  // clips de ce modèle durent 0,23 s ; passé ce délai le mixer cesse d'écrire
+  // les os, et une rotation simplement multipliée à chaque frame se compose à
+  // l'infini — le cou se vrillait complètement en deux secondes.
+  const baseRotations = new Map();
+
+  /** Compose depuis la pose de repos (jamais depuis la frame précédente). */
+  function addRotation(bone, x, y, z) {
+    if (!bone) return;
+    let base = baseRotations.get(bone);
+    if (!base) { base = bone.quaternion.clone(); baseRotations.set(bone, base); }
+    eTmp.set(x, y, z);
+    qTmp.setFromEuler(eTmp);
+    bone.quaternion.copy(base).multiply(qTmp);
+  }
+
+  /** À appeler quand la pose de fond change : les repères doivent suivre. */
+  function resetBaseRotations() { baseRotations.clear(); }
+
+  function animateIdle(t, dt) {
+    if (!rig.skeleton) return;
+    // L'activité monte vite et redescend lentement : un agent qui travaille
+    // doit se voir tout de suite, et l'apaisement doit rester naturel.
+    const speed = idleState.target > idleState.activity ? 3.5 : 0.6;
+    idleState.activity += (idleState.target - idleState.activity) * Math.min(1, dt * speed);
+    if (t > idleState.gestureUntil) idleState.target = 0;
+    const amp = 1 + idleState.activity * 1.6;
+
+    // Respiration : le thorax se soulève, le ventre suit avec un retard.
+    const breath = Math.sin(t * (0.85 + idleState.activity * 0.5));
+    addRotation(rig.chest, breath * 0.013 * amp, 0, 0);
+    addRotation(rig.spine, Math.sin(t * 0.85 - 0.6) * 0.006 * amp, 0, 0);
+
+    // Report d'appui : lent, asymétrique, jamais un balancier régulier.
+    const sway = Math.sin(t * 0.31) * 0.6 + Math.sin(t * 0.17 + 1.1) * 0.4;
+    addRotation(rig.hips, 0, sway * 0.02, sway * 0.012);
+    addRotation(rig.spine, 0, sway * -0.01, sway * -0.008);
+
+    // Bras : léger ballant, décalé entre les deux côtés.
+    addRotation(rig.armL, 0, 0, Math.sin(t * 0.43) * 0.02 * amp);
+    addRotation(rig.armR, 0, 0, Math.sin(t * 0.43 + 2.2) * -0.02 * amp);
+
+    // Tête : elle vise un point qui change de temps en temps, et y va en
+    // douceur. Une tête parfaitement immobile est ce qui trahit le plus un
+    // personnage sans vie.
+    if (t > idleState.nextLook) {
+      idleState.look.x = (Math.random() - 0.5) * 0.18;
+      idleState.look.y = (Math.random() - 0.5) * 0.34;
+      idleState.nextLook = t + 2.5 + Math.random() * 4;
+    }
+    addRotation(rig.head,
+      idleState.look.x + Math.sin(t * 0.7) * 0.012,
+      idleState.look.y + Math.sin(t * 0.53) * 0.016,
+      Math.sin(t * 0.29) * 0.01);
+  }
+
+  /** Enchaîne une pose de la bibliothèque, puis revient à la pose de repos. */
+  function playGesture(seconds = 2.4) {
+    idleState.target = 1;
+    idleState.gestureUntil = clock.elapsedTime + seconds;
+    if (poses.length < 2 || !action) return false;
+    const others = poses.filter((c) => c !== clip);
+    if (!others.length) return false;
+    const next = others[Math.floor(Math.random() * others.length)];
+    resetBaseRotations();
+    const gesture = mixer.clipAction(next);
+    gesture.reset();
+    gesture.setLoop(THREE.LoopOnce, 1);
+    gesture.clampWhenFinished = true;
+    gesture.play();
+    action.crossFadeTo(gesture, 0.45, false);
+    setTimeout(() => {
+      // Retour au repos : sans ce retour, chaque geste laisserait le
+      // personnage dans sa dernière pose, exactement le défaut d'origine.
+      action.reset().play();
+      gesture.crossFadeTo(action, 0.6, false);
+      setTimeout(resetBaseRotations, 700);   // après le fondu, pas pendant
+    }, seconds * 1000);
+    return true;
+  }
+
   const clock = new THREE.Clock();
   let raf = 0, running = true, fps = 0, acc = 0, frames = 0;
 
@@ -405,6 +550,8 @@ export async function createAvatarViewer(options = {}) {
     raf = requestAnimationFrame(loop);
     const dt = clock.getDelta();
     mixer.update(dt);
+    // APRÈS le mixer : on ajoute nos rotations à la pose qu'il vient d'écrire.
+    animateIdle(clock.elapsedTime, dt);
     applyAnchor();
 
     // Respiration lumineuse : discrète, et surtout pas sur le sujet lui-même.
@@ -472,6 +619,7 @@ export async function createAvatarViewer(options = {}) {
 
   return {
     scene, camera, renderer, composer, controls, model, mixer, action,
+    animations: gltf.animations || [],
     get fps() { return fps; },
     get framing() { return framing; },
     /** À appeler après un changement de pose/modèle : remesure et recadre. */
@@ -482,9 +630,25 @@ export async function createAvatarViewer(options = {}) {
       if (threshold !== undefined) bloom.threshold = threshold;
     },
     setAutoRotate(on) { controls.autoRotate = !!on; },
+    /** Réaction visible quand JARVIS agit réellement (événement du bus). */
+    gesture(seconds) { return playGesture(seconds); },
+    /** 0 = calme, 1 = actif : amplifie la respiration et le ballant. */
+    setActivity(level) {
+      idleState.target = Math.max(0, Math.min(1, Number(level) || 0));
+      idleState.gestureUntil = clock.elapsedTime + 3;
+    },
+    get poses() { return poses.map((c) => c.name); },
     pause() { running = false; cancelAnimationFrame(raf); },
     resume() { if (!running) { running = true; clock.getDelta(); raf = requestAnimationFrame(loop); } },
     resize,
+    /** Réinstalle le canvas dans un nouveau conteneur (page hôte re-rendue). */
+    attachTo(el) {
+      if (!el) return;
+      if (renderer.domElement.parentElement !== el) el.appendChild(renderer.domElement);
+      observer.disconnect();
+      observer.observe(el);
+      resize();
+    },
     dispose,
   };
 }
