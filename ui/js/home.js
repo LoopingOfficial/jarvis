@@ -82,7 +82,7 @@ const AppHome = {
     const st = await jget('/api/status');
     if (st.ok !== false && st.user_name) {
       const name = String(st.user_name).trim();
-      if (name) op.textContent = name.split(/\s/)[0];
+      if (name && op) op.textContent = name.split(/\s/)[0];
       const title = $('#operatorTitle');
       if (title && st.operator_title) title.textContent = st.operator_title;
     }

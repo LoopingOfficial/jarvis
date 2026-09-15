@@ -6,6 +6,25 @@
    - tts.*    → niveau sonore réel (bouche du robot)
    Rien n'est simulé : si le backend ne dit rien, rien ne bouge.
    ========================================================================== */
+const INERT_CLASSLIST = {
+  add() {}, remove() {}, toggle() {}, contains() { return false; },
+};
+// Cible factice renvoyee quand un element attendu est absent du DOM courant.
+const INERT = {
+  classList: INERT_CLASSLIST,
+  dataset: {},
+  style: {},
+  value: '',
+  textContent: '',
+  innerHTML: '',
+  hidden: false,
+  title: '',
+  addEventListener() {}, removeEventListener() {},
+  setAttribute() {}, getAttribute() { return null; },
+  focus() {}, blur() {}, click() {},
+  querySelector() { return null; }, querySelectorAll() { return []; },
+};
+
 const App = {
 NAV: [
     { label: 'CORE', items: [
@@ -49,10 +68,8 @@ NAV: [
     if (this.initialized) return;
     this.initialized = true;
     console.log('[JARVIS UI BOOT]', 'CHAT_RELOAD_FIX_20260911_A', Date.now(), performance.getEntriesByType('navigation'));
-    this.renderNav();
     this.bindUI();
     this.startClock();
-    this.startAnimation();
     J.connectStream();
     this.bindStream();
     CodeEnv.bind();
@@ -66,15 +83,13 @@ NAV: [
       J.state.settings = settings.settings;
       this.applyAppearance(settings.settings.appearance);
       await VoiceManager.init(settings.settings.voice);
-      const chip = $('#voiceModeChip');
+      const chip = $('#voiceModeChip') || INERT;
       chip.textContent = {
         push_to_talk: 'PTT', always_listening: 'AUTO', wake_word: 'WAKE', conversation: 'CONV',
       }[settings.settings.voice.mode] || '—';
       this.applyQualityListeners(settings.settings.appearance?.quality);
     }
 
-    Dashboard.refreshSoon(6000);
-    await Dashboard.refresh();
     AppHome?.render();
     const brain = window.JarvisBrain;
     if (brain) {
@@ -86,22 +101,9 @@ NAV: [
         if (hudE) hudE.textContent = counts.edges;
       };
     }
-    setInterval(() => Dashboard.refresh(), 6000);
     this.goto(location.hash.replace('#', '') || 'command');
   },
 
-  renderNav() {
-    const groups = this.NAV.map((g) => `
-      <div class="nav-group">
-        <div class="nav-group-label">${g.label}</div>
-        ${g.items.map(([id, label, ic]) => `
-          <button class="nav-item ${id === 'command' ? 'active' : ''}" data-nav="${id}" title="${label}">
-            ${icon(ic, 15)}<span>${label}</span>
-          </button>`).join('')}
-      </div>`).join('');
-    $('#nav').innerHTML = groups;
-    $$('[data-nav]').forEach((b) => b.onclick = () => this.goto(b.dataset.nav));
-  },
 
 goto(page, options = {}) {
     window.AvatarStudio?.restoreAvatarStage();
@@ -114,9 +116,7 @@ goto(page, options = {}) {
     location.hash = page;
     $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + page));
     $$('[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === page));
-    $('#sidebar').classList.remove('open');
-    if (page === 'command') Dashboard.refresh();
-    else if (page === 'settings') Settings.render($('#page-settings'), options.section);
+    if (page === 'settings') Settings.render($('#page-settings'), options.section);
     else if (page === 'terminal') Terminal.render();
     else if (page === 'image-studio') ImageStudio.render($('#page-image-studio'));
     else if (page === 'code') CodeEnv.render();
@@ -124,11 +124,6 @@ goto(page, options = {}) {
       || page === 'marketing' || page === 'social' || page === 'servers') Pages.render(page);
     else if (page === 'conversations') Pages.render('conversations');
     else Pages.render(page);
-    if (brainFocus) {
-      requestAnimationFrame(() => {
-        if (!$('#brainZone')?.classList.contains('is-expanded')) $('#brainExpand')?.click();
-      });
-    }
     if (chatFocus) setTimeout(() => this.focusChat(), 60);
   },
 
@@ -159,49 +154,52 @@ goto(page, options = {}) {
 
   /* --------------------------------------------------------------- UI */
   bindUI() {
-    $('#micBtn').onclick = () => this.toggleVoice();
-    $('#talkBar').onclick = () => this.toggleVoice();
-    const sidebarToggle = $('#sidebarToggle');
+    // Certains elements n'existent plus selon la page rendue : `el()` renvoie
+    // une cible inerte pour que le cablage restant continue de s'appliquer.
+    const el = (sel) => $(sel) || INERT;
+    el('#micBtn').onclick = () => this.toggleVoice();
+    el('#talkBar').onclick = () => this.toggleVoice();
+    const sidebarToggle = el('#sidebarToggle');
     if (sidebarToggle) {
       sidebarToggle.onclick = async () => {
-        const compact = !$('#app').classList.contains('sidebar-compact');
-        $('#app').classList.toggle('sidebar-compact', compact);
+        const compact = !el('#app').classList.contains('sidebar-compact');
+        el('#app').classList.toggle('sidebar-compact', compact);
         sidebarToggle.setAttribute('aria-expanded', String(!compact));
         const res = await J.put('/api/settings/appearance', { compact_sidebar: compact });
         if (res.ok) toast(compact ? 'Barre latérale réduite.' : 'Barre latérale déployée.', 'ok');
       };
     }
-    $('#consoleToggle').onclick = () => this.toggleConsole();
-    $('#consoleClose').onclick = () => this.closeConsole();
-    $('#consoleNew').onclick = async () => {
+    el('#consoleToggle').onclick = () => this.toggleConsole();
+    el('#consoleClose').onclick = () => this.closeConsole();
+    el('#consoleNew').onclick = async () => {
       const r = await J.post('/api/conversations');
       J.state.conversation = r.conversation.id;
       J.state.messages = [];
-      $('#consoleLog').innerHTML = '';
-      $('#convLog').innerHTML = '';
-      $('#consoleConv').textContent = 'nouvelle';
+      el('#consoleLog').innerHTML = '';
+      el('#convLog').innerHTML = '';
+      el('#consoleConv').textContent = 'nouvelle';
       toast('Nouvelle conversation.', 'ok');
     };
-    $('#consoleForm').onsubmit = (e) => {
+    el('#consoleForm').onsubmit = (e) => {
       e.preventDefault();
       console.debug('[CHAT-UI] submit preventDefault', e.defaultPrevented);
-      const input = $('#consoleInput');
+      const input = el('#consoleInput');
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
       this.send(text);
     };
-    $('#convForm').onsubmit = (e) => {
+    el('#convForm').onsubmit = (e) => {
       e.preventDefault();
       console.debug('[CHAT-UI] submit preventDefault', e.defaultPrevented);
-      const input = $('#convInput');
+      const input = el('#convInput');
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
       this.send(text);
     };
-    $('#convOpen').onclick = () => this.openConsole();
-    const studioBtn = $('#avatarStudioOpen');
+    el('#convOpen').onclick = () => this.openConsole();
+    const studioBtn = el('#avatarStudioOpen');
     if (studioBtn) {
       studioBtn.onclick = (e) => {
         e.preventDefault();
@@ -209,7 +207,7 @@ goto(page, options = {}) {
         window.AvatarStudio?.open();
       };
     }
-    const centerBtn = $('#avatarStudioCenter');
+    const centerBtn = el('#avatarStudioCenter');
     if (centerBtn) {
       centerBtn.onclick = (e) => {
         e.preventDefault();
@@ -217,48 +215,48 @@ goto(page, options = {}) {
         this.goto('avatar-studio');
       };
     }
-    const pageAvatarBtn = $('#avatarStudioBack');
+    const pageAvatarBtn = el('#avatarStudioBack');
     if (pageAvatarBtn) pageAvatarBtn.onclick = () => this.goto('command');
-    $('#briefBtn').onclick = () => this.send('Qu\'est-ce qui nécessite mon attention ?');
-    $('#notifBtn').onclick = () => this.goto('tasks');
-    $('#activityClear').onclick = () => { window.ActivityPanel?.clear(); };
-    $('#npClose').onclick = () => {
-      $('#nodePanel').classList.add('hidden');
+    el('#briefBtn').onclick = () => this.send('Qu\'est-ce qui nécessite mon attention ?');
+    el('#notifBtn').onclick = () => this.goto('tasks');
+    el('#activityClear').onclick = () => { window.ActivityPanel?.clear(); };
+    el('#npClose').onclick = () => {
+      el('#nodePanel').classList.add('hidden');
       window.JarvisBrain?.deselect();
     };
-    $('#qualityChip').onclick = () => this.goto('settings', { section: 'appearance' });
-    $('#brainLabels').onclick = (e) => {
+    el('#qualityChip').onclick = () => this.goto('settings', { section: 'appearance' });
+    el('#brainLabels').onclick = (e) => {
       const visible = window.JarvisBrain?.toggleLabels();
       e.currentTarget.setAttribute('aria-pressed', String(visible ?? true));
     };
-    $('#brainReset').onclick = () => {
-      $('#brainSearch').value = '';
+    el('#brainReset').onclick = () => {
+      el('#brainSearch').value = '';
       window.JarvisBrain?.highlight('');
       window.JarvisBrain?.discover();
-      $('#nodePanel').classList.add('hidden');
+      el('#nodePanel').classList.add('hidden');
     };
     const expandBrain = (expanded) => {
-      $('#brainZone').classList.toggle('is-expanded', expanded);
-      $('#brainExpand').setAttribute('aria-expanded', String(expanded));
-      $('#brainExpand').setAttribute('aria-label', expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas');
-      $('#brainExpand').title = expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas';
+      el('#brainZone').classList.toggle('is-expanded', expanded);
+      el('#brainExpand').setAttribute('aria-expanded', String(expanded));
+      el('#brainExpand').setAttribute('aria-label', expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas');
+      el('#brainExpand').title = expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas';
       requestAnimationFrame(() => window.JarvisBrain?.discover(false));
     };
-    $('#brainExpand').onclick = () => expandBrain(!$('#brainZone').classList.contains('is-expanded'));
+    el('#brainExpand').onclick = () => expandBrain(!el('#brainZone').classList.contains('is-expanded'));
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && $('#brainZone').classList.contains('is-expanded')) {
+      if (e.key === 'Escape' && el('#brainZone').classList.contains('is-expanded')) {
         expandBrain(false);
-        $('#brainExpand').focus();
+        el('#brainExpand').focus();
       }
     });
-    $('#termClear').onclick = () => Terminal.clear();
-    $('#codeRefresh').onclick = () => CodeEnv.refresh(true);
+    el('#termClear').onclick = () => Terminal.clear();
+    el('#codeRefresh').onclick = () => CodeEnv.refresh(true);
     $$('[data-goto]').forEach((b) => b.onclick = () =>
       this.goto(b.dataset.goto, { section: b.dataset.section }));
 
     // Recherche dans le Brain Atlas (filtre visuel temps réel).
     let brainTimer;
-    $('#brainSearch').addEventListener('input', (e) => {
+    el('#brainSearch').addEventListener('input', (e) => {
       clearTimeout(brainTimer);
       brainTimer = setTimeout(() => {
         window.JarvisBrain?.highlight(e.target.value);
@@ -273,7 +271,7 @@ goto(page, options = {}) {
     });
 
     // Bouton de commande par recherche globale.
-    $('#globalSearch').addEventListener('keydown', (e) => {
+    el('#globalSearch').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.target.value.trim()) {
         this.send(e.target.value.trim());
         e.target.value = '';
@@ -302,7 +300,7 @@ goto(page, options = {}) {
     document.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        $('#globalSearch').focus();
+        el('#globalSearch').focus();
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
@@ -310,7 +308,7 @@ goto(page, options = {}) {
       }
       if (e.key === 'Escape') {
         this.closeConsole();
-        $('#nodePanel').classList.add('hidden');
+        el('#nodePanel').classList.add('hidden');
         this.toggleLauncher(true);
       }
     });
@@ -321,32 +319,32 @@ goto(page, options = {}) {
       this.applyQualityListeners(q);
       const res = await J.put('/api/settings/appearance', { quality: q });
       if (res.ok) {
-        const chip = $('#qualityChip');
+        const chip = el('#qualityChip');
         chip.textContent = q.toUpperCase();
         toast('Qualité 3D : ' + q + ' (recharge pour l\'appliquer à toute la scène).');
       }
     });
 
     // ---- Command bar de l'accueil (pilotée par les vraies routes JARVIS) ----
-    const homeForm = $('#homeCmdForm');
+    const homeForm = el('#homeCmdForm');
     if (homeForm) homeForm.addEventListener('submit', (e) => {
       e.preventDefault();
-      const el = $('#homeCmd');
+      const el = el('#homeCmd');
       const text = (el.value || '').trim();
       if (!text) return;
       el.value = '';
       this.send(text);
     });
-    const homeMic = $('#homeMic');
+    const homeMic = el('#homeMic');
     if (homeMic) homeMic.onclick = () => this.toggleVoice();
 
     // ---- Lanceur d'applications ----
-    $('#appLauncher').onclick = (e) => {
+    el('#appLauncher').onclick = (e) => {
       e.stopPropagation();
       AppHome?.renderLauncher();
       this.toggleLauncher();
     };
-    $('#launcherPop').addEventListener('click', (e) => {
+    el('#launcherPop').addEventListener('click', (e) => {
       const go = e.target.closest('[data-launch]');
       if (go) {
         this.toggleLauncher(true);
@@ -497,7 +495,6 @@ goto(page, options = {}) {
       el?.appendChild(t);
     }
     if (result.needs_confirmation) this.showConfirmation(result.needs_confirmation);
-    Dashboard.refresh();
   },
 
   /* Analyse de source : le chat reste court, le detail s'ouvre dans le
@@ -607,7 +604,6 @@ goto(page, options = {}) {
       this.pushMessage('jarvis', text);
       this.openConsole();
       if (approved && VoiceManager.settings?.speak_responses !== false) VoiceManager.speak(text);
-      Dashboard.refresh();
     };
     m.$('[data-yes]').onclick = () => resolve(true);
     m.$('[data-no]').onclick = () => resolve(false);
@@ -635,7 +631,6 @@ goto(page, options = {}) {
         this.pushMessage('user', text);
         this.pushMessage('jarvis', res.response || 'Je m\'en occupe.');
         this.openConsole();
-        Dashboard.refresh();
       } else this.send(text);
     };
   },
@@ -736,7 +731,6 @@ goto(page, options = {}) {
   /* -------------------------------------------------------------- agents */
   onAgentEvent(type, data) {
     data = data || {};
-    Dashboard?.agentEvent(type, data);
     const robot = window.JarvisRobot;
     const agentLabel = data.name || data.id || 'agent';
     if (type === 'agent.started') {
@@ -879,8 +873,8 @@ async showNodeDetails(node) {
       PROCESSING: 'Je réfléchis…', EXECUTING: 'J\'exécute…', SPEAKING: 'Je réponds…',
       INTERRUPTED: 'Interrompu',
     }[state] || '';
-    $('#talkStatus').textContent = status;
-    $('#micHint').textContent = state === 'IDLE' ? 'Tap to Speak' : label;
+    ($('#talkStatus') || INERT).textContent = status;
+    ($('#micHint') || INERT).textContent = state === 'IDLE' ? 'Tap to Speak' : label;
 
     // Robot : miroir du flux vocal local (une brique parmi les autres).
     const robotMap = {
@@ -958,10 +952,13 @@ async showNodeDetails(node) {
     // Câblerie unique : chaque événement brut est routé (robot, atlas, activité).
     J.on('event', (event) => this.routeEvent(event));
 
-    J.on('stream.open', () => { $('#sysDot').classList.remove('err'); });
+    J.on('stream.open', () => { $('#sysDot')?.classList.remove('err'); });
     J.on('stream.close', () => {
-      $('#sysStatusTextHdr').textContent = 'RECONNEXION';
-      $('#sysStatusTextHdr').style.color = 'var(--warn)';
+      const hdr = $('#sysStatusTextHdr');
+      if (hdr) {
+        hdr.textContent = 'RECONNEXION';
+        hdr.style.color = 'var(--warn)';
+      }
     });
     J.on('voice.local', ({ state }) => this.updateVoiceUI(state));
     J.on('jarvis.greeting', ({ text }) => this.pushMessage('jarvis', text));
@@ -980,9 +977,6 @@ async showNodeDetails(node) {
     // Pièces jointes : bouton 📎, drag & drop et collage sur la barre de commande.
     window.AttachmentsUI?.init();
 
-    J.on('feed.new', () => Dashboard.refresh());
-    J.on('task.completed', () => Dashboard.refresh());
-    J.on('task.failed', () => Dashboard.refresh());
     J.on('task.waiting_confirmation', (data) => {
       if (data.confirmation_id) this.showConfirmation({ ...data, id: data.confirmation_id });
     });
@@ -991,13 +985,6 @@ async showNodeDetails(node) {
     J.on('agent.completed', (d) => this.onAgentEvent('agent.completed', d));
     J.on('agent.failed', (d) => this.onAgentEvent('agent.failed', d));
     J.on('agent.idle', (d) => this.onAgentEvent('agent.idle', d));
-    J.on('task.completed', () => Dashboard.refreshSoon(1500));
-    J.on('task.failed', () => Dashboard.refreshSoon(1500));
-    J.on('task.created', () => Dashboard.refreshSoon(1500));
-    J.on('system.metrics', () => Dashboard.refreshSoon(4000));
-    J.on('connector.connected', () => Dashboard.refresh());
-    J.on('connector.failed', () => Dashboard.refresh());
-    J.on('workflow.completed', () => Dashboard.refresh());
     J.on('settings.updated', async () => {
       const s = await J.get('/api/settings');
       if (s.ok) {
@@ -1180,9 +1167,9 @@ async showNodeDetails(node) {
     const tick = () => {
       const now = new Date();
       const use24 = J.state.settings?.appearance?.clock_24h !== false;
-      $('#headerTime').textContent = now.toLocaleTimeString('fr-FR',
+      ($('#headerTime') || INERT).textContent = now.toLocaleTimeString('fr-FR',
         { hour12: !use24, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      $('#headerDate').textContent = now.toLocaleDateString('fr-FR',
+      ($('#headerDate') || INERT).textContent = now.toLocaleDateString('fr-FR',
         { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
         .replace(/^\w/, (c) => c.toUpperCase());
     };
@@ -1191,31 +1178,6 @@ async showNodeDetails(node) {
   },
 
   /* ------------------------------------------------------------ animation */
-  startAnimation() {
-    $('#footDots').innerHTML = Array.from({ length: 26 }, () => '<i></i>').join('');
-    const loop = () => {
-      this.phase += 0.08;
-      const state = VoiceManager.state;
-      const active = ['LISTENING', 'WAKE'].includes(state);
-      const speaking = state === 'SPEAKING';
-      const busy = ['PROCESSING', 'EXECUTING'].includes(state);
-      const amplitude = speaking ? 0.75 : active ? 0.6 : busy ? 0.4 : 0.16;
-      const color = speaking ? '#a78bfa' : busy ? '#fbbf24' : '#22d3ee';
-
-      drawWave($('#voiceWave'), { amplitude, phase: this.phase, color, bars: 34 });
-      drawWave($('#talkWaveL'), { amplitude, phase: this.phase, color, bars: 14 });
-      drawWave($('#talkWaveR'), { amplitude, phase: this.phase + 1.2, color, bars: 14 });
-
-      const dots = $$('#footDots i');
-      dots.forEach((d, i) => {
-        const wave = Math.sin(this.phase * 0.8 + i * 0.4);
-        d.style.opacity = String(0.18 + Math.max(0, wave) * 0.75);
-        d.style.transform = `scale(${1 + Math.max(0, wave) * 0.7})`;
-      });
-      requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
-  },
 };
 
 window.addEventListener('DOMContentLoaded', () => App.init());
