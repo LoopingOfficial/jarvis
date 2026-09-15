@@ -5,8 +5,16 @@ __pycache__/
 *.pyc
 
 # Données locales — contiennent la base chiffrée et les sauvegardes.
-data/
+# `data/*` et non `data/` : en ignorant le DOSSIER, git n'y descend pas et
+# aucune négation ci-dessous ne peut le ré-inclure (c'est pourquoi
+# !data/.gitkeep n'avait jamais fonctionné).
+data/*
 !data/.gitkeep
+# Jeux d'amorçage livrés avec le produit (boîte mail de démonstration, carnet
+# de contacts initial). Ce ne sont pas des données utilisateur : sans eux, un
+# clone neuf n'a ni tri mail ni CRM testables hors-ligne.
+!data/mail_mock.json
+!data/crm_seed.json
 
 # Ancien format, conservé le temps de la migration puis sauvegardé.
 data/connections.json
@@ -21,3 +29,10 @@ node_modules/
 vendor/
 .DS_Store
 Thumbs.db
+
+# Runtime Self Upgrade / Supervisor — artefacts générés, jamais commités.
+state/
+backups/
+releases/
+upgrade-workspaces/
+.aider*

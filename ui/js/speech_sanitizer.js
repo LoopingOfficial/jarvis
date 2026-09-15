@@ -127,7 +127,51 @@
     return out;
   }
 
+  /* ------------------------------------------------- formules de courtoisie
+     Le greeting de début de session est décidé côté serveur (voice.py,
+     should_greet) et reste intact. Ce qu'on retire ici, ce sont les formules
+     que le modèle rajoute en tête ou en queue de CHAQUE réponse : à l'oral,
+     dans une session ouverte, elles transforment un échange en litanie.
+     On ne touche qu'aux ouvertures/fermetures, jamais au contenu utile, et
+     jamais si la phrase se réduit à la formule (sinon il ne resterait rien à
+     dire). */
+  const COURTESY_OPENERS = [
+    /^(?:eh\s+)?bien\s+s[ûu]r\s*(?:!|,|\.|\s)+/i,
+    /^(?:avec\s+plaisir|tr[èe]s\s+bien|parfait|entendu|d'accord|compris)\s*(?:!|,|\.|\s)+/i,
+    /^(?:bonjour|bonsoir|salut|re)\s*(?:[^.!?,]{0,24})?\s*(?:!|,|\.)+\s*/i,
+    /^(?:je\s+suis\s+(?:l[àa]|ravi[e]?)\s+pour\s+(?:vous\s+aider|t'aider))\s*(?:!|,|\.)+\s*/i,
+    /^(?:bien\s+not[ée]|c'est\s+not[ée])\s*(?:!|,|\.)+\s*/i,
+  ];
+  const COURTESY_CLOSERS = [
+    /\s*(?:n'h[ée]sitez?\s+pas\s+(?:[^.!?]{0,60})?)[.!?]*\s*$/i,
+    /\s*(?:en\s+quoi\s+puis-je\s+(?:vous|t')\s*(?:aider|être utile)\s*\??)\s*$/i,
+    /\s*(?:que\s+puis-je\s+faire\s+(?:de\s+plus\s+)?pour\s+(?:vous|toi)\s*\??)\s*$/i,
+    /\s*(?:je\s+reste\s+[àa]\s+(?:votre|ta)\s+disposition)[.!?]*\s*$/i,
+    /\s*(?:dites?[- ]moi\s+si\s+(?:[^.!?]{0,60})?)[.!?]*\s*$/i,
+  ];
+
+  function stripCourtesy(s) {
+    if (!s || typeof s !== 'string') return s || '';
+    let out = String(s);
+    for (const re of COURTESY_OPENERS) {
+      const cut = out.replace(re, '');
+      // Une formule seule reste dite : c'était toute la réponse.
+      if (cut.trim().length >= 3) out = cut;
+    }
+    for (const re of COURTESY_CLOSERS) {
+      const cut = out.replace(re, '');
+      if (cut.trim().length >= 3) out = cut;
+    }
+    out = out.trim();
+    // Remajuscule si on a coupé devant.
+    if (out && out[0] === out[0].toLowerCase() && /[a-zà-ÿ]/.test(out[0])) {
+      out = out[0].toUpperCase() + out.slice(1);
+    }
+    return out || String(s).trim();
+  }
+
   window.speechSanitize = sanitizeText;
+  window.speechStripCourtesy = stripCourtesy;
 
   // Raccourci utilisé par voice.js avant toute synthèse locale.
   window.pipeSpeech = (text) => {

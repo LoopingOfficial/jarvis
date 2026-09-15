@@ -1,0 +1,212 @@
+/* ==========================================================================
+   JARVIS — Accueil
+
+   Parti pris : une page d'assistant, pas un cockpit. Une seule colonne
+   centrée, beaucoup de vide, l'avatar comme présence et non comme spécimen
+   sur un socle. Les chiffres système existent toujours mais passent au
+   second plan : ils rassurent, ils ne pilotent pas.
+
+   Tout est préfixé `jh-` et vit dans le calque monté par spatial_home.js.
+   Aucune règle ne cible un id ou une classe du DOM hérité.
+   ========================================================================== */
+
+.jh {
+  --bg-0: #06090e;
+  --bg-1: #0b1017;
+  --cyan: #00f2fe;
+  --blue: #4facfe;
+  --emerald: #10b981;
+  --amber: #fbbf24;
+  --ink: #eaf3ff;
+  --dim: #8ea3c0;
+  --faint: #55688a;
+  --line: rgba(0, 242, 254, .16);
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, Consolas, monospace;
+
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  color: var(--ink);
+  background:
+    radial-gradient(64% 46% at 50% 26%, rgba(0, 242, 254, .09), transparent 70%),
+    radial-gradient(50% 40% at 50% 100%, rgba(79, 172, 254, .07), transparent 70%),
+    linear-gradient(180deg, var(--bg-0), var(--bg-1));
+  overflow: hidden;
+}
+
+/* Calque autonome : le shell garde son rail, son bandeau et sa barre de
+   commande ; la page occupe tout le reste. Un seul backdrop-filter pour toute
+   la surface — 30 cartes floutées obligeaient le compositeur à autant de
+   passes de flou par frame. */
+.jh.jh-layer {
+  position: fixed;
+  top: 44px; right: 0; bottom: 84px; left: 48px;
+  z-index: 26;
+}
+
+.jh-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(760px, 92%);
+  max-height: 100%;
+}
+
+/* --- avatar ------------------------------------------------------------- */
+.jh-stage {
+  position: relative;
+  width: min(380px, 62vw);
+  height: min(420px, 44vh);
+  flex: none;
+  isolation: isolate;
+}
+/* L'anneau du projecteur est désormais DANS la scène 3D : il se place sous le
+   noyau en perspective et reçoit son faisceau. Celui qu'on dessinait ici en
+   CSS flottait en dessous, plat et désolidarisé, et faisait doublon. */
+.jh-stage::after {
+  content: "";
+  position: absolute;
+  inset: 7% 13% 10%;
+  z-index: 2;
+  pointer-events: none;
+  opacity: .24;
+  background: repeating-linear-gradient(180deg, transparent 0 5px, rgba(110, 229, 255, .13) 6px, transparent 7px);
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(62% 58% at 50% 42%, #000 16%, transparent 94%);
+  -webkit-mask-image: radial-gradient(62% 58% at 50% 42%, #000 16%, transparent 94%);
+  animation: jh-scan 5.5s linear infinite;
+}
+@keyframes jh-scan {
+  from { transform: translateY(-7%); }
+  to { transform: translateY(7%); }
+}
+/* Le rendu a un fond OPAQUE (voir la note dans holo_viewer.js : le rendre
+   transparent fait accumuler le halo du bloom sur tout le cadre). Ce masque
+   fond donc les bords du canvas dans la page. Il doit rester assez large pour
+   ne pas rogner les épaules — c'est le réglage qui les avait fait disparaître. */
+.jh-stage canvas {
+  position: absolute; inset: 0; display: block;
+  -webkit-mask-image: radial-gradient(66% 76% at 50% 44%, #000 26%, transparent 88%);
+  mask-image: radial-gradient(66% 76% at 50% 44%, #000 26%, transparent 88%);
+}
+.jh-loading {
+  position: absolute; inset: 0; z-index: 3; display: grid; place-items: center;
+  font-size: 9.5px; letter-spacing: .3em; color: var(--faint);
+  transition: opacity .6s ease;
+}
+.jh-loading.gone { opacity: 0; }
+
+/* --- accroche ----------------------------------------------------------- */
+.jh-hello {
+  margin: 2px 0 6px;
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  font-size: clamp(26px, 3.4vw, 40px);
+  font-weight: 300;
+  letter-spacing: -.012em;
+  color: #fbfeff;
+  text-align: center;
+}
+.jh-sub {
+  margin: 0 0 26px;
+  font-size: 10.5px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: center;
+}
+
+/* --- suggestions -------------------------------------------------------- */
+.jh-suggest {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 26px;
+}
+.jh-sugg {
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: 13px;
+  cursor: pointer;
+  color: var(--dim);
+  background: rgba(255, 255, 255, .022);
+  border: 1px solid rgba(255, 255, 255, .055);
+  transition: color .18s ease, border-color .18s ease, background .18s ease, transform .18s ease;
+}
+.jh-sugg::after { content: " \2192"; color: var(--faint); transition: color .18s ease; }
+.jh-sugg:hover {
+  color: #fbfeff;
+  background: rgba(0, 242, 254, .06);
+  border-color: rgba(0, 242, 254, .34);
+  transform: translateY(-1px);
+}
+.jh-sugg:hover::after { color: var(--cyan); }
+
+/* --- bandeau d'état ----------------------------------------------------- */
+.jh-strip { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; }
+.jh-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .06);
+  background: rgba(255, 255, 255, .02);
+  font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--faint);
+}
+.jh-chip b { font-weight: 400; color: var(--dim); letter-spacing: .06em; }
+.jh-chip-mute { opacity: .55; }
+
+.jh-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--emerald); box-shadow: 0 0 9px var(--emerald);
+  animation: jh-pulse 3s ease-in-out infinite;
+}
+.jh-dot.warn { background: var(--amber); box-shadow: 0 0 9px var(--amber); }
+.jh-dot.off  { background: var(--faint); box-shadow: none; animation: none; }
+@keyframes jh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+
+/* --- activité ponctuelle ------------------------------------------------ */
+.jh-activity {
+  position: absolute;
+  bottom: 18px; left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(6, 9, 14, .8);
+  font-size: 10px; letter-spacing: .1em; color: var(--dim);
+  max-width: 76%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jh-activity[hidden] { display: none; }
+
+/* --- responsive --------------------------------------------------------- */
+@media (max-width: 720px) {
+  .jh.jh-layer { left: 44px; bottom: 76px; }
+  .jh-suggest { grid-template-columns: 1fr; width: min(100%, 420px); }
+  .jh-stage { width: min(340px, 78vw); height: min(300px, 34vh); }
+  .jh-sub { max-width: 90vw; line-height: 1.6; }
+}
+@media (max-height: 720px) {
+  .jh-stage { height: 240px; }
+  .jh-suggest { margin-bottom: 16px; }
+  .jh-sub { margin-bottom: 16px; }
+}
+
+/* ==========================================================================
+   Veille du décor : ce que le calque recouvre n'a plus à être peint ni
+   composité. Les boucles sont coupées par JarvisSpatial.setQuiet().
+   ========================================================================== */
+html.v5-quiet .v5-sky,
+html.v5-quiet #v5Leads,
+html.v5-quiet #v5BrainCanvas,
+html.v5-quiet #v5AvatarCv,
+html.v5-quiet #brainStage,
+/* Le shell affiche sa propre salutation : elle ferait doublon avec celle de
+   la page, deux fois le même « Bonsoir » à deux endroits de l'écran. */
+html.v5-quiet .v5-greet { display: none !important; }

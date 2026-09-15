@@ -53,6 +53,28 @@ _SMALL_WORDS = {
 # Symboles isolés éventuellement produits par le markdown résiduel.
 _TRAIL_SYMBOLS = re.compile(r"[*_`#<>]{2,}")
 
+# ---- Emojis et symboles décoratifs ----
+# Un moteur TTS ne « saute » pas un emoji : il lit son nom Unicode (« croissant
+# de lune », « étincelles »). Le texte AFFICHÉ garde ses emojis ; seule la
+# version parlée les retire. On cible les plans pictographiques plutôt qu'une
+# liste d'emojis, pour couvrir aussi les nouveaux codepoints.
+_EMOJI = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"   # pictogrammes, émoticônes, transports, symboles étendus
+    "\U00002600-\U000027BF"   # symboles divers et dingbats (✅ ✨ ⚠ ❌ ❤ …)
+    "\U00002190-\U000021FF"   # flèches
+    "\U00002B00-\U00002BFF"   # flèches et formes supplémentaires
+    "\U0001F1E6-\U0001F1FF"   # indicateurs régionaux (drapeaux)
+    "\U0000FE00-\U0000FE0F"   # sélecteurs de variante (VS15/VS16)
+    "\U0001F3FB-\U0001F3FF"   # modificateurs de teinte de peau
+    "\U000020D0-\U000020FF"   # diacritiques combinants pour symboles
+    "\U00002460-\U000024FF"   # alphanumériques cernés
+    "\U00002000-\U0000200D"   # espaces typographiques et ZWJ
+    "\U00002122\U00002139\U00003030\U0000303D\U00003297\U00003299"
+    "\U000000A9\U000000AE"    # © ®
+    "]+"
+)
+
 
 def _number_to_words(match: re.Match | str) -> str:
     raw = match.group(0) if hasattr(match, "group") else match
@@ -104,6 +126,9 @@ def sanitize_for_speech(text: str) -> str:
     if not t:
         return ""
     t = _BLOCK_FENCE.sub(" ", t)
+    # Les emojis partent AVANT le reste : ils ne doivent jamais être prononcés,
+    # ni laisser de résidu de ponctuation flottante en fin de phrase.
+    t = _EMOJI.sub(" ", t)
     t = _HTML_TAG.sub(" ", t)
     t = _ENTITY.sub(" ", t)
     t = _LINK.sub(r"\1", t)
@@ -129,6 +154,12 @@ def sanitize_for_speech(text: str) -> str:
     t = _NUMBERS.sub(_number_to_words, t)
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)
     t = _SPACES.sub(" ", t)
+    # Un emoji retiré peut laisser « Bonne nuit Jérôme . » ou une virgule
+    # orpheline : on recolle la ponctuation et on supprime les restes isolés.
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = re.sub(r"^[\s,.;:!?-]+", "", t)
+    t = re.sub(r"[\s,;:-]+$", "", t)
+    t = _SPACES.sub(" ", t)
     t = t.strip()
     return t
 
@@ -139,3 +170,44 @@ def readable_preview(text: str, limit: int = 200) -> str:
     t = _LINK.sub(r"\1", t)
     t = _SPACES.sub(" ", t)
     return t.strip()[:limit]
+
+
+# Marqueurs de prompt interne. Un texte qui en contient un est destiné au
+# modèle, jamais à l'écran : il porte le contenu du classeur, la politique de
+# sources ou les consignes de grounding.
+INTERNAL_PROMPT_MARKERS = (
+    "CONTENU STRUCTURÉ", "CONTENU STRUCTURE", "SOURCE_POLICY", "ANALYSE_DETERMINISTE",
+    "DETERMINISTIC_WORKBOOK_SUMMARY", "PERIMETRE_OBLIGATOIRE", "FORMAT_REPONSE_ANALYSE",
+    "DEMANDE DE L'UTILISATEUR", "VALIDATION_FAILED", "FAITS_VERIFIES",
+    "PASSAGE_A_CORRIGER", "VALEURS_REFUSEES", "TACHE :",
+)
+
+# Libellés autorisés dans le bandeau système. Le frontend n'affiche que ceux-ci
+# pour l'analyse d'un classeur ; tout le reste est un texte de prompt.
+PUBLIC_ACTIVITY_LABELS = (
+    "Connexion au Google Sheet", "Téléchargement du classeur", "Lecture des onglets",
+    "Détection des tableaux", "Analyse des données", "Vérification des sources",
+    "Correction d'affirmations", "Préparation du Workspace", "Analyse terminée",
+)
+
+
+def is_internal_prompt(text: str) -> bool:
+    """Vrai si le texte est un prompt interne et non un message d'utilisateur."""
+    head = (text or "")[:4000]
+    return any(marker in head for marker in INTERNAL_PROMPT_MARKERS)
+
+
+def public_task_label(text: str, explicit: str = "") -> str:
+    """Nom de tâche PUBLIABLE : jamais un fragment de prompt interne.
+
+    `explicit` est le libellé voulu par l'appelant. À défaut, un message
+    d'utilisateur ordinaire reste affiché tel quel — c'est l'information utile —
+    tandis qu'un prompt interne est remplacé par un libellé neutre. Le garde-fou
+    est ici, au point d'émission : un filtre uniquement côté interface laisserait
+    fuir le texte par tout autre consommateur du même événement.
+    """
+    if explicit:
+        return explicit[:200]
+    if is_internal_prompt(text):
+        return "Analyse des données"
+    return (text or "")[:200]

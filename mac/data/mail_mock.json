@@ -1,0 +1,77 @@
+{
+  "_comment": "Boite de reception de demonstration, hors-ligne. Sert au developpement et aux tests du tri deterministe. Aucune adresse reelle.",
+  "messages": [
+    {
+      "id": "m001",
+      "sender": "Pierre Martin <pierre.martin@latelier-exemple.fr>",
+      "subject": "Facture F2026-004 - refonte du site",
+      "date": "2026-09-12T09:14:00",
+      "body": "Bonjour,\n\nVous trouverez ci-joint la facture F2026-004 d'un montant de 6 500 EUR HT correspondant a la refonte du site. Reglement a 30 jours.\n\nCordialement,\nPierre Martin",
+      "attachments": ["facture_F2026-004.pdf"],
+      "unread": true
+    },
+    {
+      "id": "m002",
+      "sender": "Sophie Renard <s.renard@pixel-studio-exemple.fr>",
+      "subject": "Demande de devis pour une identite visuelle",
+      "date": "2026-09-12T10:02:00",
+      "body": "Bonjour,\n\nNous souhaitons refondre notre identite visuelle (logo, charte, papeterie). Pourriez-vous nous faire parvenir une proposition chiffree avant la fin du mois ?\n\nMerci d'avance,\nSophie",
+      "attachments": [],
+      "unread": true
+    },
+    {
+      "id": "m003",
+      "sender": "Camille Dubois <camille@exemple-client.fr>",
+      "subject": "Question sur le delai de livraison",
+      "date": "2026-09-12T11:20:00",
+      "body": "Bonjour,\n\nEst-ce que vous pensez pouvoir livrer la maquette avant vendredi ? Nous avons un comite interne lundi matin.\n\nBien a vous,\nCamille",
+      "attachments": [],
+      "unread": true
+    },
+    {
+      "id": "m004",
+      "sender": "Accueil <accueil@exemple-partenaire.fr>",
+      "subject": "TR: dossier technique a transmettre au service concerne",
+      "date": "2026-09-11T16:45:00",
+      "body": "Bonjour,\n\nMerci de bien vouloir transferer ce dossier technique au service concerne, nous n'avons pas le bon contact de notre cote.\n\nCordialement",
+      "attachments": ["dossier_technique.pdf"],
+      "unread": true
+    },
+    {
+      "id": "m005",
+      "sender": "Lettre hebdo <newsletter@exemple-media.fr>",
+      "subject": "Votre selection de la semaine",
+      "date": "2026-09-11T07:00:00",
+      "body": "Au sommaire cette semaine : dix tendances design. Pour vous desabonner, cliquez ici.",
+      "attachments": [],
+      "unread": false
+    },
+    {
+      "id": "m006",
+      "sender": "Notifications <no-reply@exemple-saas.com>",
+      "subject": "Votre sauvegarde hebdomadaire est terminee",
+      "date": "2026-09-11T03:12:00",
+      "body": "La sauvegarde du 11 septembre s'est terminee sans erreur. Ce message est automatique.",
+      "attachments": [],
+      "unread": false
+    },
+    {
+      "id": "m007",
+      "sender": "Comptabilite <compta@exemple-fournisseur.fr>",
+      "subject": "Relance de paiement - echeance depassee",
+      "date": "2026-09-10T14:30:00",
+      "body": "Bonjour,\n\nSauf erreur de notre part, le reglement de notre derniere facture reste en attente. Merci de regulariser.\n\nCordialement",
+      "attachments": [],
+      "unread": true
+    },
+    {
+      "id": "m008",
+      "sender": "Julien Brun <julien.brun@exemple-asso.org>",
+      "subject": "Compte rendu de la reunion de jeudi",
+      "date": "2026-09-10T09:05:00",
+      "body": "Bonjour,\n\nVoici le compte rendu de la reunion de jeudi pour archivage. Rien a signaler de particulier.\n\nJulien",
+      "attachments": ["compte_rendu.txt"],
+      "unread": false
+    }
+  ]
+}

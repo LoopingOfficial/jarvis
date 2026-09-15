@@ -5,7 +5,9 @@
  * `window.JarvisRobot` reste disponible : c'est un adaptateur vers l'avatar,
  * pour que le code existant (badges d'état, qualité 3D) continue de marcher.
  */
-import { JarvisAvatar } from './avatar/avatar.js';
+import { JarvisAvatar3D } from './avatar/jarvis_avatar_3d.js';
+import { resolveAvatarUrl, fallbackAvatarUrl, avatarBuildInfo }
+  from './avatar/avatar_source.js';
 import { BrainAtlas } from './brain_atlas.js';
 
 const settings = (() => {
@@ -20,29 +22,38 @@ export function boot() {
   const out = { avatar: null, brain: null, ready: false };
 
   const stageCanvas = document.getElementById('robotStage');
-  if (stageCanvas && window.WebGLRenderingContext) {
-    try {
-      out.avatar = new JarvisAvatar({
-        canvas: stageCanvas,
-        quality,
-        modelUrl: '/assets/avatar/jarvis_avatar.glb',
-        onReady: (avatar) => {
-          document.getElementById('robotFallback')?.setAttribute('hidden', '');
-          window.dispatchEvent(new CustomEvent('jarvis-avatar-ready', { detail: avatar }));
-        },
-        onError: () => showFallback('robotFallback'),
-      });
-      window.JarvisAvatar = out.avatar;
-      window.JarvisRobot = makeRobotAdapter(out.avatar);
+  if (stageCanvas) {
+    // Le composant encapsule la détection WebGL et le fallback : il ne jette
+    // pas, même sans GPU. `out.component` est la surface publique stable ;
+    // `out.avatar` reste le moteur, pour le code existant.
+    // Le modele vient d'`avatar_source.js` : `?avatar=v23` ou l'interrupteur
+    // Developer permettent de comparer sans toucher au profil de production.
+    const build = avatarBuildInfo();
+    console.info('[avatar] profil', build.name, '(' + build.source + ')',
+      build.resolved);
+    const component = new JarvisAvatar3D(stageCanvas, {
+      quality,
+      modelUrl: resolveAvatarUrl(),
+      fallbackUrl: fallbackAvatarUrl(),
+      fallbackEl: document.getElementById('robotFallback'),
+      onReady: (engine) => {
+        window.dispatchEvent(new CustomEvent('jarvis-avatar-ready', { detail: engine }));
+      },
+      onError: (err) => console.warn('Avatar 3D indisponible :', err),
+    });
+    out.component = component;
+    window.JarvisAvatar3DInstance = component;
+    component.mount().then((ok) => {
+      if (!ok) return;
+      out.avatar = component.engine;
+      window.JarvisAvatar = component.engine;
+      window.JarvisRobot = makeRobotAdapter(component.engine);
       // Avatar Studio : après « Accepter », le Command Center recharge le GLB.
       window.addEventListener('jarvis:avatar-reload', () => {
-        out.avatar.reload().catch((err) =>
+        component.engine.reload().catch((err) =>
           console.warn('[avatar] rechargement impossible', err));
       });
-    } catch (err) {
-      console.warn('Avatar 3D indisponible :', err);
-      showFallback('robotFallback');
-    }
+    });
   }
 
   const brainCanvas = document.getElementById('brainStage');
@@ -59,7 +70,7 @@ export function boot() {
     showFallback('brainFallback');
   }
 
-  out.ready = !!(out.avatar || out.brain);
+  out.ready = !!(out.component || out.brain);
   window.Jarvis3D = out;
 
   if (out.brain) {

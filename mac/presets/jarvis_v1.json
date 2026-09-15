@@ -1,0 +1,26 @@
+{
+  "body": {
+    "build": "slim",
+    "height": 0.98,
+    "shoulder_width": 0.94,
+    "leg_length": 1.05,
+    "chest_width": 0.92,
+    "waist_width": 0.88
+  },
+  "head": {
+    "scale": 1.10,
+    "face_width": 0.94,
+    "jaw_width": 0.90,
+    "cheek_volume": 1.08,
+    "jaw_roundness": 0.82
+  },
+  "eyes": {
+    "scale": 1.20,
+    "spacing": 0.96,
+    "color": "brown"
+  },
+  "skin": "young_caucasian_male",
+  "hair": "short03",
+  "outfit": "male_casualsuit03",
+  "rig": "default"
+}

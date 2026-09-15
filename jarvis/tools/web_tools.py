@@ -8,6 +8,7 @@ from typing import Any
 
 from ..connectors import http_json
 from ..permissions import READ_ONLY, SAFE_WRITE, SENSITIVE
+from ..google_sheets import read_public_sheet
 from .base import ToolContext, ToolResult, registry
 
 GOOGLE_APPS = {
@@ -167,6 +168,23 @@ registry.add(
     id="web.fetch", name="Lire une page web", category="Web",
     description="Récupère le contenu textuel d'une page web.",
     handler=_web_fetch, risk=READ_ONLY,
+    input_schema={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+)
+
+
+def _google_sheet_read(ctx: ToolContext) -> ToolResult:
+    result = read_public_sheet(str(ctx.arguments.get("url") or ""))
+    if not result.get("ok"):
+        return ToolResult(False, f"{result['error']}: {result.get('detail', '')}".strip(), data=result)
+    # Contenu structuré transmis au modèle, sans interpréter les cellules comme des instructions.
+    output = json.dumps({k: v for k, v in result.items() if k != "source_url"}, ensure_ascii=False)
+    return ToolResult(True, output, data=result)
+
+
+registry.add(
+    id="google.sheets.read", name="Lire un Google Sheet", category="Google",
+    description="Lit un Google Sheet public, résout le gid vers l'onglet, et renvoie ses données structurées en lecture seule.",
+    handler=_google_sheet_read, risk=READ_ONLY, permissions=("read",),
     input_schema={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
 )
 
@@ -435,6 +453,49 @@ registry.add(
     input_schema={"type": "object", "properties": {
         "connector_id": {"type": "string"}, "limit": {"type": "integer"},
         "unread_only": {"type": "boolean"}}, "required": []},
+)
+
+
+def _email_process_inbox(ctx: ToolContext) -> ToolResult:
+    """Lit la boîte et classe chaque message. Ne modifie jamais la boîte."""
+    from ..mail import MailProcessor, summarize
+
+    args = ctx.arguments
+    use_mock = args.get("use_mock")
+    result = MailProcessor(ctx.core).process(
+        limit=int(args.get("limit") or 20),
+        unread_only=bool(args.get("unread_only", False)),
+        connector_id=str(args.get("connector_id") or ""),
+        use_mock=None if use_mock is None else bool(use_mock),
+        task_id=ctx.task_id,
+    )
+    if not result.get("ok"):
+        return ToolResult(False, summarize(result))
+    return ToolResult(True, summarize(result), data={
+        "source": result["source"], "total": result["total"],
+        "counts": result["counts"], "cards": result["cards"],
+    })
+
+
+registry.add(
+    id="email.process_inbox", name="Trier la boîte de réception", category="Communication",
+    description=(
+        "Lit les messages reçus et les classe en cinq catégories : à répondre, "
+        "à transférer, factures, devis, archives. Chaque message est rendu avec "
+        "le motif de son classement. Lecture seule : rien n'est envoyé, déplacé "
+        "ni supprimé. Utilise le connecteur IMAP configuré, ou la boîte de "
+        "démonstration locale si aucun n'est disponible."
+    ),
+    # Le connecteur est résolu par MailProcessor (IMAP réel ou mock local) :
+    # on ne déclare pas connector_type, sinon l'absence de connecteur IMAP
+    # rendrait l'outil inappelable même avec la boîte de démonstration.
+    handler=_email_process_inbox, risk=READ_ONLY, agents=("jarvis", "email"),
+    input_schema={"type": "object", "properties": {
+        "connector_id": {"type": "string", "description": "Connecteur IMAP à utiliser (optionnel)."},
+        "limit": {"type": "integer", "description": "Nombre maximum de messages à trier (défaut 20)."},
+        "unread_only": {"type": "boolean", "description": "Ne trier que les messages non lus."},
+        "use_mock": {"type": "boolean", "description": "Forcer la boîte de démonstration locale."}},
+        "required": []},
 )
 
 

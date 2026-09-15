@@ -1,0 +1,8 @@
+{
+  "id": "side_swept_voluminous",
+  "type": "hair",
+  "mesh": "JARVIS_Hair",
+  "volumes": ["front", "top", "side_left", "side_right", "back"],
+  "default_color": "#5a301c",
+  "default_volume": 1.18
+}
