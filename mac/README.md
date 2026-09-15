@@ -35,3 +35,18 @@ dépendances externes installées selon les fonctions utilisées.
 
 Les fichiers `.env`, `data`, `state` et `.venv` sont locaux à cette distribution
 et ne sont pas copiés depuis Windows.
+
+## Voix
+
+Les voix Piper françaises locales sont incluses dans `data/voices/fr`. JARVIS
+les utilise en priorité. Le repli réseau `edge-tts` est également intégré dans
+`jarvis/tts_edge.py` avec la voix masculine `fr-FR-HenriNeural` par défaut.
+
+Pour l'activer avec la synthèse MP3 asynchrone:
+
+```bash
+.venv/bin/python -m pip install -r requirements-audio.txt
+```
+
+Le texte envoyé à `edge-tts` transite par les serveurs Microsoft; Piper reste
+le moteur recommandé lorsque la voix locale est disponible.
