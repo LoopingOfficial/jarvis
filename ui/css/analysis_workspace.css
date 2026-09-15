@@ -1162,3 +1162,39 @@ table.aw-table tr:last-child td { border-bottom: 0; }
 .sy-hist-list li.ok { color: var(--ok); }
 .sy-hist-list li.err { color: var(--danger); }
 .sy-hist-list li.info { color: var(--text-faint); }
+
+/* ---- Actions directes en Comparaison (Phase 2) -------------------------- */
+/* Le bouton porte l'action réelle : il emprunte le pipeline de synchronisation
+   complet (portée, sauvegarde, écriture, vérification, rafraîchissement). */
+.aw-direct {
+  width: auto;
+  height: 27px;
+  padding: 0 10px;
+  gap: 5px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 7px;
+}
+.aw-direct.create { color: var(--cyan, #22d3ee); border-color: rgba(34, 211, 238, .34); }
+.aw-direct.create:hover { background: rgba(34, 211, 238, .16); }
+.aw-direct.update { color: var(--warn, #f59e0b); border-color: rgba(245, 158, 11, .34); }
+.aw-direct.update:hover { background: rgba(245, 158, 11, .16); color: var(--warn, #f59e0b); }
+.aw-direct[disabled] { opacity: .45; pointer-events: none; }
+
+/* État terminal : plus rien à appliquer sur cette entrée. */
+.aw-synced {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ok, #34d399);
+  opacity: .85;
+  white-space: nowrap;
+}
+.aw-synced.blocked { color: var(--warn, #f59e0b); }
+
+.aw-acts { display: flex; align-items: center; gap: 6px; }
+.aw-note-act.aw-direct { height: 30px; margin-top: 8px; }
