@@ -60,6 +60,15 @@ const DEFAULTS = {
   portrait: false,
   portraitHeight: 0.62,      // hauteur de sujet visée, en mètres (tête + épaules)
   holoColor: 0x6fe6ff,
+  // Filaire : le maillage DEVIENT le sujet. C'est ce qui distingue une
+  // projection de science-fiction d'un personnage simplement teinté en bleu —
+  // et accessoirement ce qui sauve un modèle aux textures cartoon, puisqu'en
+  // filaire elles ne sont presque plus lues.
+  wireframe: false,
+  wireframeOpacity: 0.55,
+  // Opacité de la surface pleine SOUS le filaire. À 1 les arêtes se noient
+  // dans le volume ; à 0 on perd la lecture du visage.
+  holoFill: 0.42,
   // Voir le commentaire dans le chargement des animations : indispensable
   // pour les rigs FBX exportés depuis Maya/3ds Max.
   stripScaleTracks: true,
@@ -279,6 +288,9 @@ export async function createAvatarViewer(options = {}) {
   // pour vingt-sept maillages, au lieu d'un par matériau à tenir à jour.
   const holoTime = { value: 0 };
   const holoTint = new THREE.Color(opts.holoColor);
+  // Atténue la surface pleine quand le filaire est actif : sans cela les arêtes
+  // se noient dans le volume et il ne reste qu'une silhouette bleue.
+  const holoFill = { value: opts.wireframe ? opts.holoFill : 1 };
 
   /* Le voile holographique est INJECTÉ dans le matériau existant plutôt que
      remplacé par un ShaderMaterial : le personnage est skinné sur 724 os, et
@@ -290,8 +302,12 @@ export async function createAvatarViewer(options = {}) {
     // patcher l'original propagerait l'effet à des objets non voulus.
     const m = source.clone();
     m.transparent = true;
-    m.depthWrite = false;                 // additif : l'ordre de tri devient indifférent
-    m.blending = THREE.AdditiveBlending;
+    // En mode filaire la surface sert d'OCCULTEUR : elle écrit la profondeur,
+    // ce qui empêche les arêtes de la nuque et de l'arrière du crâne de
+    // s'additionner à celles du visage. Sans cela le sujet vire à la boule
+    // blanche — tous les triangles du volume s'accumulaient au même pixel.
+    m.depthWrite = !!opts.wireframe;
+    m.blending = opts.wireframe ? THREE.NormalBlending : THREE.AdditiveBlending;
     m.side = THREE.FrontSide;
     m.envMapIntensity = 0.1;
     if (m.isMeshStandardMaterial) { m.roughness = 1; m.metalness = 0; }
@@ -300,6 +316,7 @@ export async function createAvatarViewer(options = {}) {
     m.onBeforeCompile = (shader) => {
       shader.uniforms.uHoloTime = holoTime;
       shader.uniforms.uHoloTint = { value: holoTint };
+      shader.uniforms.uHoloFill = holoFill;
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
 varying float vHoloY;`)
@@ -311,6 +328,7 @@ vHoloY = (modelMatrix * vec4(transformed, 1.0)).y;`);
                  `#include <common>
 uniform float uHoloTime;
 uniform vec3 uHoloTint;
+uniform float uHoloFill;
 varying float vHoloY;`)
         .replace('#include <dithering_fragment>', [
           '#include <dithering_fragment>',
@@ -324,15 +342,45 @@ varying float vHoloY;`)
           'float holoFlick = 0.93 + 0.05 * sin(uHoloTime * 9.3) + 0.02 * sin(uHoloTime * 31.0);',
           'vec3 holoRgb = uHoloTint * (0.20 + holoFres * 1.05 + holoScan * 0.16);',
           'gl_FragColor.rgb = mix(gl_FragColor.rgb * 0.55, holoRgb, 0.72) * holoFlick;',
-          'gl_FragColor.a = clamp(gl_FragColor.a * (0.34 + holoFres * 0.55 + holoScan * 0.10), 0.0, 1.0);',
+          'gl_FragColor.a = clamp(gl_FragColor.a * uHoloFill * (0.34 + holoFres * 0.55 + holoScan * 0.10), 0.0, 1.0);',
         ].join(String.fromCharCode(10)));
     };
     m.needsUpdate = true;
     return m;
   }
 
+  /* Filaire : on N'ACTIVE PAS `material.wireframe` sur le matériau du sujet —
+     cela REMPLACERAIT la surface au lieu de s'y superposer, et on perdrait le
+     volume translucide. On ajoute un maillage JUMEAU qui partage la géométrie
+     (aucune copie en VRAM) et, pour un maillage skinné, le MÊME squelette : il
+     suit donc l'animation sans coût de rig supplémentaire. */
+  function buildWireframe(node) {
+    const material = new THREE.MeshBasicMaterial({
+      color: holoTint, wireframe: true, transparent: true,
+      // Testé en profondeur contre la surface occultante ci-dessus : seules
+      // les arêtes visibles sont dessinées.
+      depthTest: true,
+      opacity: opts.wireframeOpacity, blending: THREE.AdditiveBlending,
+      depthWrite: false, side: THREE.FrontSide,
+      // Sans ce décalage, les arêtes du jumeau et la surface du sujet occupent
+      // exactement la même profondeur : le z-fighting fait clignoter le filaire.
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    });
+    let twin;
+    if (node.isSkinnedMesh) {
+      twin = new THREE.SkinnedMesh(node.geometry, material);
+      twin.bind(node.skeleton, node.bindMatrix);
+    } else {
+      twin = new THREE.Mesh(node.geometry, material);
+    }
+    twin.frustumCulled = false;
+    twin.userData.isHoloWire = true;
+    return twin;
+  }
+  const wireTwins = [];
+
   model.traverse((node) => {
-    if (!node.isMesh) return;
+    if (!node.isMesh || node.userData.isHoloWire) return;
     node.castShadow = !opts.hologram;     // une projection ne porte pas d'ombre
     node.receiveShadow = !opts.hologram;
     // Un maillage skinné animé sort de sa boîte de repos : sans cela il
@@ -345,6 +393,9 @@ varying float vHoloY;`)
     if (opts.hologram) {
       const patched = materials.map(holoPatch);
       node.material = wasArray ? patched : patched[0];
+      // Greffe différée : ajouter un enfant pendant `traverse` le ferait
+      // visiter à son tour, et la boucle se patcherait elle-même sans fin.
+      if (opts.wireframe) wireTwins.push([node, buildWireframe(node)]);
       return;
     }
 
@@ -363,6 +414,9 @@ varying float vHoloY;`)
       material.needsUpdate = true;
     }
   });
+  // Enfant du maillage d'origine : le jumeau hérite exactement de sa matrice
+  // monde, donc il se superpose au pixel près sans aucun recalcul.
+  for (const [node, twin] of wireTwins) node.add(twin);
   scene.add(model);
 
   /* ---------------------------------------------------------- animations */
