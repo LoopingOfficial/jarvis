@@ -27,7 +27,6 @@ from .brain_manager import BrainManager
 from .browser_manager import BrowserManager, set_manager
 from .crm import CrmStore
 from .crm_pipeline import CrmPipeline
-from .crm_remote import CrmRemoteClient
 from .vault_credentials import AgentContext, CredentialVault, VaultDenied
 from .attachments import AttachmentStore
 from .calendar import CalendarManager
@@ -36,7 +35,6 @@ from .connectors import ConnectorManager
 from .conversations import ConversationManager
 from .db import Database
 from .discord_scheduler import DiscordScheduler
-from .editorial_scheduler import EditorialScheduler
 from .events import EventBus
 from .document_store import DocumentStore
 from .imagegen import ImageGenManager
@@ -49,7 +47,6 @@ from .secrets import SecretVault
 from .tasks import TaskManager
 from .tools import registry
 from .tools.runner import SecureToolRunner
-from .stt import SpeechRecognizer
 from .tts import PiperTTS
 from .voice import VoiceSessionManager, VoiceStateMachine
 from .project_status import ProjectStatusService
@@ -59,8 +56,8 @@ from .self_upgrade.service import SelfUpgradeService  # noqa: E402
 
 # Enregistre les outils intégrés (import = enregistrement dans le registre).
 from .tools import (avatar_engine_tools, avatar_tools, avatar_update_tools,  # noqa: F401,E402
-                    blender_tools, blog_tools, browser_tools,
-                    crm_tools, crm_remote_tools, discord_tools, pdf_tools, transcript_tools,
+                    blender_tools, browser_tools,
+                    crm_tools, discord_tools, pdf_tools, transcript_tools,
                     image_tools,
                     file_analysis_tools,  # noqa: F401,E402
                     jarvis_tools,
@@ -94,7 +91,6 @@ class JarvisCore:
         # runner, donc construit après eux. Le moteur Discord, lui, reste créé à
         # la demande : planifier une tâche ne doit pas forcer la connexion du bot.
         self.discord_scheduler = DiscordScheduler(self)
-        self.editorial_scheduler = EditorialScheduler(self)
         self.imagegen = ImageGenManager(self)
         self.blender = BlenderManager(self)
         self.avatar = AvatarDirector(self)
@@ -109,7 +105,6 @@ class JarvisCore:
         self.voice = VoiceStateMachine(self.events)
         self.sessions = VoiceSessionManager(self.db, self.settings, self.events)
         self.tts = PiperTTS()
-        self.stt = SpeechRecognizer(self.settings)
         self.registry = registry
         self.brain = BrainManager(self)
         self.project_status = ProjectStatusService(self)
@@ -121,10 +116,6 @@ class JarvisCore:
             self.crm.seed_if_empty()
         except Exception:
             pass
-        # Pont vers le CRM partagé (crm_api). Le client ne se connecte à rien à
-        # la construction : sans CRM_API_URL/CRM_API_KEY il reste simplement
-        # `configured = False`, et les outils distants le disent poliment.
-        self.crm_remote = CrmRemoteClient()
         # CRM étendu (sociétés, opportunités, historique, scoring) et coffre-fort
         # d'identifiants. Le coffre réutilise `self.vault` : une seule
         # implémentation de chiffrement dans tout le système.
@@ -225,7 +216,6 @@ class JarvisCore:
         self.idle_learning.start()
         self.automations.start_scheduler()
         self.discord_scheduler.start()
-        self.editorial_scheduler.start()
         threading.Thread(target=self._maintenance_loop, daemon=True, name="jarvis-maintenance").start()
         # Sonde initiale des fournisseurs de modèles hors du chemin des requêtes.
         threading.Thread(target=self._llm_probe_loop, daemon=True, name="jarvis-llm-status").start()
@@ -233,11 +223,6 @@ class JarvisCore:
         if self.settings.get("voice", "tts_provider", "browser") == "piper":
             threading.Thread(target=self.tts.warmup, daemon=True,
                              name="jarvis-tts-warmup").start()
-        # Idem pour la dictée locale : le premier chargement du modèle Whisper
-        # coûte plusieurs secondes, il ne doit pas tomber sur la 1re phrase.
-        if self.settings.get("voice", "stt_provider", "browser") == "local":
-            threading.Thread(target=self.stt.warmup, daemon=True,
-                             name="jarvis-stt-warmup").start()
 
     def _llm_probe_loop(self) -> None:
         while not self._stop.is_set():
@@ -266,7 +251,6 @@ class JarvisCore:
             self._clap_listener.stop()
         self.automations.stop()
         self.discord_scheduler.stop()
-        self.editorial_scheduler.stop()
         self.idle_learning.stop()
         try:
             self.blender.shutdown()
