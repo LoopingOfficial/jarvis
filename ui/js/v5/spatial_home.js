@@ -13,9 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOME_REDESIGN_10';
-
-const AVATAR_URL = '/assets/avatar/cartoon_boy.glb';
+import { createHoloViewer } from '../avatar/holo_viewer.js?v=JARVIS_HOLO_5';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const API = () => (typeof J !== 'undefined' ? J : window.J);
@@ -97,7 +95,7 @@ const Home = {
   SUGGESTIONS: [
     { t: 'Résumer mes derniers mails', p: 'Résume mes mails non lus et classe-les par urgence.' },
     { t: 'Analyser un document', p: "Analyse le document que je vais te joindre et donne-moi l'essentiel." },
-    { t: 'Chercher sur le web', p: 'Cherche sur le web : ' },
+    { t: 'Chercher sur le web', p: 'Cherche sur le web : ', send: false },
     { t: 'Faire le point', p: 'Fais le point sur mes tâches en cours et ce qui bloque.' },
   ],
 
@@ -112,10 +110,23 @@ const Home = {
       if (!btn) return;
       const input = document.getElementById('convInput');
       if (!input) return;
-      input.value = this.SUGGESTIONS[Number(btn.dataset.i)].p;
+      const suggestion = this.SUGGESTIONS[Number(btn.dataset.i)];
+      input.value = suggestion.p;
       input.focus();
       input.dispatchEvent(new Event('input', { bubbles: true }));   // laisse l'app réagir
       try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) {}
+
+      // Les suggestions à compléter (« Cherche sur le web : ») attendent la
+      // suite : on prépare et on rend la main. Les autres sont des demandes
+      // complètes — on les ENVOIE. Se contenter de remplir un champ que
+      // l'utilisateur ne regarde pas donne l'impression d'un bouton mort.
+      if (suggestion.send === false) return;
+      const form = document.getElementById('convForm');
+      if (!form) return;
+      // requestSubmit() passe par la validation et les écouteurs du formulaire,
+      // contrairement à form.submit() qui les court-circuite.
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else form.querySelector('button[type=submit]')?.click();
     });
   },
 
@@ -129,14 +140,15 @@ const Home = {
       return;
     }
     try {
-      this.viewer = await createAvatarViewer({
+      // Plus aucun GLB à charger : la tête est construite en code, donc elle
+      // apparaît en une frame au lieu des 4,6 Mo qu'il fallait télécharger.
+      this.viewer = await createHoloViewer({
         host: stage,
-        url: AVATAR_URL,
-        autoRotate: true,
-        // Un vêtement blanc sous un bloom trop bas devient une lampe : le seuil
-        // haut réserve la lueur aux accents néon de la scène.
-        bloom: { strength: 0.34, radius: 0.6, threshold: 0.93 },
-        exposure: 0.72,
+        accent: 0x22d3ee,
+        // Seuil BAS, à l'inverse d'un sujet en PBR : ici tout est émissif et
+        // c'est précisément ce qu'on veut voir rayonner.
+        bloom: { strength: 0.85, radius: 0.72, threshold: 0.18 },
+        exposure: 1.15,
       });
       window.JarvisHomeAvatar = this.viewer;
       this.q('[data-loading]')?.classList.add('gone');
@@ -236,8 +248,37 @@ const Home = {
       else this.leave();
     });
 
+    // L'accueil ne suivait que la PAGE. Or le shell change de CONTEXTE sans
+    // changer de page : ouvrir une conversation fait passer data-context de
+    // « home » à « chat » et allume #v5Chat, qui est un calque plein écran
+    // au-dessus de l'accueil. Les deux se peignaient donc ensemble — le fil de
+    // discussion tombait en plein sur l'avatar, sur la salutation et sur les
+    // suggestions. On s'accroche à l'attribut que setContext() écrit déjà,
+    // plutôt que d'ajouter un événement au shell : l'accueil s'efface dès que
+    // la conversation prend la main et revient quand elle la rend.
+    const syncContext = () => {
+      const ctx = document.documentElement.getAttribute('data-context') || 'home';
+      if (ctx === 'home') { if (this.host?.style.display === 'none' || !this.host) this.enter(); }
+      else if (this.host && this.host.style.display !== 'none') this.leave();
+    };
+    new MutationObserver(syncContext).observe(document.documentElement,
+      { attributes: true, attributeFilter: ['data-context'] });
+
     const J = API();
     if (J && typeof J.on === 'function') {
+      // ---- La parole. La bouche articule le texte RÉELLEMENT prononcé.
+      J.on('tts.started', (d) => this.viewer?.speak(d?.text || '', Number(d?.duration) || 0));
+      J.on('tts.boundary', (d) => this.viewer?.resyncSpeech(Number(d?.charIndex) || 0, Number(d?.total) || 0));
+      J.on('tts.completed', () => this.viewer?.stopSpeaking());
+      // ---- Les états. Chacun correspond à une situation vraie, pas à une
+      //      humeur décidée au hasard : le micro écoute, le modèle réfléchit,
+      //      un agent travaille.
+      J.on('voice.listening', () => this.viewer?.setState('LISTENING'));
+      J.on('voice.stopped', () => this.viewer?.setState('IDLE'));
+      J.on('chat.thinking', () => this.viewer?.setState('THINKING'));
+      J.on('agent.started', () => this.viewer?.setState('WORKING'));
+      J.on('agent.completed', () => this.viewer?.setState('IDLE'));
+
       // Le flux reprend les ÉVÉNEMENTS RÉELS du bus : rien n'est simulé.
       J.on('*', (type, data) => {
         if (!this.host || !/^(tool|agent|task|vault|crm|discord|memory|image)\./.test(type)) return;
@@ -286,7 +327,25 @@ const Home = {
 
 Home.bind();
 if (document.getElementById('page-command')?.classList.contains('active')) {
-  setTimeout(() => Home.enter(), 400);
+  // Le délai fixe de 400 ms laissait l'accueil du shell V5 (salutation, décor,
+  // cerveau) seul à l'écran le temps qu'il s'écoule : on voyait défiler un
+  // accueil précédent avant celui-ci. On attend l'état RÉEL du shell
+  // (data-v5-ready), pas une durée supposée, avec une sortie de secours si le
+  // shell échoue — dans ce cas l'accueil se monte quand même.
+  const shellReady = () => document.documentElement.getAttribute('data-v5-ready') === '1';
+  // Une conversation restaurée place le shell en contexte « chat » dès le
+  // démarrage : monter l'accueil visible par-dessus reproduirait exactement la
+  // superposition qu'on corrige.
+  const enterIfHome = () => {
+    if ((document.documentElement.getAttribute('data-context') || 'home') === 'home') Home.enter();
+  };
+  if (shellReady()) enterIfHome();
+  else {
+    const started = Date.now();
+    const wait = setInterval(() => {
+      if (shellReady() || Date.now() - started > 3000) { clearInterval(wait); enterIfHome(); }
+    }, 32);
+  }
 }
 
 export default Home;
