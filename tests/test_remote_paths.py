@@ -38,7 +38,15 @@ RACINE = "/home/brainrotfortnite/public_html"
 
 class TestBuild(unittest.TestCase):
     def test_build_id(self):
-        self.assertEqual(JARVIS_BUILD_ID, "REMOTE_PATH_FIX_20260911_A")
+        """Le marqueur de build change à chaque correction de fond.
+
+        Figer sa valeur littérale garantissait un échec à chaque incrément —
+        ce test vérifie donc le contrat réel : un identifiant non vide,
+        exploitable tel quel dans les traces et /api/status.
+        """
+        self.assertTrue(JARVIS_BUILD_ID)
+        self.assertRegex(JARVIS_BUILD_ID, r"^[A-Z0-9][A-Z0-9_]{5,63}$")
+        self.assertEqual(JARVIS_BUILD_ID, JARVIS_BUILD_ID.strip())
 
     def test_forbidden_defaults(self):
         for bad in ("/var/www/html", "/var/www", "/home/user",

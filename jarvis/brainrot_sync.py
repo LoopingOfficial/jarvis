@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import uuid
 import re
 import time
@@ -251,6 +252,18 @@ def selection_hash(plan: dict[str, Any], selection: list[str]) -> str:
     return content_hash(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+#: Fenetre pendant laquelle un rejeu (double clic, retry reseau) doit renvoyer
+#: le resultat deja produit plutot que reecrire. Au-dela, l'ecriture est
+#: tracee dans le journal d'audit, pas dans ce cache memoire.
+RESULT_TTL_SECONDS = 24 * 3600
+#: Plafond absolu du cache de resultats, quelle que soit la fenetre.
+MAX_CACHED_RESULTS = 500
+#: Delai pendant lequel une portee morte est conservee, le temps de pouvoir
+#: encore repondre CONFIRMATION_ALREADY_USED / CONFIRMATION_EXPIRED plutot
+#: qu'un vague "portee inconnue".
+SCOPE_GRACE_SECONDS = 3600
+
+
 class ConfirmationScope:
     """Accord utilisateur borne a une selection precise, a usage unique."""
 
@@ -270,6 +283,7 @@ class ConfirmationScope:
         self.created_at = time.time()
         self.expires_at = self.created_at + ttl
         self.used = False
+        self.used_at = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"confirmation_id": self.id, "plan_id": self.plan_id,
@@ -453,9 +467,56 @@ class SyncService:
 
     #: Résultats déjà produits, indexés par clé d'idempotence (rejeu réseau,
     #: double clic, double POST : la même clé renvoie le même résultat).
+    #: Valeurs : {"at": horodatage, "payload": résultat}. Ces deux caches sont
+    #: portés par la CLASSE, donc partagés par tout le processus : sans purge
+    #: ils grossissent indéfiniment. Un balayage borné s'exécute à chaque
+    #: ouverture de portée et à chaque application.
     _results: dict[str, dict[str, Any]] = {}
     #: Portées de confirmation vivantes, à usage unique.
     _scopes: dict[str, Any] = {}
+    #: Sérialise les accès aux caches de classe (serveur multi-thread).
+    _cache_lock = threading.RLock()
+
+    @classmethod
+    def _sweep_caches(cls) -> dict[str, int]:
+        """Retire portées expirées et résultats hors fenêtre de rejeu.
+
+        Une portée est à usage unique et déjà bornée par `expires_at` : une fois
+        ce délai passé elle ne peut plus rien autoriser, la garder n'a aucun
+        intérêt. Un résultat n'est utile que pendant la fenêtre où un rejeu est
+        plausible (double clic, retry réseau) ; au-delà, l'écriture est
+        historisée dans le journal d'audit, pas dans ce cache.
+        """
+        now = time.time()
+        with cls._cache_lock:
+            # Une portée morte (consommée ou expirée) est conservée pendant une
+            # période de grâce : c'est elle qui permet de répondre
+            # CONFIRMATION_ALREADY_USED ou CONFIRMATION_EXPIRED plutôt qu'un
+            # vague « portée inconnue ». Passé ce délai, elle n'apprend plus
+            # rien à personne et peut partir.
+            dead_scopes = [
+                sid for sid, scope in cls._scopes.items()
+                if now > getattr(scope, "expires_at", 0) + SCOPE_GRACE_SECONDS
+                or (getattr(scope, "used", False)
+                    and now > getattr(scope, "used_at", 0) + SCOPE_GRACE_SECONDS)
+            ]
+            for sid in dead_scopes:
+                cls._scopes.pop(sid, None)
+
+            dead_results = [key for key, item in cls._results.items()
+                            if now - float(item.get("at", 0)) > RESULT_TTL_SECONDS]
+            for key in dead_results:
+                cls._results.pop(key, None)
+
+            # Garde-fou de dernier recours : même dans la fenêtre de rejeu, le
+            # cache ne dépasse jamais cette taille (les plus anciens partent).
+            overflow = len(cls._results) - MAX_CACHED_RESULTS
+            if overflow > 0:
+                oldest = sorted(cls._results.items(),
+                                key=lambda kv: float(kv[1].get("at", 0)))[:overflow]
+                for key, _ in oldest:
+                    cls._results.pop(key, None)
+            return {"scopes": len(cls._scopes), "results": len(cls._results)}
 
     def __init__(self, core: Any, writer: StoreWriter | None = None) -> None:
         self.core = core
@@ -466,6 +527,7 @@ class SyncService:
     def open_confirmation(self, plan: dict[str, Any], selection: list[str], *,
                           request_id: str = "") -> dict[str, Any]:
         """Crée la portée liée à la sélection exacte présentée à l'utilisateur."""
+        SyncService._sweep_caches()
         validated = validate_plan(plan, selection)
         if not validated["selected"]:
             return {"ok": False, "error": "NOTHING_APPLICABLE",
@@ -509,8 +571,12 @@ class SyncService:
         }
 
         # Rejeu : la même clé ne réécrit jamais, elle renvoie le résultat connu.
-        if idempotency_key and idempotency_key in SyncService._results:
-            return {**SyncService._results[idempotency_key], "replayed": True}
+        SyncService._sweep_caches()
+        if idempotency_key:
+            with SyncService._cache_lock:
+                cached = SyncService._results.get(idempotency_key)
+            if cached:
+                return {**cached["payload"], "replayed": True}
 
         if not (confirmation or {}).get("approved"):
             return {**base, "ok": False, "error": "CONFIRMATION_REQUIRED_USER"}
@@ -679,6 +745,7 @@ class SyncService:
 
         if scope and base["applied"]:
             scope.used = True           # usage unique, même en cas d'échec partiel
+            scope.used_at = time.time()
         if base["ok"] and not base["audit_complete"]:
             # L'écriture a bien eu lieu : on le dit, sans jamais la rejouer.
             base["ok"] = False
@@ -686,7 +753,9 @@ class SyncService:
             base["detail"] = ("Les modifications sont appliquées et vérifiées, "
                               "mais le journal métier est incomplet. Aucun rejeu.")
         if idempotency_key:
-            SyncService._results[idempotency_key] = dict(base)
+            with SyncService._cache_lock:
+                SyncService._results[idempotency_key] = {"at": time.time(),
+                                                        "payload": dict(base)}
         return base
 
     def rollback(self, backup_path: str, *, sync_id: str = "",
