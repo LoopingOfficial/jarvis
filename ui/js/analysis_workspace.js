@@ -995,11 +995,65 @@ const AnalysisWorkspace = {
       sheet: `<td class="aw-num">${r.sheet === undefined ? '—' : '$' + awNum(r.sheet)}</td>`,
       site: `<td class="aw-num">${r.site === undefined || r.site === null ? '—' : '$' + awNum(r.site)}</td>`,
       mods: `<td>${this.modCell(e)}</td>`,
-      actions: `<td class="aw-acts"><button class="aw-rowbtn" data-open="${esc(r.key)}" title="Détail">${awIcon('eye', 14)}</button><button class="aw-rowbtn" data-open="${esc(r.key)}" title="Preuves">${awIcon('dots', 14)}</button></td>`,
+      actions: `<td class="aw-acts">${this.directActionBtn(e)}<button class="aw-rowbtn" data-open="${esc(r.key)}" title="Détail">${awIcon('eye', 14)}</button><button class="aw-rowbtn" data-open="${esc(r.key)}" title="Preuves">${awIcon('dots', 14)}</button></td>`,
     };
     return `<tr data-row="${esc(r.key)}" class="${active || on ? 'selected' : ''}">
       <td><span class="aw-check ${on ? 'on' : ''}" data-sel="${esc(r.key)}">${awIcon('check', 11)}</span></td>
       ${cols.map((c) => cell[c.id]).join('')}</tr>`;
+  },
+
+  /* ===================================== ACTIONS DIRECTES ================= */
+  /* Un clic sur [+ Créer] / [Mettre à jour] emprunte EXACTEMENT le pipeline du
+     lot : confirmSync -> confirm-scope -> backup -> write -> verify -> refresh.
+     La sélection ne contient qu'une entrée ; aucune logique métier n'est
+     dupliquée, donc portée de confirmation, expected_sha256, selection_hash,
+     idempotence, audit et rollback s'appliquent à l'identique. */
+
+  /** Entrée du plan de synchronisation correspondant à une ligne de comparaison. */
+  planEntryFor(identity) {
+    return (this.payload.sync?.entries || []).find((x) => x.identity === identity) || null;
+  },
+
+  /** Bouton d'action directe, ou l'état « Synchronisé » quand il n'y a rien à faire. */
+  directActionBtn(e) {
+    const id = String(e.identity || '');
+    if (e.status === 'NO_CHANGE') {
+      return `<span class="aw-synced" title="Aucun écart avec le site">${awIcon('check', 12)}Synchronisé</span>`;
+    }
+    if (e.status !== 'CREATE' && e.status !== 'UPDATE') return '';
+    const planned = this.planEntryFor(id);
+    if (!planned) return '';
+    const ready = planned.readiness_status === 'READY'
+               || planned.readiness_status === 'READY_WITHOUT_IMAGE';
+    if (!ready) {
+      return `<span class="aw-synced blocked" title="${esc(planned.readiness_reason
+        || 'Entrée non applicable en l\'état')}">${awIcon('alert', 12)}Non applicable</span>`;
+    }
+    const isCreate = e.status === 'CREATE';
+    return `<button class="aw-rowbtn aw-direct ${isCreate ? 'create' : 'update'}"
+      data-sy-direct="${esc(id)}" title="${isCreate ? 'Créer cette entrée sur le site'
+      : 'Appliquer cette modification sur le site'}">
+      ${awIcon(isCreate ? 'plus' : 'refresh', 13)}${isCreate ? 'Créer' : 'Mettre à jour'}</button>`;
+  },
+
+  /** Point d'entrée unique des actions directes (ligne ET panneau détail). */
+  async directAction(identity) {
+    const planned = this.planEntryFor(identity);
+    if (!planned) {
+      SyncFeedback.toast('Cette entrée n\'est plus dans le plan — relance un rafraîchissement.',
+                         'warning');
+      return;
+    }
+    const ready = planned.readiness_status === 'READY'
+               || planned.readiness_status === 'READY_WITHOUT_IMAGE';
+    if (!ready) {
+      SyncFeedback.toast(planned.readiness_reason || 'Entrée non applicable en l\'état.',
+                         'warning');
+      return;
+    }
+    if (this.sy.applying) return;               // double clic sans effet
+    // Le lot garde sa propre sélection : une action directe ne la modifie pas.
+    await this.confirmSync([identity]);
   },
 
   statusBadge(status) {
@@ -1226,11 +1280,28 @@ const AnalysisWorkspace = {
            Site : ${esc(this.payload.comparison.site.path)} lu en SSH lecture seule.</p></div></div>`;
   },
 
+  /** Action directe du panneau détail — même chemin que le bouton de ligne. */
+  detailActionBtn(e) {
+    const id = String(e.identity || '');
+    if (e.status === 'NO_CHANGE') return '';
+    if (e.status !== 'CREATE' && e.status !== 'UPDATE') return '';
+    const planned = this.planEntryFor(id);
+    if (!planned) return '';
+    const ready = planned.readiness_status === 'READY'
+               || planned.readiness_status === 'READY_WITHOUT_IMAGE';
+    if (!ready) return '';
+    const isCreate = e.status === 'CREATE';
+    return `<button class="aw-btn aw-note-act aw-direct ${isCreate ? 'create' : 'update'}"
+      data-sy-direct="${esc(id)}">${awIcon(isCreate ? 'plus' : 'refresh', 13)}
+      ${isCreate ? 'Créer sur le site' : 'Appliquer cette modification'}</button>`;
+  },
+
   detailReco(row) {
     const e = row.entry;
     return `<div class="aw-note ${e.status === 'NO_CHANGE' ? 'ok' : 'info'}">
         ${awIcon(e.status === 'NO_CHANGE' ? 'check' : 'bulb', 18)}
-        <div><b>Action recommandée</b><p>${esc(e.recommended_action || '—')}</p></div></div>
+        <div><b>Action recommandée</b><p>${esc(e.recommended_action || '—')}</p></div>
+        ${this.detailActionBtn(e)}</div>
       ${(e.missing_fields || []).length ? `<div class="aw-note warn">${awIcon('alert', 17)}
         <div><b>Champs vides côté Sheet</b>
         <p>${esc((e.missing_fields || []).map((c) => c.field).join(', '))} — le Sheet ne dit rien sur
@@ -1295,6 +1366,14 @@ const AnalysisWorkspace = {
         if (ev.target.closest('[data-sel]')) return;
         const row = this.rows().find((r) => r.key === el.dataset.row);
         if (row) { this.detail.key = row.key; this.renderMain(); }
+      };
+    });
+    // Actions directes : le clic ne doit ni ouvrir le détail, ni cocher la ligne.
+    root.querySelectorAll('[data-sy-direct]').forEach((el) => {
+      el.onclick = (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        this.directAction(el.dataset.syDirect);
       };
     });
     root.querySelectorAll('[data-open]').forEach((el) => {
