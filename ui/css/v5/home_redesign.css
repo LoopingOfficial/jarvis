@@ -60,17 +60,56 @@
   width: min(380px, 62vw);
   height: min(420px, 44vh);
   flex: none;
+  isolation: isolate;
 }
-/* Le composer écrit un fond OPAQUE (ses cibles de rendu n'ont pas d'alpha) :
-   sans masque, le canvas dessine un rectangle noir franc au milieu de la page.
-   Un dégradé de masque fait disparaître ses bords dans le fond. */
+.jh-stage::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  bottom: 4%;
+  width: 78%;
+  height: 18%;
+  transform: translateX(-50%);
+  border: 1px solid rgba(0, 242, 254, .42);
+  border-radius: 50%;
+  box-shadow: 0 0 18px rgba(0, 242, 254, .22), inset 0 0 18px rgba(0, 242, 254, .18);
+  background: radial-gradient(ellipse, rgba(0, 242, 254, .18), transparent 62%);
+  animation: jh-ring 4.8s ease-in-out infinite;
+  pointer-events: none;
+}
+.jh-stage::after {
+  content: "";
+  position: absolute;
+  inset: 7% 13% 10%;
+  z-index: 2;
+  pointer-events: none;
+  opacity: .24;
+  background: repeating-linear-gradient(180deg, transparent 0 5px, rgba(110, 229, 255, .13) 6px, transparent 7px);
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(62% 58% at 50% 42%, #000 16%, transparent 94%);
+  -webkit-mask-image: radial-gradient(62% 58% at 50% 42%, #000 16%, transparent 94%);
+  animation: jh-scan 5.5s linear infinite;
+}
+@keyframes jh-ring {
+  0%, 100% { transform: translateX(-50%) scaleX(.92); opacity: .55; }
+  50% { transform: translateX(-50%) scaleX(1.06); opacity: 1; }
+}
+@keyframes jh-scan {
+  from { transform: translateY(-7%); }
+  to { transform: translateY(7%); }
+}
+/* Le rendu a un fond OPAQUE (voir la note dans holo_viewer.js : le rendre
+   transparent fait accumuler le halo du bloom sur tout le cadre). Ce masque
+   fond donc les bords du canvas dans la page. Il doit rester assez large pour
+   ne pas rogner les épaules — c'est le réglage qui les avait fait disparaître. */
 .jh-stage canvas {
   position: absolute; inset: 0; display: block;
-  -webkit-mask-image: radial-gradient(58% 56% at 50% 44%, #000 26%, transparent 96%);
-  mask-image: radial-gradient(58% 56% at 50% 44%, #000 26%, transparent 96%);
+  -webkit-mask-image: radial-gradient(70% 80% at 50% 44%, #000 38%, transparent 97%);
+  mask-image: radial-gradient(70% 80% at 50% 44%, #000 38%, transparent 97%);
 }
 .jh-loading {
-  position: absolute; inset: 0; display: grid; place-items: center;
+  position: absolute; inset: 0; z-index: 3; display: grid; place-items: center;
   font-size: 9.5px; letter-spacing: .3em; color: var(--faint);
   transition: opacity .6s ease;
 }
@@ -166,8 +205,9 @@
 /* --- responsive --------------------------------------------------------- */
 @media (max-width: 720px) {
   .jh.jh-layer { left: 44px; bottom: 76px; }
-  .jh-suggest { grid-template-columns: 1fr; }
-  .jh-stage { height: min(300px, 34vh); }
+  .jh-suggest { grid-template-columns: 1fr; width: min(100%, 420px); }
+  .jh-stage { width: min(340px, 78vw); height: min(300px, 34vh); }
+  .jh-sub { max-width: 90vw; line-height: 1.6; }
 }
 @media (max-height: 720px) {
   .jh-stage { height: 240px; }
