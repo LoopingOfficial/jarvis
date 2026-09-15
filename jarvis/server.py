@@ -465,7 +465,12 @@ def api_tts_synthesize(req):
     rate = float(req["body"].get("rate") or 1.0)
     if req["body"].get("sanitize", True):
         from .speech_sanitizer import sanitize_for_speech
-        text = sanitize_for_speech(text) or text
+        spoken = sanitize_for_speech(text)
+        if not spoken:
+            # Le message n'était que des emojis / du décor : il n'y a rien à
+            # prononcer. Retomber sur le texte brut ferait lire « fusée ».
+            return _err("Rien à prononcer dans ce message.", 204)
+        text = spoken
     if len(text) > 4000:
         text = text[:4000]
     wav = CORE.tts.synthesize(text, voice_id=voice, rate=rate)

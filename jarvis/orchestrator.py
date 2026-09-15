@@ -21,6 +21,7 @@ from .permissions import RISK_LABELS
 from .tools.base import registry
 from .tools.runner import ConfirmationRequired
 from .fast_actions import FastActionRouter
+from .project_status import detect_project_status
 from .goals import GoalCompletionChecker, has_write_intent
 from .risk_guard import RiskEscalationGuard
 from .remote_paths import (InvalidRemoteRootError, MissingRemoteWorkingDirectoryError,
@@ -213,10 +214,14 @@ class Orchestrator:
     def _validation_spec(request: str) -> dict[str, Any]:
         """Infer only explicit, cheap output contracts; never broaden routing."""
         low = (request or "").casefold()
-        spec: dict[str, Any] = {"validators": ["format", "math", "code", "css", "tests"]}
+        # Le validateur CSS ne s'applique QU'AUX demandes de CSS. Appliqué par
+        # défaut, il signalait CSS_NON_NATIVE sur de la prose ordinaire
+        # (accolades imbriquées, « $ », « &: ») et la boucle de correction
+        # réinjectait ce code au modèle, qui répondait alors hors sujet.
+        spec: dict[str, Any] = {"validators": ["format", "math", "code", "tests"]}
         if re.search(r"code\s+brut|code\s+uniquement|sans\s+fence|sans\s+markdown", low):
             spec.update(code_only=True, format="code_raw")
-        if "css" in low:
+        if re.search(r"\bcss\b|\bfeuille\s+de\s+style\b|\bstylesheet\b", low):
             spec["validators"] = ["format", "css"]
         if re.search(r"\b(?:calcule|calcul|combien|r[ée]sultat)\b", low):
             spec["validators"] = ["format", "math"]
@@ -406,6 +411,15 @@ class Orchestrator:
                     f"write_allowed={resolved.write_allowed} "
                     f"tools_allowed={resolved.tools_allowed}",
                     force=bool(resolved.read_only))
+
+        # Récapitulatif des travaux : JARVIS possède déjà les faits (tâches,
+        # mémoire projet, activité, agents, erreurs ouvertes). Le modèle ne doit
+        # jamais y répondre seul — c'est ce chemin qui produisait des réponses
+        # inventées. Le rendu est entièrement déterministe et traçable.
+        if detect_project_status(resolved.segments.executable_instruction or text):
+            return self._run_project_status(text, conversation_id,
+                                            execution_policy=execution_policy,
+                                            request_id=request_id)
 
         # Mode MODEL_ONLY : aucun outil n'est exposé ni exécuté. Le modèle
         # répond seul — c'est la garantie qu'un benchmark, une citation, une
@@ -1052,6 +1066,43 @@ class Orchestrator:
         return {"ok": True, "response": final_text, "task_id": task_id,
                 "conversation_id": conversation_id, "tools_used": [],
                 "request_id": request_id}
+
+    def _run_project_status(
+        self, text: str, conversation_id: str, *,
+        execution_policy: dict[str, Any] | None = None, request_id: str = "",
+    ) -> dict[str, Any]:
+        """Récapitulatif PROJECT_STATUS : 100 % issu des données internes."""
+        core = self._core
+        task_id = core.tasks.create(
+            name="Point sur les travaux en cours", kind="project_status",
+            conversation_id=conversation_id, meta={"request_id": request_id},
+        )["id"]
+        self._debug(f"[routing] resolved_intent=PROJECT_STATUS request_id={request_id}",
+                    force=True)
+        core.agents.set_state("jarvis", "active", action="Récapitulatif des travaux",
+                              task_id=task_id)
+        try:
+            data = core.project_status.collect()
+            response = core.project_status.render(data)
+        except Exception as exc:  # pragma: no cover - défense runtime
+            core.tasks.fail(task_id, str(exc))
+            core.agents.set_state("jarvis", "standby")
+            self._debug(f"[PROJECT_STATUS_ERROR] {exc!r}", force=True)
+            raise
+        self._debug(f"[PROJECT_STATUS_OK] request_id={request_id} "
+                    f"projects={len(data.get('projects') or [])} "
+                    f"counts={data.get('counts')}", force=True)
+        core.tasks.complete(task_id, response)
+        core.agents.set_state("jarvis", "standby")
+        core.conversations.add_message(
+            conversation_id, "assistant", response,
+            meta={"intent": "PROJECT_STATUS", "grounded": True, "task_id": task_id,
+                  "tools": [], "request_id": request_id, "project_status": data},
+        )
+        return {"ok": True, "response": response, "task_id": task_id,
+                "conversation_id": conversation_id, "tools_used": [],
+                "intent": "PROJECT_STATUS", "grounded": True,
+                "project_status": data, "request_id": request_id}
 
     def _build_model_messages(self, text: str, policy: dict[str, Any]) -> list[ChatMessage]:
         core = self._core

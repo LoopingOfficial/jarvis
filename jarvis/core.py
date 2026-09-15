@@ -49,6 +49,7 @@ from .tools import registry
 from .tools.runner import SecureToolRunner
 from .tts import PiperTTS
 from .voice import VoiceSessionManager, VoiceStateMachine
+from .project_status import ProjectStatusService
 from .validation import ValidationEngine
 
 from .self_upgrade.service import SelfUpgradeService  # noqa: E402
@@ -106,6 +107,7 @@ class JarvisCore:
         self.tts = PiperTTS()
         self.registry = registry
         self.brain = BrainManager(self)
+        self.project_status = ProjectStatusService(self)
         self.attachments = AttachmentStore(self)
         # CRM local : le carnet s'amorce au premier démarrage seulement, il
         # n'écrase jamais des contacts existants.
