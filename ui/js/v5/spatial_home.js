@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOLO_12';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOLO_15';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const API = () => (typeof J !== 'undefined' ? J : window.J);
@@ -152,10 +152,21 @@ const Home = {
         url: '/assets/avatar/cartoon_boy.glb',
         hologram: true,
         portrait: true,              // plan tête-épaules
+        // 0.52 m de sujet visé au lieu de 0.62 : la référence est un cadrage
+        // serré. Plus large, le buste se perd au centre du masque radial.
+        portraitHeight: 0.52,
+        // Le maillage lui-même porte l'image : c'est ce qui donne la lecture
+        // « projection » plutôt que « personnage teinté en bleu », et c'est
+        // aussi ce qui efface le rendu cartoon des textures d'origine.
+        wireframe: true,
+        wireframeOpacity: 0.38,
+        holoFill: 0.55,
         autoRotate: false,
         platform: false,             // l'anneau est dessiné en CSS sous la scène
-        bloom: { strength: 0.42, radius: 0.72, threshold: 0.45 },
-        exposure: 0.85,
+        // Seuil bas assumé : en filaire il n'y a presque plus de surface à
+        // faire déborder, et c'est le halo des arêtes qui fait la lumière.
+        bloom: { strength: 0.5, radius: 0.8, threshold: 0.58 },
+        exposure: 0.62,
       });
       window.JarvisHomeAvatar = this.viewer;
       this.q('[data-loading]')?.classList.add('gone');
