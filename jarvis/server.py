@@ -461,8 +461,16 @@ def api_tts_synthesize(req):
     text = str(req["body"].get("text") or "").strip()
     if not text:
         return _err("Texte vide.")
-    voice = str(req["body"].get("voice") or "")
-    rate = float(req["body"].get("rate") or 1.0)
+    settings = CORE.settings
+    voice = str(req["body"].get("voice") or settings.get("voice", "voice", ""))
+    rate = float(req["body"].get("rate") or settings.get("voice", "speech_rate", 1.0))
+    # Locuteur : une voix multi-locuteurs n'est adressable que par lui.
+    speaker = str(req["body"].get("speaker")
+                  if req["body"].get("speaker") is not None
+                  else settings.get("voice", "speaker", ""))
+    expressivity = req["body"].get("expressivity")
+    if expressivity is None:
+        expressivity = settings.get("voice", "expressivity", 0.0)
     if req["body"].get("sanitize", True):
         from .speech_sanitizer import sanitize_for_speech
         spoken = sanitize_for_speech(text)
@@ -473,7 +481,8 @@ def api_tts_synthesize(req):
         text = spoken
     if len(text) > 4000:
         text = text[:4000]
-    wav = CORE.tts.synthesize(text, voice_id=voice, rate=rate)
+    wav = CORE.tts.synthesize(text, voice_id=voice, rate=rate, speaker=speaker,
+                              expressivity=float(expressivity or 0.0))
     if wav is None:
         return _err("Voix Piper indisponible : installe une voix française puis réessaie.", 503)
     return RawResponse(wav, "audio/wav")
