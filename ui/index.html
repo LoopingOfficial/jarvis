@@ -30,7 +30,7 @@
 <link rel="stylesheet" href="/css/v5/spatial.css?v=JARVIS_HOME_SINGLE_1" />
   <link rel="stylesheet" href="/css/v5/spatial_phase2.css?v=JARVIS_LIVEBROWSER_2" />
 <link rel="stylesheet" href="/css/v5/neural_graph.css?v=JARVIS_NEURAL_GRAPH_V5_1" />
-<link rel="stylesheet" href="/css/v5/home_redesign.css?v=JARVIS_HOLO_9" />
+<link rel="stylesheet" href="/css/v5/home_redesign.css?v=JARVIS_HOLO_10" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%2322d3ee' stroke-width='2'/><circle cx='16' cy='16' r='5' fill='%2322d3ee'/></svg>" />
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js",
@@ -96,7 +96,11 @@
                       <button type="button" class="icon-btn" id="convOpen" title="Ouvrir la console" aria-label="Ouvrir la console">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
                       </button>
-                      <button type="submit" class="btn primary send" title="Envoyer">
+                      <button type="button" class="btn danger send" id="convStop" hidden
+                              title="Arrêter la réflexion en cours (Échap)" aria-label="Arrêter la réflexion en cours">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                      </button>
+                      <button type="submit" class="btn primary send" id="convSend" title="Envoyer">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>
                         <span>Envoyer</span>
                       </button>

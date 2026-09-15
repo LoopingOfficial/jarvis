@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOLO_15';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOLO_20';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const API = () => (typeof J !== 'undefined' ? J : window.J);
@@ -154,13 +154,15 @@ const Home = {
         portrait: true,              // plan tête-épaules
         // 0.52 m de sujet visé au lieu de 0.62 : la référence est un cadrage
         // serré. Plus large, le buste se perd au centre du masque radial.
-        portraitHeight: 0.52,
+        portraitHeight: 0.44,
         // Le maillage lui-même porte l'image : c'est ce qui donne la lecture
         // « projection » plutôt que « personnage teinté en bleu », et c'est
         // aussi ce qui efface le rendu cartoon des textures d'origine.
         wireframe: true,
-        wireframeOpacity: 0.38,
-        holoFill: 0.55,
+        gridSpacing: 0.018,          // un anneau tous les 18 mm
+        meridians: 22,
+        wireframeOpacity: 0.55,
+        holoFill: 0.5,
         autoRotate: false,
         platform: false,             // l'anneau est dessiné en CSS sous la scène
         // Seuil bas assumé : en filaire il n'y a presque plus de surface à
@@ -285,9 +287,10 @@ const Home = {
     const J = API();
     if (J && typeof J.on === 'function') {
       // ---- La parole. La bouche articule le texte RÉELLEMENT prononcé.
-      J.on('tts.started', (d) => this.viewer?.speak(d?.text || '', Number(d?.duration) || 0));
-      J.on('tts.boundary', (d) => this.viewer?.resyncSpeech(Number(d?.charIndex) || 0, Number(d?.total) || 0));
-      J.on('tts.completed', () => this.viewer?.stopSpeaking());
+      // Ce viewer n'a pas de visèmes : la parole se traduit en présence
+      // (respiration plus ample, tête plus mobile), pas en mouvement de lèvres.
+      J.on('tts.started', () => this.viewer?.setState('SPEAKING'));
+      J.on('tts.completed', () => this.viewer?.setState('IDLE'));
       // ---- Les états. Chacun correspond à une situation vraie, pas à une
       //      humeur décidée au hasard : le micro écoute, le modèle réfléchit,
       //      un agent travaille.
