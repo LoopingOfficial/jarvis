@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createHoloViewer } from '../avatar/holo_viewer.js?v=JARVIS_HOLO_5';
+import { createHoloViewer } from '../avatar/holo_viewer.js?v=JARVIS_HOLO_9';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const API = () => (typeof J !== 'undefined' ? J : window.J);
