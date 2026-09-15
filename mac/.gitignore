@@ -14,6 +14,8 @@ data/*
 # de contacts initial). Ce ne sont pas des données utilisateur : sans eux, un
 # clone neuf n'a ni tri mail ni CRM testables hors-ligne.
 !data/mail_mock.json
+!ui/vendor/
+!ui/vendor/**
 !data/crm_seed.json
 
 # Ancien format, conservé le temps de la migration puis sauvegardé.
