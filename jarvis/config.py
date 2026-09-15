@@ -131,9 +131,19 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         # Fournisseur TTS : "browser" (Web Speech API) ou "macos_say"
         "tts_provider": "browser",
         "voice": "",
+        # Locuteur d'une voix multi-locuteurs (ex. « pierre » pour upmc).
+        # Vide = locuteur par défaut du modèle.
+        "speaker": "",
         "speech_rate": 1.0,
         "pitch": 0.9,
         "volume": 1.0,
+        # Expressivité 0..1 : pilote noise_scale / noise_w_scale de Piper.
+        # Mesuré sur fr_FR-tom-medium, l'effet sur l'étendue de F0 et la
+        # régularité du rythme reste dans le bruit de mesure — le réglage est
+        # exposé parce que le moteur le supporte, pas comme gain démontré.
+        "expressivity": 0.0,
+        # Ne jamais prononcer les emojis : le moteur lirait leur nom Unicode.
+        "speak_emojis": False,
         # Mode d'écoute : push_to_talk | always_listening | wake_word | conversation
         "mode": "wake_word",
         "wake_word": "jarvis",
@@ -227,6 +237,20 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "wordWrap": False,
         "fontSize": 13,
         "fontFamily": "Cascadia Code",
+    },
+    # Agent éditorial du blog (JARVIS_BLOG_PUBLISHER_V1).
+    # `auto_publish` reste faux par défaut : la publication publique est une
+    # décision, jamais un réglage qu'on active par inadvertance.
+    "blog": {
+        "discord_channel_id": "",
+        "auto_editorial": False,
+        "auto_mode": "AUTO_DRAFTS",       # AUTO_DRAFTS | AUTO_REVIEW | FULL_AUTO
+        "auto_research": True,
+        "auto_drafts": True,
+        "auto_publish": False,
+        "auto_discord": False,
+        "ssh_connector_id": "ssh",
+        "default_category": "actualites",
     },
     "self_upgrade": {
         "enabled": True,

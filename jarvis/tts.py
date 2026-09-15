@@ -122,10 +122,15 @@ def _wav_bytes(pcm_data: bytes, sample_rate: int, channels: int = 1,
     data_size = len(pcm_data)
     block_align = channels * sample_width
     byte_rate = sample_rate * block_align
+    # Le dernier champ du bloc « fmt » est bitsPerSample, exprimé en BITS.
+    # On y écrivait `sample_width` (2 octets) : l'en-tête annonçait donc de
+    # l'audio 2 bits pour du PCM 16 bits, et tout décodeur respectant l'en-tête
+    # lisait un flux invalide.
+    bits_per_sample = sample_width * 8
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", 36 + data_size, b"WAVE",
-        b"fmt ", 16, 1, channels, sample_rate, byte_rate, block_align, sample_width,
+        b"fmt ", 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample,
         b"data", data_size,
     )
     return header + pcm_data
@@ -138,6 +143,7 @@ class PiperTTS:
         self._dir = Path(voice_dir or VOICES_DIR)
         self._lock = threading.RLock()
         self._loaded: dict[str, Any] = {}
+        self._alignment_support: dict[str, bool] = {}
         self._started = time.time()
 
     # ------------------------------------------------------------------ état
@@ -192,6 +198,7 @@ class PiperTTS:
             "sample_rate": int((data.get("audio") or {}).get("sample_rate", 22050)),
             "language": str(((data.get("language") or {}).get("code")) or "fr_FR"),
             "speakers": list((data.get("speaker_id_map") or {}).keys()),
+            "speaker_id_map": dict(data.get("speaker_id_map") or {}),
         }
 
     def default_voice(self) -> str:
@@ -226,8 +233,58 @@ class PiperTTS:
         return result
 
     # ----------------------------------------------------------- synthèse
+    def resolve_speaker_id(self, vid: str, speaker: str) -> int | None:
+        """Nom de locuteur → identifiant numérique attendu par Piper.
+
+        Une voix multi-locuteurs (`fr_FR-upmc-medium` : jessica/pierre,
+        `fr_FR-mls-medium` : 125 locuteurs) n'est adressable que par cet
+        identifiant. Un nom inconnu renvoie None : le modèle parle alors avec
+        son locuteur par défaut plutôt que d'échouer.
+        """
+        if not speaker:
+            return None
+        info = self._voice_info(vid) or {}
+        mapping = info.get("speaker_id_map") or {}
+        if speaker in mapping:
+            return int(mapping[speaker])
+        try:
+            return int(speaker)
+        except (TypeError, ValueError):
+            return None
+
+    def _synthesis_config(self, vid: str, rate: float, speaker: str,
+                          expressivity: float | None = None):
+        """Construit la SynthesisConfig, ou None si le moteur est trop ancien.
+
+        `speaker_id` se passe ICI et nulle part ailleurs : il n'est pas un
+        argument nommé de `synthesize()`. L'y passer levait un TypeError et
+        faisait silencieusement retomber toute voix multi-locuteurs sur son
+        locuteur 0 — les voix masculines étaient donc inatteignables.
+        """
+        if not self._piper_has_synthesis_config():
+            return None
+        try:
+            from piper.config import SynthesisConfig
+            length_scale = max(0.5, min(2.0, 1.0 / max(0.4, float(rate))))
+            kwargs: dict[str, Any] = {"length_scale": length_scale}
+            speaker_id = self.resolve_speaker_id(vid, speaker)
+            if speaker_id is not None:
+                kwargs["speaker_id"] = speaker_id
+            if expressivity is not None:
+                # 0 = neutre, 1 = maximum. Mesuré sur fr_FR-tom-medium : l'effet
+                # sur l'étendue de F0 et la régularité du rythme reste dans le
+                # bruit de mesure (cf. bench/voice/expressivity.json). Le réglage
+                # est exposé parce que le moteur le supporte, pas parce qu'il
+                # constitue un gain de naturel démontré.
+                level = max(0.0, min(1.0, float(expressivity)))
+                kwargs["noise_scale"] = 0.667 + 0.233 * level
+                kwargs["noise_w_scale"] = 0.8 + 0.55 * level
+            return SynthesisConfig(**kwargs)
+        except Exception:
+            return None
+
     def synthesize(self, text: str, voice_id: str = "", rate: float = 1.0,
-                   speaker: str = "") -> bytes | None:
+                   speaker: str = "", expressivity: float | None = None) -> bytes | None:
         """Synthétise `text` → WAV (bytes). None si la voix est indisponible."""
         text = (text or "").strip()
         if not text:
@@ -236,7 +293,6 @@ class PiperTTS:
         model = self._dir / vid / f"{vid}.onnx"
         if not model.exists():
             return None
-        import piper  # import tardif : l'absence du moteur ne bloque pas le boot
 
         voice = self._load_voice(vid, model)
         if voice is None:
@@ -244,18 +300,8 @@ class PiperTTS:
 
         # Tronque les très longues réponses (protection mémoire/CPU).
         text = text[:4000]
-        syn_cfg = None
-        if self._piper_has_synthesis_config():
-            try:
-                from piper.config import SynthesisConfig
-                length_scale = max(0.5, min(2.0, 1.0 / max(0.4, float(rate))))
-                syn_cfg = SynthesisConfig(length_scale=length_scale)
-            except Exception:
-                syn_cfg = None
+        syn_cfg = self._synthesis_config(vid, rate, speaker, expressivity)
         try:
-            chunks = list(voice.synthesize(text, syn_config=syn_cfg,
-                                           speaker_id=None if not speaker else speaker))
-        except TypeError:
             chunks = list(voice.synthesize(text, syn_config=syn_cfg))
         except Exception:
             return None
@@ -266,6 +312,94 @@ class PiperTTS:
         if not pcm:
             return None
         return _wav_bytes(pcm, sample_rate)
+
+    def supports_alignments(self, voice_id: str = "") -> bool:
+        """Vrai si CETTE voix produit réellement des durées de phonèmes.
+
+        Tester la signature de `synthesize()` ne suffit pas : `include_alignments`
+        existe dans l'API alors que la plupart des modèles Piper n'exportent pas
+        la sortie de durée nécessaire (`phoneme_id_samples` reste None). Seule
+        une synthèse courte réellement exécutée répond à la question. Le
+        résultat est mis en cache par voix.
+        """
+        vid = (voice_id or "").strip() or self.default_voice()
+        with self._lock:
+            cached = self._alignment_support.get(vid)
+        if cached is not None:
+            return cached
+        supported = False
+        try:
+            import inspect
+
+            from piper import PiperVoice
+            if "include_alignments" in inspect.signature(
+                    PiperVoice.synthesize).parameters:
+                model = self._dir / vid / f"{vid}.onnx"
+                voice = self._load_voice(vid, model) if model.exists() else None
+                if voice is not None:
+                    probe = list(voice.synthesize("Bonjour.", include_alignments=True))
+                    supported = any(
+                        getattr(c, "phoneme_id_samples", None) for c in probe)
+        except Exception:
+            supported = False
+        with self._lock:
+            self._alignment_support[vid] = supported
+        return supported
+
+    def synthesize_with_alignments(
+        self, text: str, voice_id: str = "", rate: float = 1.0,
+        speaker: str = "", expressivity: float | None = None,
+    ) -> dict[str, Any] | None:
+        """WAV + suite de phonèmes horodatés.
+
+        C'est la donnée dont l'avatar a besoin pour des visèmes réellement
+        synchronisés : sans elle, la bouche ne peut qu'approximer l'amplitude
+        du signal. Retourne None si la voix ou le moteur ne le permettent pas ;
+        l'appelant retombe alors sur `synthesize()`.
+        """
+        text = (text or "").strip()
+        if not text or not self.supports_alignments(voice_id):
+            return None
+        vid = (voice_id or "").strip() or self.default_voice()
+        model = self._dir / vid / f"{vid}.onnx"
+        if not model.exists():
+            return None
+        voice = self._load_voice(vid, model)
+        if voice is None:
+            return None
+
+        syn_cfg = self._synthesis_config(vid, rate, speaker, expressivity)
+        try:
+            chunks = list(voice.synthesize(text[:4000], syn_config=syn_cfg,
+                                           include_alignments=True))
+        except Exception:
+            return None
+        if not chunks:
+            return None
+
+        sample_rate = int(chunks[0].sample_rate) or DEFAULT_SAMPLE_RATE
+        pcm = _master_chunks(chunks, sample_rate)
+        if not pcm:
+            return None
+
+        # Les alignements sont relatifs à chaque phrase : on les recale sur la
+        # timeline globale au fur et à mesure du cumul des durées.
+        phonemes: list[dict[str, Any]] = []
+        offset = 0.0
+        for chunk in chunks:
+            for item in (getattr(chunk, "alignments", None) or []):
+                start = float(getattr(item, "start_seconds", 0.0) or 0.0)
+                duration = float(getattr(item, "duration_seconds", 0.0) or 0.0)
+                phonemes.append({
+                    "phoneme": str(getattr(item, "phoneme", "") or ""),
+                    "start": round(offset + start, 4),
+                    "end": round(offset + start + duration, 4),
+                })
+            samples = len(getattr(chunk, "audio_int16_bytes", b"")) / 2
+            offset += samples / float(sample_rate or 1)
+
+        return {"wav": _wav_bytes(pcm, sample_rate), "sample_rate": sample_rate,
+                "phonemes": phonemes, "duration": round(offset, 4)}
 
     @staticmethod
     def _piper_has_synthesis_config() -> bool:
