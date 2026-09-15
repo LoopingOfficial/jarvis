@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..connectors import http_json
+from ..connectors import http_json, http_line_stream
 from .base import ChatMessage, LLMProvider, LLMResponse, ToolCall, messages_to_openai, messages_to_ollama, tools_to_openai
 
 
@@ -79,6 +79,44 @@ class OpenAICompatProvider(LLMProvider):
             calls.append(ToolCall(id=tc.get("id", fn.get("name", "")), name=fn.get("name", ""), arguments=args))
         return LLMResponse(text=(choice.get("content") or "").strip(), tool_calls=calls,
                            model=model, provider=self.type, usage=payload.get("usage") or {}, raw=payload)
+
+    def chat_stream(self, messages, *, model="", tools=None, temperature=0.3, max_tokens=4096,
+                    timeout=180.0, on_token=None):
+        if tools:
+            return self.chat(messages, model=model, tools=tools, temperature=temperature,
+                             max_tokens=max_tokens, timeout=timeout)
+        model = model or self.default_model
+        if not model:
+            return LLMResponse(error="Aucun modèle sélectionné pour ce fournisseur.")
+        body: dict[str, Any] = {
+            "model": model, "messages": messages_to_openai(messages),
+            "temperature": temperature, "max_tokens": max_tokens, "stream": True,
+        }
+        acc: list[str] = []
+        try:
+            for line in http_line_stream(
+                f"{self.base_url}/chat/completions", method="POST",
+                headers=self._headers(), body=body, timeout=timeout,
+            ):
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if not line or line == "[DONE]":
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                delta = ((payload.get("choices") or [{}])[0].get("delta") or {})
+                chunk = delta.get("content") or ""
+                if chunk:
+                    acc.append(chunk)
+                    if on_token:
+                        on_token(chunk)
+        except Exception as exc:
+            if acc:
+                return LLMResponse(text="".join(acc).strip(), model=model, provider=self.type)
+            return LLMResponse(error=str(exc)[:600], provider=self.type, model=model)
+        return LLMResponse(text="".join(acc).strip(), model=model, provider=self.type)
 
     def embed(self, text: str, model: str = "") -> list[float]:
         model = model or "text-embedding-3-small"
@@ -309,15 +347,28 @@ class OllamaProvider(LLMProvider):
         return caps
 
     def vision_model(self, model: str = "") -> str:
-        """Modele local capable de vision : celui par defaut s'il l'est, sinon
-        le premier installe qui declare la capacite. '' si aucun."""
+        """Modele local capable de vision, en privilegiant un vrai VLM.
+
+        Score : 2 pour un modele dedie a la vision (nom contenant ``vl`` ou
+        ``vision``), 1 pour un modele general qui se declare capable de vision.
+        Le modele par defaut n'a qu'une tres leger preference (0.1) : un VLM
+        dedie prime sur un texte general qui annonce la capacite sans garantir
+        un resultat exploitable. '' si aucun modele ne la declare."""
         model = model or self.default_model
-        if model and "vision" in self.model_capabilities(model):
-            return model
-        for name in self.models():
-            if name != model and "vision" in self.model_capabilities(name):
-                return name
-        return ""
+        candidates: list[tuple[float, str]] = []
+        names = [model] if model else []
+        for name in dict.fromkeys(names + self.models()):
+            if "vision" not in self.model_capabilities(name):
+                continue
+            base = str(name).rsplit(":", 1)[0].lower()
+            score = 1.0 + (0.1 if name == model else 0.0)
+            if "vl" in base or "vision" in base:
+                score += 1.0
+            candidates.append((score, name))
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: (-item[0], len(item[1])))
+        return candidates[0][1]
 
     def models(self) -> list[str]:
         ok, payload = http_json(f"{self.base_url}/api/tags", timeout=4)
@@ -354,6 +405,43 @@ class OllamaProvider(LLMProvider):
                                                   for c in calls], ensure_ascii=False))
         return LLMResponse(text=(message.get("content") or "").strip(), tool_calls=calls,
                            model=model, provider=self.type, raw=payload)
+
+    def chat_stream(self, messages, *, model="", tools=None, temperature=0.3, max_tokens=4096,
+                    timeout=180.0, on_token=None):
+        if tools:
+            return self.chat(messages, model=model, tools=tools, temperature=temperature,
+                             max_tokens=max_tokens, timeout=timeout)
+        available = self.models()
+        model = model or self.default_model or (available[0] if available else "")
+        if not model:
+            return LLMResponse(error="Aucun modèle Ollama installé (ollama pull llama3.1).",
+                               provider=self.type)
+        body: dict[str, Any] = {
+            "model": model, "stream": True, "messages": messages_to_ollama(messages),
+            "options": {"temperature": temperature, "num_predict": max_tokens},
+        }
+        acc: list[str] = []
+        try:
+            for line in http_line_stream(
+                f"{self.base_url}/api/chat", method="POST", body=body, timeout=timeout,
+            ):
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                chunk = ((payload.get("message") or {}).get("content") or "")
+                if chunk:
+                    acc.append(chunk)
+                    if on_token:
+                        on_token(chunk)
+                if payload.get("error"):
+                    return LLMResponse(error=str(payload["error"])[:500],
+                                       provider=self.type, model=model)
+        except Exception as exc:
+            if acc:
+                return LLMResponse(text="".join(acc).strip(), model=model, provider=self.type)
+            return LLMResponse(error=str(exc)[:500], provider=self.type, model=model)
+        return LLMResponse(text="".join(acc).strip(), model=model, provider=self.type)
 
     def embed(self, text: str, model: str = "") -> list[float]:
         model = model or "nomic-embed-text"

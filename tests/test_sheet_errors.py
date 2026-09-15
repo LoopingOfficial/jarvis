@@ -56,6 +56,7 @@ class TabResolutionTests(unittest.TestCase):
         tabs[1]["gid"] = "0"
         workbook = wb(tabs)
         workbook["selected_tab"] = "Archive"
+        workbook["selected_tab_explicit"] = True
         resolved, mode, _ = resolve_sheet_tab(workbook, "ALL BRAINROTS")
         self.assertEqual(mode, "url_gid")
         self.assertEqual(resolved["name"], "Archive")

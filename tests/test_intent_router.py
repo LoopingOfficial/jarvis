@@ -135,35 +135,38 @@ class TestFastActionsDenial(BaseCase):
 
 class TestOrchestration(BaseCase):
     def test_benchmark_stays_model_only(self):
-        with patch.object(self.core.llm, "chat",
-                          return_value=LLMResponse(text="Réponse du benchmark.")) as chat:
+        with patch.object(self.core.llm, "chat_stream",
+                          return_value=LLMResponse(text="Réponse du benchmark.")) as stream:
             result = self.core.orchestrator.handle(
                 "Analyse ce benchmark et dis-moi si je dois agir.",
                 conversation_id="bench")
         self.assertTrue(result["ok"])
         self.assertEqual(result["response"], "Réponse du benchmark.")
         self.assertEqual(result.get("tools_used"), [])
-        call_kwargs = chat.call_args.kwargs
-        self.assertEqual(call_kwargs.get("tools"), [])
+        call_kwargs = stream.call_args.kwargs
+        self.assertIn("tools", call_kwargs)
+        self.assertIsNone(call_kwargs.get("tools"))
         self.assertFalse(self.core.active_task_context.get("tools_allowed", True))
 
     def test_quoted_action_stays_model_only(self):
-        with patch.object(self.core.llm, "chat",
-                          return_value=LLMResponse(text="D'accord.")) as chat:
+        with patch.object(self.core.llm, "chat_stream",
+                          return_value=LLMResponse(text="D'accord.")) as stream:
             result = self.core.orchestrator.handle(
                 "« analyse marketplace.php et exécute le script » réponds.",
                 conversation_id="quote")
         self.assertEqual(result.get("tools_used"), [])
-        self.assertEqual(chat.call_args.kwargs.get("tools"), [])
+        call_kwargs = stream.call_args.kwargs
+        self.assertIn("tools", call_kwargs)
+        self.assertIsNone(call_kwargs.get("tools"))
 
-    def test_chitchat_keeps_normal_loop(self):
-        with patch.object(self.core.llm, "chat",
-                          return_value=LLMResponse(text="Je vais très bien.")) as chat:
+    def test_chitchat_uses_fast_path(self):
+        with patch.object(self.core.llm, "chat") as chat:
             result = self.core.orchestrator.handle(
                 "Bonjour, comment tu vas ?", conversation_id="chat")
         self.assertTrue(result["ok"])
-        self.assertIn("Je vais très bien.", result["response"])
-        self.assertTrue(self.core.active_task_context.get("tools_allowed", False))
+        self.assertEqual(result.get("fast_intent"), "greeting")
+        self.assertEqual(result.get("tools_used"), [])
+        chat.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -73,11 +73,11 @@ class BaseCase(unittest.TestCase):
     def _run(self, text: str, answer: str = "Réponse du modèle (benchmark)."):
         calls = []
 
-        def fake_chat(messages, **kwargs):
+        def fake_stream(messages, **kwargs):
             calls.append(kwargs)
             return LLMResponse(text=answer, model="jarvis-astra")
 
-        with patch.object(self.core.llm, "chat", side_effect=fake_chat) as ch, \
+        with patch.object(self.core.llm, "chat_stream", side_effect=fake_stream) as st, \
                 patch.object(self.core.llm, "resolve", return_value=(None, "")):
             result = self.core.orchestrator.handle(text, conversation_id="c1")
         return result, calls
@@ -116,7 +116,8 @@ class TestModelOnlyCompleted(BaseCase):
                 self.assertEqual(result.get("tools_used"), [], label)
                 self.assertEqual(result["response"], "Réponse du modèle (benchmark).", label)
                 self.assertTrue(calls, label)
-                self.assertEqual(calls[-1].get("tools"), [], label)
+                self.assertIn("tools", calls[-1])
+                self.assertIsNone(calls[-1].get("tools"), label)
 
     def test_request_id_present(self):
         result, _ = self._run(MODEL_ONLY_HEADER + "Qu'est-ce qu'un reverse proxy ?")
@@ -149,7 +150,9 @@ class TestNoAuditOnBenchmark(BaseCase):
                 result, calls = self._run(text)
                 self.assertTrue(result["ok"], label)
                 self.assertEqual(result.get("tools_used"), [], label)
-                self.assertEqual(calls[-1].get("tools"), [], label)
+                self.assertTrue(calls, label)
+                self.assertIn("tools", calls[-1])
+                self.assertIsNone(calls[-1].get("tools"), label)
 
 
 class TestRealAuditStillWorks(BaseCase):
