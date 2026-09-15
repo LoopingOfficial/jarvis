@@ -105,8 +105,8 @@
    ne pas rogner les épaules — c'est le réglage qui les avait fait disparaître. */
 .jh-stage canvas {
   position: absolute; inset: 0; display: block;
-  -webkit-mask-image: radial-gradient(70% 80% at 50% 44%, #000 38%, transparent 97%);
-  mask-image: radial-gradient(70% 80% at 50% 44%, #000 38%, transparent 97%);
+  -webkit-mask-image: radial-gradient(66% 76% at 50% 44%, #000 26%, transparent 88%);
+  mask-image: radial-gradient(66% 76% at 50% 44%, #000 26%, transparent 88%);
 }
 .jh-loading {
   position: absolute; inset: 0; z-index: 3; display: grid; place-items: center;

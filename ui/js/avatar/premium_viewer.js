@@ -60,11 +60,17 @@ const DEFAULTS = {
   portrait: false,
   portraitHeight: 0.62,      // hauteur de sujet visée, en mètres (tête + épaules)
   holoColor: 0x6fe6ff,
-  // Filaire : le maillage DEVIENT le sujet. C'est ce qui distingue une
-  // projection de science-fiction d'un personnage simplement teinté en bleu —
-  // et accessoirement ce qui sauve un modèle aux textures cartoon, puisqu'en
-  // filaire elles ne sont presque plus lues.
+  // Grille holographique : les lignes NE SUIVENT PAS la topologie du maillage.
+  // C'est délibéré et c'est le coeur du rendu. Ce modèle fait 47 457 triangles
+  // affichés dans 200 x 220 px : en fil de fer, cela donne trois arêtes par
+  // pixel, et il n'en sort qu'une bouillie. Une grille calculée EN MÈTRES a une
+  // densité constante, lisible, indépendante du maillage — et régulière, comme
+  // sur une vraie projection.
   wireframe: false,
+  // Espacement des anneaux horizontaux, en mètres, et nombre de méridiens par
+  // tour. 12 mm et 36 méridiens sur une tête d'environ 22 cm de large.
+  gridSpacing: 0.012,
+  meridians: 36,
   wireframeOpacity: 0.55,
   // Opacité de la surface pleine SOUS le filaire. À 1 les arêtes se noient
   // dans le volume ; à 0 on perd la lecture du visage.
@@ -291,12 +297,23 @@ export async function createAvatarViewer(options = {}) {
   // Atténue la surface pleine quand le filaire est actif : sans cela les arêtes
   // se noient dans le volume et il ne reste qu'une silhouette bleue.
   const holoFill = { value: opts.wireframe ? opts.holoFill : 1 };
+  const holoGrid = {
+    value: new THREE.Vector4(
+      opts.wireframe ? 1 : 0,          // active
+      opts.gridSpacing,                // pas vertical, en mètres
+      opts.meridians,                  // méridiens par tour
+      opts.wireframeOpacity,           // intensité des lignes
+    ),
+  };
+  // Axe de la projection : les méridiens tournent autour de lui. Renseigné
+  // après le cadrage, quand on connaît le centre réel du sujet.
+  const holoAxis = { value: new THREE.Vector2(0, 0) };
 
   /* Le voile holographique est INJECTÉ dans le matériau existant plutôt que
      remplacé par un ShaderMaterial : le personnage est skinné sur 724 os, et
      un shader écrit à la main devrait réimplémenter le skinning, les morphs et
      les groupes de rendu. `onBeforeCompile` laisse three s'en charger. */
-  function holoPatch(source) {
+  function holoPatch(source, level = 1) {
     if (!source) return source;
     // Clone obligatoire : les matériaux du glTF sont partagés entre maillages,
     // patcher l'original propagerait l'effet à des objets non voulus.
@@ -317,19 +334,40 @@ export async function createAvatarViewer(options = {}) {
       shader.uniforms.uHoloTime = holoTime;
       shader.uniforms.uHoloTint = { value: holoTint };
       shader.uniforms.uHoloFill = holoFill;
+      shader.uniforms.uHoloGrid = holoGrid;
+      shader.uniforms.uHoloAxis = holoAxis;
+      shader.uniforms.uHoloMul = { value: level };
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
-varying float vHoloY;`)
+varying float vHoloY;
+varying vec3 vHoloPos;`)
+        // Position MONDE : la grille doit être solidaire du sujet et non de
+        // l'écran, sinon elle glisse dessus dès que la caméra bouge.
         .replace('#include <worldpos_vertex>',
                  `#include <worldpos_vertex>
-vHoloY = (modelMatrix * vec4(transformed, 1.0)).y;`);
+vHoloPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vHoloY = vHoloPos.y;`);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>',
                  `#include <common>
 uniform float uHoloTime;
 uniform vec3 uHoloTint;
 uniform float uHoloFill;
-varying float vHoloY;`)
+uniform vec4 uHoloGrid;
+uniform vec2 uHoloAxis;
+uniform float uHoloMul;
+varying float vHoloY;
+varying vec3 vHoloPos;
+
+// Une ligne d'épaisseur CONSTANTE À L'ÉCRAN, quelle que soit la distance.
+// fwidth donne la variation de la coordonnée d'un pixel au suivant : diviser
+// par elle revient à mesurer la distance à la ligne en pixels, ce qui évite à
+// la fois l'escalier de près et le moiré de loin.
+float holoLine(float coord, float spacing) {
+  float scaled = coord / spacing;
+  float dist = abs(fract(scaled) - 0.5) / max(fwidth(scaled), 1e-5);
+  return 1.0 - smoothstep(0.0, 1.1, dist);
+}`)
         .replace('#include <dithering_fragment>', [
           '#include <dithering_fragment>',
           // Fresnel : la silhouette s'allume, l'intérieur reste translucide.
@@ -340,47 +378,52 @@ varying float vHoloY;`)
           'float holoScan = smoothstep(0.42, 0.58, fract(vHoloY * 46.0 - uHoloTime * 1.1));',
           // Deux fréquences de scintillement : une seule fait mécanique.
           'float holoFlick = 0.93 + 0.05 * sin(uHoloTime * 9.3) + 0.02 * sin(uHoloTime * 31.0);',
-          'vec3 holoRgb = uHoloTint * (0.20 + holoFres * 1.05 + holoScan * 0.16);',
+          // Grille : anneaux horizontaux (latitude) et méridiens autour de
+          // l'axe vertical du sujet. La longitude est sans unité, d'où un
+          // espacement exprimé en 1 / nombre de méridiens.
+          'float holoGridLine = 0.0;',
+          'if (uHoloGrid.x > 0.5) {',
+          '  float lat = holoLine(vHoloPos.y, uHoloGrid.y);',
+          // atan est discontinu à ±PI : sa dérivée y explose. Le smoothstep de
+          // holoLine absorbe ce fwidth aberrant — la ligne de couture s'efface
+          // au lieu de tracer un faux méridien.
+          '  float lon = atan(vHoloPos.x - uHoloAxis.x, vHoloPos.z - uHoloAxis.y) * 0.1591549 + 0.5;',
+          '  float mer = holoLine(lon, 1.0 / max(uHoloGrid.z, 1.0));',
+          // Les méridiens CONVERGENT sur l'axe : là où la surface le frôle —
+          // le creux du sternum — ils se rejoignaient tous et dessinaient une
+          // étoile. On les efface dans les six centimètres autour de l'axe.
+          '  float holoR = length(vHoloPos.xz - uHoloAxis);',
+          '  mer *= smoothstep(0.02, 0.06, holoR);',
+          '  holoGridLine = max(lat, mer) * uHoloGrid.w * uHoloMul;',
+          '}',
+          'vec3 holoRgb = uHoloTint * (0.20 + holoFres * 1.05 + holoScan * 0.16 + holoGridLine * 2.2);',
           'gl_FragColor.rgb = mix(gl_FragColor.rgb * 0.55, holoRgb, 0.72) * holoFlick;',
-          'gl_FragColor.a = clamp(gl_FragColor.a * uHoloFill * (0.34 + holoFres * 0.55 + holoScan * 0.10), 0.0, 1.0);',
+          'gl_FragColor.a = clamp(gl_FragColor.a * uHoloMul * (uHoloFill * (0.34 + holoFres * 0.55 + holoScan * 0.10) + holoGridLine * 0.9), 0.0, 1.0);',
         ].join(String.fromCharCode(10)));
     };
     m.needsUpdate = true;
     return m;
   }
 
-  /* Filaire : on N'ACTIVE PAS `material.wireframe` sur le matériau du sujet —
-     cela REMPLACERAIT la surface au lieu de s'y superposer, et on perdrait le
-     volume translucide. On ajoute un maillage JUMEAU qui partage la géométrie
-     (aucune copie en VRAM) et, pour un maillage skinné, le MÊME squelette : il
-     suit donc l'animation sans coût de rig supplémentaire. */
-  function buildWireframe(node) {
-    const material = new THREE.MeshBasicMaterial({
-      color: holoTint, wireframe: true, transparent: true,
-      // Testé en profondeur contre la surface occultante ci-dessus : seules
-      // les arêtes visibles sont dessinées.
-      depthTest: true,
-      opacity: opts.wireframeOpacity, blending: THREE.AdditiveBlending,
-      depthWrite: false, side: THREE.FrontSide,
-      // Sans ce décalage, les arêtes du jumeau et la surface du sujet occupent
-      // exactement la même profondeur : le z-fighting fait clignoter le filaire.
-      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
-    });
-    let twin;
-    if (node.isSkinnedMesh) {
-      twin = new THREE.SkinnedMesh(node.geometry, material);
-      twin.bind(node.skeleton, node.bindMatrix);
-    } else {
-      twin = new THREE.Mesh(node.geometry, material);
-    }
-    twin.frustumCulled = false;
-    twin.userData.isHoloWire = true;
-    return twin;
-  }
-  const wireTwins = [];
+  /* Organes internes : dents, langue, larmes, occlusion oculaire. Invisibles
+     sur un personnage opaque, ils deviennent des amas de lignes flottant DANS
+     le crâne dès que le sujet est translucide. On les retire. */
+  const INTERNALS = /teeth|tongue|tearline|occlusion|eyelash/i;
+  /* Cartes de cheveux, barbe et sourcils : des polygones PLATS, dont la normale
+     est presque perpendiculaire à la vue sur toute leur surface. Le Fresnel les
+     allume donc entièrement, et le crâne se couvre d'épines lumineuses. On les
+     assourdit fortement au lieu de les supprimer : sans elles la silhouette
+     perd sa coiffure et le personnage devient chauve. */
+  const HAIR = /hair|beard|mustache|moustache|eyebrow|scalp|quiff/i;
+  /* Globes oculaires : des sphères quasi parfaites, donc un Fresnel net sur
+     tout leur pourtour. Dans une projection translucide ils ressortent comme
+     deux billes posées dans les orbites. */
+  const EYES = /eye|_eye|eyeball/i;
+  const hidden = [];
 
   model.traverse((node) => {
-    if (!node.isMesh || node.userData.isHoloWire) return;
+    if (!node.isMesh) return;
+    if (opts.hologram && INTERNALS.test(node.name || '')) { hidden.push(node); return; }
     node.castShadow = !opts.hologram;     // une projection ne porte pas d'ombre
     node.receiveShadow = !opts.hologram;
     // Un maillage skinné animé sort de sa boîte de repos : sans cela il
@@ -391,11 +434,10 @@ varying float vHoloY;`)
     const materials = wasArray ? node.material : [node.material];
 
     if (opts.hologram) {
-      const patched = materials.map(holoPatch);
+      const name = node.name || '';
+      const level = HAIR.test(name) ? 0.22 : EYES.test(name) ? 0.3 : 1;
+      const patched = materials.map((mat) => holoPatch(mat, level));
       node.material = wasArray ? patched : patched[0];
-      // Greffe différée : ajouter un enfant pendant `traverse` le ferait
-      // visiter à son tour, et la boucle se patcherait elle-même sans fin.
-      if (opts.wireframe) wireTwins.push([node, buildWireframe(node)]);
       return;
     }
 
@@ -414,9 +456,8 @@ varying float vHoloY;`)
       material.needsUpdate = true;
     }
   });
-  // Enfant du maillage d'origine : le jumeau hérite exactement de sa matrice
-  // monde, donc il se superpose au pixel près sans aucun recalcul.
-  for (const [node, twin] of wireTwins) node.add(twin);
+  // Retrait différé : muter la hiérarchie pendant traverse saute des noeuds.
+  for (const node of hidden) node.visible = false;
   scene.add(model);
 
   /* ---------------------------------------------------------- animations */
@@ -581,6 +622,9 @@ varying float vHoloY;`)
     controls.update();
 
     // La plateforme se cale sous les pieds, quelle que soit l'origine du modèle.
+    // Les méridiens tournent autour de l'axe vertical du sujet : sans cela ils
+    // convergeraient vers l'origine du monde, donc à côté de la tête.
+    holoAxis.value.set(m.center.x, m.center.z);
     floorGroup.position.set(m.center.x, m.box.min.y, m.center.z);
     if (opts.shadows) {
       key.target.position.copy(target);
@@ -814,6 +858,18 @@ varying float vHoloY;`)
     setAutoRotate(on) { controls.autoRotate = !!on; },
     /** Réaction visible quand JARVIS agit réellement (événement du bus). */
     gesture(seconds) { return playGesture(seconds); },
+    /* Les événements du bus (voix, chat, agents) parlent en ÉTATS, pas en
+       niveaux. Sans cette traduction, spatial_home appelait un `setState`
+       inexistant et jetait une exception à chaque message reçu. */
+    setState(name) {
+      const level = {
+        IDLE: 0, LISTENING: 0.35, SPEAKING: 0.7, THINKING: 0.5, WORKING: 0.9,
+      }[String(name || '').toUpperCase()];
+      idleState.target = level === undefined ? 0 : level;
+      // Un état DURE, contrairement à un geste : on repousse loin l'échéance,
+      // c'est le passage à IDLE qui y met fin.
+      idleState.gestureUntil = clock.elapsedTime + (level ? 600 : 0);
+    },
     /** 0 = calme, 1 = actif : amplifie la respiration et le ballant. */
     setActivity(level) {
       idleState.target = Math.max(0, Math.min(1, Number(level) || 0));
