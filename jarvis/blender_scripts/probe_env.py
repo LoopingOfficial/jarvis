@@ -17,29 +17,38 @@ def main() -> None:
 
     py = sys.version.split()[0]
 
-    gpu = {"available": False, "api": "", "name": "", "devices": []}
+    # En mode --background l'enum `compute_device_type` et la liste `devices`
+    # restent vides tant qu'aucun backend n'a ete selectionne : il faut donc
+    # interroger explicitement chaque backend connu via get_devices_for_type().
+    gpu = {"available": False, "api": "", "backend": "", "name": "", "devices": []}
     try:
-        addons = bpy.context.preferences.addons
-        prefs = addons.get("cycles")
-        if prefs is not None:
-            dev_prefs = prefs.preferences
-            devices = getattr(dev_prefs, "devices", None)
-            names = []
-            if devices:
-                for d in devices:
-                    name = getattr(d, "name", "")
-                    if name:
-                        names.append(name)
-                kernel = {}
-                for d in devices:
-                    t = getattr(d, "type", "") or ""
-                    if t and t not in kernel:
-                        kernel[t] = getattr(d, "name", "")
-                if names:
-                    gpu["available"] = True
-                    gpu["devices"] = sorted(names)
-                    gpu["api"] = next(iter(kernel), "") if kernel else ""
-                    gpu["name"] = ", ".join(kernel.values()) or names[0]
+        bpy.ops.preferences.addon_enable(module="cycles")
+    except Exception:
+        pass
+    try:
+        prefs = bpy.context.preferences.addons.get("cycles")
+        dev_prefs = prefs.preferences if prefs is not None else None
+        if dev_prefs is not None:
+            # Ordre de preference : le plus rapide d'abord, par plateforme.
+            for backend in ("OPTIX", "CUDA", "HIP", "ONEAPI", "METAL"):
+                try:
+                    devices = dev_prefs.get_devices_for_type(backend) or []
+                except Exception:
+                    continue
+                # get_devices_for_type() renvoie aussi le CPU : on ne garde que
+                # les peripheriques reellement accelerateurs.
+                names = sorted({
+                    d.name for d in devices
+                    if getattr(d, "name", "") and (getattr(d, "type", "") or "") != "CPU"
+                })
+                if not names:
+                    continue
+                gpu["available"] = True
+                gpu["api"] = backend
+                gpu["backend"] = backend
+                gpu["devices"] = names
+                gpu["name"] = ", ".join(names)
+                break
     except Exception:
         pass
 
