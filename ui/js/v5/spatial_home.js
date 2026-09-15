@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOLO_20';
+import { createHoloCore } from '../avatar/holo_core.js?v=JARVIS_CORE_5';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const API = () => (typeof J !== 'undefined' ? J : window.J);
@@ -140,35 +140,14 @@ const Home = {
       return;
     }
     try {
-      // Plus aucun GLB à charger : la tête est construite en code, donc elle
-      // apparaît en une frame au lieu des 4,6 Mo qu'il fallait télécharger.
-      // Un vrai maillage de tête, pas une sphère sculptée : une tête humaine
-      // ne s'obtient pas en déplaçant les sommets d'une sphère avec quelques
-      // fonctions d'atténuation. Le voile holographique (Fresnel sur la
-      // silhouette, balayage en espace monde, scintillement) est injecté dans
-      // les matériaux du modèle.
-      this.viewer = await createAvatarViewer({
+      // Noyau procédural : plus aucun GLB. Le personnage importé imposait
+      // 4,6 Mo à télécharger, un rig de 724 os et des textures cartoon qu'aucun
+      // shader ne rattrapait. Ici tout est généré — rien à charger, rien à
+      // convertir, et la forme est abstraite, donc elle n'a pas de
+      // ressemblance à manquer.
+      this.viewer = await createHoloCore({
         host: stage,
-        url: '/assets/avatar/cartoon_boy.glb',
-        hologram: true,
-        portrait: true,              // plan tête-épaules
-        // 0.52 m de sujet visé au lieu de 0.62 : la référence est un cadrage
-        // serré. Plus large, le buste se perd au centre du masque radial.
-        portraitHeight: 0.44,
-        // Le maillage lui-même porte l'image : c'est ce qui donne la lecture
-        // « projection » plutôt que « personnage teinté en bleu », et c'est
-        // aussi ce qui efface le rendu cartoon des textures d'origine.
-        wireframe: true,
-        gridSpacing: 0.018,          // un anneau tous les 18 mm
-        meridians: 22,
-        wireframeOpacity: 0.55,
-        holoFill: 0.5,
-        autoRotate: false,
-        platform: false,             // l'anneau est dessiné en CSS sous la scène
-        // Seuil bas assumé : en filaire il n'y a presque plus de surface à
-        // faire déborder, et c'est le halo des arêtes qui fait la lumière.
-        bloom: { strength: 0.5, radius: 0.8, threshold: 0.58 },
-        exposure: 0.62,
+        bloom: { strength: 0.6, radius: 0.8, threshold: 0.5 },
       });
       window.JarvisHomeAvatar = this.viewer;
       this.q('[data-loading]')?.classList.add('gone');

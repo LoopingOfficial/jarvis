@@ -62,22 +62,9 @@
   flex: none;
   isolation: isolate;
 }
-.jh-stage::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  left: 50%;
-  bottom: 4%;
-  width: 78%;
-  height: 18%;
-  transform: translateX(-50%);
-  border: 1px solid rgba(0, 242, 254, .42);
-  border-radius: 50%;
-  box-shadow: 0 0 18px rgba(0, 242, 254, .22), inset 0 0 18px rgba(0, 242, 254, .18);
-  background: radial-gradient(ellipse, rgba(0, 242, 254, .18), transparent 62%);
-  animation: jh-ring 4.8s ease-in-out infinite;
-  pointer-events: none;
-}
+/* L'anneau du projecteur est désormais DANS la scène 3D : il se place sous le
+   noyau en perspective et reçoit son faisceau. Celui qu'on dessinait ici en
+   CSS flottait en dessous, plat et désolidarisé, et faisait doublon. */
 .jh-stage::after {
   content: "";
   position: absolute;
@@ -90,10 +77,6 @@
   mask-image: radial-gradient(62% 58% at 50% 42%, #000 16%, transparent 94%);
   -webkit-mask-image: radial-gradient(62% 58% at 50% 42%, #000 16%, transparent 94%);
   animation: jh-scan 5.5s linear infinite;
-}
-@keyframes jh-ring {
-  0%, 100% { transform: translateX(-50%) scaleX(.92); opacity: .55; }
-  50% { transform: translateX(-50%) scaleX(1.06); opacity: 1; }
 }
 @keyframes jh-scan {
   from { transform: translateY(-7%); }
