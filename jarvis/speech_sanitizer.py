@@ -53,6 +53,28 @@ _SMALL_WORDS = {
 # Symboles isolés éventuellement produits par le markdown résiduel.
 _TRAIL_SYMBOLS = re.compile(r"[*_`#<>]{2,}")
 
+# ---- Emojis et symboles décoratifs ----
+# Un moteur TTS ne « saute » pas un emoji : il lit son nom Unicode (« croissant
+# de lune », « étincelles »). Le texte AFFICHÉ garde ses emojis ; seule la
+# version parlée les retire. On cible les plans pictographiques plutôt qu'une
+# liste d'emojis, pour couvrir aussi les nouveaux codepoints.
+_EMOJI = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"   # pictogrammes, émoticônes, transports, symboles étendus
+    "\U00002600-\U000027BF"   # symboles divers et dingbats (✅ ✨ ⚠ ❌ ❤ …)
+    "\U00002190-\U000021FF"   # flèches
+    "\U00002B00-\U00002BFF"   # flèches et formes supplémentaires
+    "\U0001F1E6-\U0001F1FF"   # indicateurs régionaux (drapeaux)
+    "\U0000FE00-\U0000FE0F"   # sélecteurs de variante (VS15/VS16)
+    "\U0001F3FB-\U0001F3FF"   # modificateurs de teinte de peau
+    "\U000020D0-\U000020FF"   # diacritiques combinants pour symboles
+    "\U00002460-\U000024FF"   # alphanumériques cernés
+    "\U00002000-\U0000200D"   # espaces typographiques et ZWJ
+    "\U00002122\U00002139\U00003030\U0000303D\U00003297\U00003299"
+    "\U000000A9\U000000AE"    # © ®
+    "]+"
+)
+
 
 def _number_to_words(match: re.Match | str) -> str:
     raw = match.group(0) if hasattr(match, "group") else match
@@ -104,6 +126,9 @@ def sanitize_for_speech(text: str) -> str:
     if not t:
         return ""
     t = _BLOCK_FENCE.sub(" ", t)
+    # Les emojis partent AVANT le reste : ils ne doivent jamais être prononcés,
+    # ni laisser de résidu de ponctuation flottante en fin de phrase.
+    t = _EMOJI.sub(" ", t)
     t = _HTML_TAG.sub(" ", t)
     t = _ENTITY.sub(" ", t)
     t = _LINK.sub(r"\1", t)
@@ -128,6 +153,12 @@ def sanitize_for_speech(text: str) -> str:
     t = _COLON_LABEL.sub(r". \1 : ", t)
     t = _NUMBERS.sub(_number_to_words, t)
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = _SPACES.sub(" ", t)
+    # Un emoji retiré peut laisser « Bonne nuit Jérôme . » ou une virgule
+    # orpheline : on recolle la ponctuation et on supprime les restes isolés.
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = re.sub(r"^[\s,.;:!?-]+", "", t)
+    t = re.sub(r"[\s,;:-]+$", "", t)
     t = _SPACES.sub(" ", t)
     t = t.strip()
     return t
