@@ -52,6 +52,14 @@ const DEFAULTS = {
   platform: true,
   // Ancre la racine : l'avatar danse sur place au lieu de traverser la scène.
   anchorRoot: true,
+  // Rendu holographique : projection translucide bleutée plutôt qu'un
+  // personnage opaque posé sur un socle.
+  hologram: false,
+  // Cadrage buste : on vise la tête du squelette plutôt que le centre du corps,
+  // pour obtenir un plan tête-épaules comme une projection de présence.
+  portrait: false,
+  portraitHeight: 0.62,      // hauteur de sujet visée, en mètres (tête + épaules)
+  holoColor: 0x6fe6ff,
   // Voir le commentaire dans le chargement des animations : indispensable
   // pour les rigs FBX exportés depuis Maya/3ds Max.
   stripScaleTracks: true,
@@ -267,14 +275,79 @@ export async function createAvatarViewer(options = {}) {
   });
 
   const model = gltf.scene;
+  // Temps partagé par tous les matériaux holographiques : un seul uniforme
+  // pour vingt-sept maillages, au lieu d'un par matériau à tenir à jour.
+  const holoTime = { value: 0 };
+  const holoTint = new THREE.Color(opts.holoColor);
+
+  /* Le voile holographique est INJECTÉ dans le matériau existant plutôt que
+     remplacé par un ShaderMaterial : le personnage est skinné sur 724 os, et
+     un shader écrit à la main devrait réimplémenter le skinning, les morphs et
+     les groupes de rendu. `onBeforeCompile` laisse three s'en charger. */
+  function holoPatch(source) {
+    if (!source) return source;
+    // Clone obligatoire : les matériaux du glTF sont partagés entre maillages,
+    // patcher l'original propagerait l'effet à des objets non voulus.
+    const m = source.clone();
+    m.transparent = true;
+    m.depthWrite = false;                 // additif : l'ordre de tri devient indifférent
+    m.blending = THREE.AdditiveBlending;
+    m.side = THREE.FrontSide;
+    m.envMapIntensity = 0.1;
+    if (m.isMeshStandardMaterial) { m.roughness = 1; m.metalness = 0; }
+    if ('emissive' in m && m.emissive) { m.emissive = holoTint.clone(); m.emissiveIntensity = 0.25; }
+
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.uHoloTime = holoTime;
+      shader.uniforms.uHoloTint = { value: holoTint };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+varying float vHoloY;`)
+        .replace('#include <worldpos_vertex>',
+                 `#include <worldpos_vertex>
+vHoloY = (modelMatrix * vec4(transformed, 1.0)).y;`);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>',
+                 `#include <common>
+uniform float uHoloTime;
+uniform vec3 uHoloTint;
+varying float vHoloY;`)
+        .replace('#include <dithering_fragment>', [
+          '#include <dithering_fragment>',
+          // Fresnel : la silhouette s'allume, l'intérieur reste translucide.
+          // vNormal est en espace vue ; sa composante z donne l'incidence.
+          'float holoFres = pow(1.0 - abs(normalize(vNormal).z), 3.0);',
+          // Balayage calculé en espace MONDE : les lignes glissent sur le corps
+          // au lieu d'être collées à l'écran.
+          'float holoScan = smoothstep(0.42, 0.58, fract(vHoloY * 46.0 - uHoloTime * 1.1));',
+          // Deux fréquences de scintillement : une seule fait mécanique.
+          'float holoFlick = 0.93 + 0.05 * sin(uHoloTime * 9.3) + 0.02 * sin(uHoloTime * 31.0);',
+          'vec3 holoRgb = uHoloTint * (0.20 + holoFres * 1.05 + holoScan * 0.16);',
+          'gl_FragColor.rgb = mix(gl_FragColor.rgb * 0.55, holoRgb, 0.72) * holoFlick;',
+          'gl_FragColor.a = clamp(gl_FragColor.a * (0.34 + holoFres * 0.55 + holoScan * 0.10), 0.0, 1.0);',
+        ].join(String.fromCharCode(10)));
+    };
+    m.needsUpdate = true;
+    return m;
+  }
+
   model.traverse((node) => {
     if (!node.isMesh) return;
-    node.castShadow = true;
-    node.receiveShadow = true;
+    node.castShadow = !opts.hologram;     // une projection ne porte pas d'ombre
+    node.receiveShadow = !opts.hologram;
     // Un maillage skinné animé sort de sa boîte de repos : sans cela il
     // disparaît par intermittence quand la pose s'en éloigne.
     node.frustumCulled = false;
-    const materials = Array.isArray(node.material) ? node.material : [node.material];
+
+    const wasArray = Array.isArray(node.material);
+    const materials = wasArray ? node.material : [node.material];
+
+    if (opts.hologram) {
+      const patched = materials.map(holoPatch);
+      node.material = wasArray ? patched : patched[0];
+      return;
+    }
+
     for (const material of materials) {
       if (!material) continue;
       // L'environnement PMREM ajoute sa propre lumière diffuse : à 0.9 il
@@ -416,8 +489,28 @@ export async function createAvatarViewer(options = {}) {
     // On ne déplace pas le modèle : on déplace la cible. Recentrer en
     // translatant l'objet casserait les animations qui portent une translation
     // racine (ici, la danse se déplace légèrement).
-    const target = new THREE.Vector3(m.center.x, m.box.min.y + m.height * opts.lookAtRatio, m.center.z);
-    const distance = fitDistance(camera, m.radius, opts.fitMargin);
+    let target = new THREE.Vector3(m.center.x, m.box.min.y + m.height * opts.lookAtRatio, m.center.z);
+    m.fitRadius = m.radius;
+    let distance = fitDistance(camera, m.radius, opts.fitMargin);
+
+    if (opts.portrait) {
+      // On cadre sur l'OS DE TÊTE, pas sur la boîte englobante : celle-ci
+      // inclut les bras et les jambes, et viser son centre donnerait un plan
+      // taille alors qu'on veut un buste.
+      const bones = findBones(model);
+      const headBone = bones.head || bones.chest;
+      if (headBone) {
+        const headPos = headBone.getWorldPosition(new THREE.Vector3());
+        // Rayon de cadrage mémorisé : sans lui, resize() recalculerait la
+        // distance depuis le rayon du CORPS ENTIER et ramènerait un plan pied,
+        // annulant le cadrage buste au premier redimensionnement.
+        m.fitRadius = opts.portraitHeight / 2;
+        // La tête est un peu au-dessus de l'os : on vise entre les yeux, sinon
+        // le cadre coupe le crâne.
+        target = new THREE.Vector3(m.center.x, headPos.y + 0.06, m.center.z);
+        distance = fitDistance(camera, opts.portraitHeight / 2, opts.fitMargin);
+      }
+    }
 
     // Direction conservée si l'utilisateur a déjà orbité, sinon 3/4 face.
     const dir = animate && controls.target.distanceTo(target) > 0
@@ -474,7 +567,7 @@ export async function createAvatarViewer(options = {}) {
     // Le cadrage dépend de l'aspect : sans ce recadrage, passer en fenêtre
     // étroite coupe les épaules du sujet.
     if (framing) {
-      const distance = fitDistance(camera, framing.radius, opts.fitMargin);
+      const distance = fitDistance(camera, framing.fitRadius ?? framing.radius, opts.fitMargin);
       const dir = camera.position.clone().sub(controls.target).normalize();
       camera.position.copy(controls.target).addScaledVector(dir, distance);
       controls.update();
@@ -584,6 +677,7 @@ export async function createAvatarViewer(options = {}) {
     raf = requestAnimationFrame(loop);
     const dt = clock.getDelta();
     mixer.update(dt);
+    holoTime.value = clock.elapsedTime;
     // APRÈS le mixer : on ajoute nos rotations à la pose qu'il vient d'écrire.
     animateIdle(clock.elapsedTime, dt);
     applyAnchor();

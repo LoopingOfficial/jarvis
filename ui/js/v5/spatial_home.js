@@ -13,7 +13,7 @@
    une valeur plausible.
    ========================================================================== */
 
-import { createHoloViewer } from '../avatar/holo_viewer.js?v=JARVIS_HOLO_9';
+import { createAvatarViewer } from '../avatar/premium_viewer.js?v=JARVIS_HOLO_12';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const API = () => (typeof J !== 'undefined' ? J : window.J);
@@ -142,13 +142,20 @@ const Home = {
     try {
       // Plus aucun GLB à charger : la tête est construite en code, donc elle
       // apparaît en une frame au lieu des 4,6 Mo qu'il fallait télécharger.
-      this.viewer = await createHoloViewer({
+      // Un vrai maillage de tête, pas une sphère sculptée : une tête humaine
+      // ne s'obtient pas en déplaçant les sommets d'une sphère avec quelques
+      // fonctions d'atténuation. Le voile holographique (Fresnel sur la
+      // silhouette, balayage en espace monde, scintillement) est injecté dans
+      // les matériaux du modèle.
+      this.viewer = await createAvatarViewer({
         host: stage,
-        accent: 0x22d3ee,
-        // Seuil BAS, à l'inverse d'un sujet en PBR : ici tout est émissif et
-        // c'est précisément ce qu'on veut voir rayonner.
-        bloom: { strength: 0.85, radius: 0.72, threshold: 0.18 },
-        exposure: 1.15,
+        url: '/assets/avatar/cartoon_boy.glb',
+        hologram: true,
+        portrait: true,              // plan tête-épaules
+        autoRotate: false,
+        platform: false,             // l'anneau est dessiné en CSS sous la scène
+        bloom: { strength: 0.42, radius: 0.72, threshold: 0.45 },
+        exposure: 0.85,
       });
       window.JarvisHomeAvatar = this.viewer;
       this.q('[data-loading]')?.classList.add('gone');
