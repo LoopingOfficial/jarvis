@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS // Humanoid Core</title>
+
+<!--
+  Surface SECONDAIRE de JARVIS — pensée pour le moniteur du bas.
+
+  C'est une page autonome, pas un onglet du shell V5 : une page du rail ne peut
+  pas vivre sur un second écran. On ouvre celle-ci dans sa propre fenêtre, on la
+  passe en plein écran (touche F), et elle se branche sur le MÊME flux SSE que
+  l'interface principale — donc aucun état dupliqué, aucun second sondage.
+
+  L'avatar parlant du dashboard reste holo_humanoid : ce buste-ci n'a pas de
+  bouche, il ne le remplace pas, il l'accompagne.
+-->
+
+<style>
+  :root { --cy: #00f0ff; }
+  html, body { margin: 0; height: 100%; background: #020208; overflow: hidden;
+               font-family: 'Segoe UI', Tahoma, sans-serif; color: var(--cy); }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  #hud { position: absolute; top: 22px; left: 26px; pointer-events: none;
+         text-shadow: 0 0 10px rgba(0, 240, 255, .5); letter-spacing: .07em; }
+  #hud h1 { margin: 0 0 7px; font-size: 14px; font-weight: 600; letter-spacing: .14em; }
+  #status { margin: 0; font-size: 12px; opacity: .8; }
+  #hint { margin: 6px 0 0; font-size: 11px; opacity: .32; }
+
+  /* Pastille de flux : la seule information dont on a besoin de loin, donc la
+     seule qui ne dépend pas de la lecture d'un texte. */
+  #link { position: absolute; top: 26px; right: 26px; display: flex; align-items: center;
+          gap: 9px; font-size: 11px; letter-spacing: .1em; opacity: .75; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #d8603a;
+         box-shadow: 0 0 10px #d8603a; transition: background .3s, box-shadow .3s; }
+  #link.on #dot { background: var(--cy); box-shadow: 0 0 12px var(--cy); }
+
+  @media (max-width: 600px) {
+    #hud { top: 14px; left: 16px; }
+    #link { top: 16px; right: 16px; }
+    #hint { display: none; }
+  }
+</style>
+
+<canvas id="cv"></canvas>
+
+<div id="hud">
+  <h1>JARVIS // HUMANOID CORE</h1>
+  <p id="status">STATUS: STANDBY</p>
+  <p id="hint">[O] open humanoid · [C] check system · [1/2/3] cadrage · [F] plein écran</p>
+</div>
+<div id="link"><span id="dot"></span><span id="linkText">HORS LIGNE</span></div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/" } }
+</script>
+
+<!-- Le noyau frontend est un script classique : il déclare `J` dans la portée
+     globale lexicale, que les modules ne voient pas via window. Ce pont d'une
+     ligne est le seul moyen honnête de le partager sans le réécrire. -->
+<script src="/js/core.js"></script>
+<script>window.J = J;</script>
+
+<script type="module">
+  import { createParticleHumanoid } from './js/avatar/particle_humanoid.js';
+
+  const J = window.J;
+  const statusEl = document.getElementById('status');
+  const linkEl = document.getElementById('link');
+  const linkText = document.getElementById('linkText');
+
+  const LABELS = {
+    STANDBY:   'STATUS: STANDBY',
+    OPENING:   'STATUS: OPENING HUMANOID...',
+    IDLE:      'STATUS: ONLINE // NEURAL CORE NOMINAL',
+    SCANNING:  'STATUS: CHECKING SYSTEM...',
+    ALL_CLEAR: 'STATUS: ALL CLEAR',
+  };
+
+  const core = await createParticleHumanoid({
+    canvas: document.getElementById('cv'),
+    framing: 'BUST',
+    onStatus: (s) => { statusEl.textContent = LABELS[s] || `STATUS: ${s}`; },
+  });
+  window.jarvisHumanoid = core;
+
+  /* --------------------------------------------------------- bus JARVIS */
+
+  // La matérialisation est déclenchée au MONTAGE, pas à l'ouverture du flux :
+  // sur un écran dédié, un backend éteint donnerait sinon un écran noir sans
+  // explication. Le flux ne fait que confirmer l'état.
+  //
+  // Et il ne la rejoue jamais : le stream se rouvre à chaque hoquet réseau, un
+  // buste qui se reconstruit tout seul toutes les deux minutes serait un bug,
+  // pas une intention.
+  core.triggerStartupAnimation();
+
+  J.on('stream.open', () => {
+    linkEl.classList.add('on');
+    linkText.textContent = 'EN LIGNE';
+    if (!core.formed) core.showInstantly();
+  });
+
+  J.on('stream.close', () => {
+    linkEl.classList.remove('on');
+    linkText.textContent = 'HORS LIGNE';
+    core.setActivity(0);
+  });
+
+  // Diagnostic. `VERIFYING` est l'événement existant le plus proche : c'est la
+  // passe de vérification de l'orchestrateur (orchestrator.py, kind="verify").
+  // Ce n'est pas un auto-test matériel — si tu veux un vrai « check system »,
+  // c'est un nouvel événement backend à émettre, pas une ligne à changer ici.
+  const BUSY = { THINKING: 0.55, RECALLING: 0.5, ACTING: 0.7, LEARNING: 0.45 };
+
+  J.on('jarvis.state', (d = {}) => {
+    const st = String(d.state || '').toUpperCase();
+    if (st === 'VERIFYING') { core.triggerSystemCheckAnimation(); return; }
+    if (st === 'SPEAKING') { core.setState('SPEAKING'); return; }
+    if (BUSY[st] !== undefined) { core.setActivity(BUSY[st]); return; }
+    if (st === 'IDLE') core.setActivity(0.15);
+  });
+
+  // La parole ne bouge pas de bouche ici — elle fait respirer tout le nuage.
+  J.on('tts.started', () => core.setState('SPEAKING'));
+  J.on('tts.audio_level', (d = {}) => {
+    core.setAudioLevel(Math.max(0, Math.min(1, Number(d.level ?? 0) / 100)));
+  });
+  J.on('tts.completed', () => { core.setAudioLevel(0); core.setActivity(0.15); });
+
+  J.on('tool.started', () => core.gesture());
+  J.on('avatar.gesture', () => core.gesture());
+
+  J.connectStream();
+
+  /* ------------------------------------------------------- pilotage local */
+
+  addEventListener('keydown', (e) => {
+    switch (e.key.toLowerCase()) {
+      case 'o': core.triggerStartupAnimation(); break;
+      case 'c': core.triggerSystemCheckAnimation(); break;
+      case '1': core.setViewMode('WIDE'); break;
+      case '2': core.setViewMode('BUST'); break;
+      case '3': core.setViewMode('HEAD'); break;
+      case 'f':
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen?.();
+        break;
+      default: break;
+    }
+  });
+
+  addEventListener('pointermove', (e) => {
+    core.lookAt({ x: (e.clientX / innerWidth) * 2 - 1, y: (e.clientY / innerHeight) * 2 - 1 });
+  });
+
+  // Écran secondaire = fenêtre souvent masquée. On rend la main au GPU, et
+  // `resume()` répare la chaîne rAF que le navigateur a laissée tomber.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) core.pause();
+    else core.resume();
+  });
+</script>
+</html>

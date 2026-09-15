@@ -1,0 +1,98 @@
+/* ==========================================================================
+   JARVIS_SPATIAL_OS_V5 — neural_graph.css
+   Habillage de la vue « Réseau neuronal » montée en tête d'AI Core.
+   Le graphe occupe la scène ; les cartes héritées d'AI Core restent dessous.
+   ========================================================================== */
+
+.v5-neural {
+  position: relative;
+  height: clamp(420px, 58vh, 720px);
+  margin-bottom: 14px;
+  border: 1px solid rgba(34, 211, 238, .16);
+  border-radius: 14px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(34, 211, 238, .06), transparent 60%),
+    linear-gradient(transparent 95%, rgba(34, 211, 238, .05) 95%) 0 0 / 100% 34px,
+    linear-gradient(90deg, transparent 95%, rgba(34, 211, 238, .05) 95%) 0 0 / 34px 100%,
+    #050811;
+}
+.v5-neural-stage { position: absolute; inset: 0; }
+
+/* --- bandeaux ----------------------------------------------------------- */
+.v5-neural-top,
+.v5-neural-foot {
+  position: absolute;
+  left: 12px; right: 12px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  pointer-events: none;
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: rgba(124, 147, 181, .9);
+}
+.v5-neural-top { top: 12px; }
+.v5-neural-foot { bottom: 12px; }
+.v5-neural-top > *, .v5-neural-foot > * { pointer-events: auto; }
+.v5-neural-title { color: #dbeafe; letter-spacing: .28em; }
+.v5-neural-src {
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, .26); color: #22d3ee;
+  letter-spacing: .12em; font-size: 9px;
+}
+.v5-neural-src.sample { border-color: rgba(251, 191, 36, .32); color: #fbbf24; }
+
+/* --- légende des clusters ---------------------------------------------- */
+.v5-neural-legend { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.v5-neural-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  background: rgba(3, 7, 15, .6); border: 1px solid rgba(34, 211, 238, .16);
+  font-size: 9px; letter-spacing: .1em; color: rgba(219, 234, 254, .82);
+  transition: opacity .15s, border-color .15s;
+}
+.v5-neural-chip:hover { border-color: rgba(34, 211, 238, .4); }
+.v5-neural-chip.off { opacity: .35; }
+.v5-neural-chip i { width: 7px; height: 7px; border-radius: 50%; display: block; }
+
+/* --- recherche ---------------------------------------------------------- */
+.v5-neural-search {
+  background: rgba(3, 7, 15, .7); border: 1px solid rgba(34, 211, 238, .2);
+  border-radius: 8px; padding: 5px 9px; color: #dbeafe;
+  font: inherit; font-size: 10px; letter-spacing: .04em; text-transform: none;
+  width: 180px; outline: none;
+}
+.v5-neural-search::placeholder { color: rgba(77, 97, 125, .95); }
+
+/* --- inspecteur --------------------------------------------------------- */
+.v5-neural-info {
+  position: absolute; top: 48px; right: 12px; width: 270px; max-height: calc(100% - 96px);
+  overflow: auto; padding: 12px;
+  background: rgba(8, 14, 26, .68); border: 1px solid rgba(34, 211, 238, .16);
+  border-radius: 12px; backdrop-filter: blur(14px) saturate(140%);
+  opacity: 0; transform: translateX(8px); pointer-events: none;
+  transition: opacity .2s, transform .2s;
+}
+.v5-neural-info.on { opacity: 1; transform: none; pointer-events: auto; }
+.v5-neural-info h3 { margin: 0 0 2px; font-size: 14px; letter-spacing: .05em; }
+.v5-neural-info .sub {
+  font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+  color: rgba(77, 97, 125, 1); margin-bottom: 9px;
+}
+.v5-neural-info p { margin: 0 0 10px; font-size: 11px; line-height: 1.6; color: rgba(124, 147, 181, 1); }
+.v5-neural-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 10.5px; margin-bottom: 10px; }
+.v5-neural-kv span:nth-child(odd) { color: rgba(77, 97, 125, 1); }
+.v5-neural-kv span:nth-child(even) { text-align: right; color: #dbeafe; }
+.v5-neural-rel { display: flex; flex-wrap: wrap; gap: 5px; }
+.v5-neural-rel button {
+  font: inherit; font-size: 9.5px; padding: 2px 7px; border-radius: 999px; cursor: pointer;
+  background: rgba(34, 211, 238, .06); border: 1px solid rgba(34, 211, 238, .22);
+  color: rgba(124, 147, 181, 1);
+}
+.v5-neural-rel button:hover { color: #eaf6ff; border-color: #22d3ee; }
+
+.v5-neural-hint { margin-left: auto; text-transform: none; letter-spacing: .02em; opacity: .75; }
+
+@media (max-width: 900px) {
+  .v5-neural { height: 380px; }
+  .v5-neural-info { display: none; }
+  .v5-neural-legend { display: none; }
+}

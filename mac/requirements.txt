@@ -1,0 +1,12 @@
+cryptography>=42,<47
+psutil>=5.9,<8
+paramiko>=3.4,<6
+python-dotenv>=1.0,<2
+keyring>=25,<26; sys_platform == "win32"
+pywin32-ctypes>=0.2.3,<0.3; sys_platform == "win32"
+pypdf>=4.0,<7
+openpyxl>=3.1,<4
+python-docx>=1.1,<2
+# Intégration Discord : OPTIONNELLE. Sans elle, jarvis/discord_engine.py
+# s'importe et se déclare indisponible ; le reste de JARVIS fonctionne.
+discord.py>=2.3,<3

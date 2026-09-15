@@ -1,0 +1,531 @@
+/* ==========================================================================
+   JARVIS_SPATIAL_OS_V5 — spatial.css
+   Tout est porté par html[data-jarvis-ui='spatial_v5'] : si le mode retombe
+   sur legacy_v4, aucune de ces règles ne s'applique et l'UI V4 reste intacte.
+   ========================================================================== */
+/* --brow enregistrée comme longueur : garantit une valeur typée et un 0px
+   initial même si spatial_browser ne l'a pas encore écrite (max() et calc()
+   ne peuvent alors pas recevoir de jeton invalide).
+
+   Pas de transition ici, ni sur left/right/width : une transition dont la
+   valeur dérive d'une custom property ne se relance pas quand la variable
+   change — la propriété reste figée sur son ancienne valeur utilisée
+   (constaté : `right` bloqué à 174px alors que le calcul donnait 464px).
+   Le dock, lui, anime sa propre largeur : le mouvement reste lisible. */
+@property --brow{ syntax:'<length>'; inherits:true; initial-value:0px; }
+
+html[data-jarvis-ui='spatial_v5']{
+  --void:#01050a; --ink:#f2fbff;   --mute:#93a8ba; --faint:#4a6174;
+  --cy:#38dfff; --ice:#9df4ff; --amber:#ffb057; --violet:#9b8cff;
+  --ok5:#3df0a6; --err5:#ff5b6e;
+  --mono5:'JetBrains Mono','Cascadia Mono',ui-monospace,SFMono-Regular,monospace;
+  --sans5:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
+  --glass5:linear-gradient(180deg,rgba(8,26,40,.6),rgba(3,12,20,.48));
+  --edge5:inset 0 0 0 1px rgba(120,200,230,.09);
+
+  /* ---------------------------------------------------- MODÈLE DE GOUTTIÈRE
+     Le Command Center reste une composition d'overlays `fixed` (le canvas de
+     l'Avatar et celui du Brain en dépendent), mais toutes les régions
+     négocient désormais leur place par ces variables au lieu de coordonnées
+     en dur. Une seule source de vérité pour la colonne droite : --v5right.
+
+       --brow  largeur réelle du dock navigateur, écrite par
+               spatial_browser.setBrow() ; 0 quand l'aperçu est fermé.
+       --rpw   largeur du panneau d'état droit (0 quand il est masqué).
+       --cmdh  hauteur mesurée de la barre de commande (spatial_shell).
+
+     --v5right est la gouttière que le bloc central ne doit jamais franchir :
+     le dock et le panneau d'état partagent la même colonne, on réserve donc
+     le plus large des deux. */
+  --v5rail:64px;
+  --v5edge:18px;
+  --rpw:172px;
+  --brow:0px;
+  --v5right:calc(var(--v5edge) + max(var(--brow), var(--rpw)));
+  --v5ease:.45s cubic-bezier(.16,.9,.3,1);
+}
+
+/* La coque héritée (sidebar/header/footer V4) sort de la vue mais reste dans
+   le DOM : tous les ids restent alimentés, aucune fonction n'est perdue. */
+html[data-jarvis-ui='spatial_v5'] #app,
+html[data-jarvis-ui='spatial_v5'] .v5-legacy-host,
+html[data-jarvis-ui='spatial_v5'] #grid-overlay,
+html[data-jarvis-ui='spatial_v5'] .console-dock{ display:none !important; }
+
+html[data-jarvis-ui='spatial_v5'],
+html[data-jarvis-ui='spatial_v5'] body{
+  height:100%; margin:0; background:var(--void); color:var(--ink);
+  font-family:var(--sans5); overflow:hidden;
+}
+
+/* ================================================================= SCÈNE */
+.v5-scene{position:fixed;inset:0;overflow:hidden;z-index:0}
+.v5-sky{position:absolute;inset:-8%;will-change:transform;
+  background:
+    radial-gradient(52% 44% at 50% 46%, rgba(16,74,126,.30), transparent 64%),
+    radial-gradient(36% 32% at 82% 74%, rgba(120,92,255,.11), transparent 72%),
+    radial-gradient(40% 36% at 16% 22%, rgba(0,110,150,.11), transparent 72%),
+    linear-gradient(180deg,#01060c,#020b14 48%,#01060c)}
+#v5Stars{position:absolute;inset:0;width:100%;height:100%}
+.v5-horizon{position:absolute;left:50%;bottom:16vh;width:120vw;height:1px;translate:-50% 0;
+  background:linear-gradient(90deg,transparent,rgba(56,223,255,.2),transparent)}
+.v5-atmos{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(80% 64% at 50% 46%, transparent 36%, rgba(1,5,10,.86) 100%)}
+.v5-grain{position:absolute;inset:0;pointer-events:none;opacity:.12;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+
+/* =================================================================== HUD */
+.v5-hud{position:fixed;top:0;left:0;right:0;height:40px;z-index:60;display:flex;align-items:center;
+  gap:22px;padding:0 22px;font-family:var(--mono5);font-size:10.5px;letter-spacing:.08em;color:var(--mute)}
+.v5-hud-id{display:flex;align-items:center;gap:8px;color:var(--ink);letter-spacing:.34em}
+.v5-hud-id i{width:6px;height:6px;border-radius:50%;background:var(--ok5);box-shadow:0 0 9px var(--ok5);
+  animation:v5dot 3.2s ease-in-out infinite}
+.v5-hud-id i[data-tone='warn']{background:var(--amber);box-shadow:0 0 9px var(--amber)}
+.v5-hud-id i[data-tone='err']{background:var(--err5);box-shadow:0 0 9px var(--err5)}
+@keyframes v5dot{0%,100%{opacity:.45}50%{opacity:1}}
+.v5-hud-sys{display:flex;gap:15px;background:none;border:0;color:inherit;font:inherit;
+  letter-spacing:.1em;cursor:pointer;padding:6px 9px;border-radius:8px;transition:.18s;
+  white-space:nowrap;overflow:hidden}
+.v5-hud-sys:hover{background:rgba(56,223,255,.07);color:var(--ice)}
+.v5-hud-sys b{color:var(--ink);font-weight:500}
+.v5-hud-sys b.hot{color:var(--amber);text-shadow:0 0 10px rgba(255,176,87,.35)}
+.v5-hud-spacer{flex:1}
+.v5-hud-time{color:var(--ink);letter-spacing:.14em;font-variant-numeric:tabular-nums}
+
+/* ================================================================== RAIL */
+.v5-rail{position:fixed;left:13px;top:50%;translate:0 -50%;z-index:60;display:flex;flex-direction:column;
+  gap:1px;padding:7px 5px;border-radius:999px;background:rgba(4,16,26,.42);backdrop-filter:blur(10px);
+  box-shadow:var(--edge5);width:44px}
+.v5-rail button{position:relative;width:38px;height:38px;display:grid;grid-template-columns:1fr;
+  place-items:center;border:0;border-radius:50%;background:none;color:var(--faint);cursor:pointer;
+  transition:color .18s,background .18s,width .18s,justify-items .18s}
+.v5-rail button .lbl{display:none;font-size:8px;letter-spacing:.18em;line-height:1;margin-top:2px;white-space:nowrap}
+.v5-rail:hover{width:auto;border-radius:12px;padding:7px 8px 7px 5px}
+.v5-rail:hover button{width:auto;justify-items:start;padding:0 8px;border-radius:8px;
+  grid-template-columns:16px 1fr}
+.v5-rail:hover button svg{justify-self:center;width:16px;height:16px}
+.v5-rail:hover button .lbl{display:block}
+.v5-rail button svg{width:16px;height:16px}
+.v5-rail button:hover{color:var(--ice);background:rgba(56,223,255,.09)}
+.v5-rail button.on{color:var(--cy);background:rgba(56,223,255,.12);border:1px solid rgba(56,223,255,.28)}
+.v5-rail button.on::before{content:'';position:absolute;left:-5px;top:50%;translate:0 -50%;width:2px;
+  height:15px;border-radius:2px;background:var(--cy);box-shadow:0 0 8px var(--cy)}
+.v5-rail-sep{height:1px;margin:5px 7px;background:rgba(120,200,230,.12)}
+
+/* ============================================================ RIGHT PANEL */
+.v5-rpanel{position:fixed;right:16px;top:56px;z-index:80;display:flex;flex-direction:column;gap:6px;
+  width:172px;pointer-events:auto;opacity:1;transition:opacity .4s,transform .4s,filter .4s;}
+.v5-rpanel>button,.v5-rpanel>section{padding:8px 11px;border-radius:10px;background:var(--glass5);
+  backdrop-filter:blur(13px);box-shadow:var(--edge5);text-align:left}
+.v5-rpanel .k{display:block;font-family:var(--mono5);font-size:8px;letter-spacing:.22em;color:var(--faint);margin-bottom:3px}
+.v5-rpanel b{display:block;font-size:11.5px;font-weight:400;color:var(--ink);line-height:1.4}
+.v5-rpanel em{display:block;font-size:10px;color:var(--cy);letter-spacing:.14em;margin-top:1px;font-style:normal}
+.v5-rpanel button.rp-brain{cursor:pointer;transition:border-color .18s,background .18s}
+.v5-rpanel button.rp-brain:hover{border-color:rgba(56,223,255,.28);background:rgba(56,223,255,.06)}
+.v5-rpanel .rp-ctx b{font-size:10.5px;color:var(--mute)}
+
+/* =============================================== PORTAIL (menus, tooltips) */
+#v5Portal{position:fixed;inset:0;z-index:900;pointer-events:none}
+.v5-pop{position:absolute;pointer-events:auto;min-width:214px;max-height:min(70vh,520px);overflow:auto;
+  padding:7px;border-radius:12px;background:rgba(5,18,29,.93);backdrop-filter:blur(16px);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.14),0 30px 70px -28px rgba(0,0,0,.95);
+  opacity:0;translate:-8px 0;animation:v5pop .16s ease forwards}
+@keyframes v5pop{to{opacity:1;translate:0 0}}
+.v5-pop.closing{animation:v5popOut .13s ease forwards}
+@keyframes v5popOut{to{opacity:0;translate:-6px 0}}
+.v5-pop .grp{font-family:var(--mono5);font-size:8.5px;letter-spacing:.2em;color:var(--faint);padding:8px 9px 4px}
+.v5-pop button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;
+  padding:7px 9px;border:0;border-radius:8px;background:none;color:var(--mute);font:inherit;
+  font-size:12px;text-align:left;cursor:pointer}
+.v5-pop button:hover{background:rgba(56,223,255,.09);color:var(--ink)}
+.v5-pop button.on{color:var(--ice)}
+.v5-tip{position:absolute;pointer-events:none;font-family:var(--mono5);font-size:9px;letter-spacing:.18em;
+  color:var(--ice);padding:5px 9px;border-radius:6px;background:rgba(3,14,24,.94);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.14);opacity:0;animation:v5pop .14s ease forwards}
+
+/* ================================================================= BRAIN */
+.v5-brain-wrap{position:absolute;z-index:20;will-change:transform;transition:opacity .5s ease,filter .5s ease;
+  cursor:pointer}
+#v5BrainCanvas{width:100%;height:100%;display:block}
+.v5-mini-meta{position:absolute;left:50%;bottom:-6px;translate:-50% 100%;text-align:center;
+  font-family:var(--mono5);pointer-events:none;white-space:nowrap}
+.v5-mini-meta .k{display:block;font-size:8px;letter-spacing:.22em;color:var(--faint)}
+.v5-mini-meta b{display:block;font-size:10px;letter-spacing:.14em;color:var(--ice);font-weight:500;margin-top:2px}
+.v5-mini-meta em{display:block;font-size:8.5px;letter-spacing:.08em;color:var(--mute);font-style:normal;margin-top:2px}
+.v5-zone{position:fixed;z-index:24;font-family:var(--mono5);font-size:9px;letter-spacing:.18em;
+  color:var(--faint);white-space:nowrap;pointer-events:none;transition:color .3s,text-shadow .3s,opacity .4s}
+.v5-zone.hot{color:var(--ice);text-shadow:0 0 14px rgba(56,223,255,.65)}
+#v5Leads{position:fixed;inset:0;width:100%;height:100%;z-index:23;pointer-events:none}
+
+/* ================================================================ AVATAR */
+.v5-avatar{position:absolute;z-index:22;will-change:transform,opacity;transition:opacity .6s ease,filter .5s ease}
+#v5AvatarCv{width:100%;height:100%;display:block;
+  -webkit-mask-image:radial-gradient(58% 54% at 50% 40%,#000 46%,transparent 100%),
+                     linear-gradient(180deg,#000 62%,transparent 100%);
+  -webkit-mask-composite:source-in;
+  mask-image:radial-gradient(58% 54% at 50% 40%,#000 46%,transparent 100%),
+             linear-gradient(180deg,#000 62%,transparent 100%);
+  mask-composite:intersect}
+.v5-avatar-glow{position:absolute;inset:-18% -14% -8%;z-index:-1;pointer-events:none;
+  background:radial-gradient(44% 44% at 52% 38%, rgba(56,223,255,.13), transparent 70%),
+             radial-gradient(60% 40% at 50% 86%, rgba(20,110,180,.10), transparent 72%)}
+.v5-avatar-fb{position:absolute;inset:0;display:grid;place-items:end center;padding-bottom:6%}
+.v5-avatar-fb[hidden]{display:none!important}
+.v5-avatar-fb svg{width:66%;filter:drop-shadow(0 0 26px rgba(56,223,255,.3))}
+
+/* ============================================================== GREETING */
+.v5-greet{position:fixed;z-index:26;left:50%;translate:-50% 0;text-align:center;pointer-events:none;
+  transition:opacity .45s ease}
+.v5-greet h1{margin:0;font-size:clamp(24px,2.7vw,38px);font-weight:200;letter-spacing:-.015em;
+  text-shadow:0 0 44px rgba(56,223,255,.2)}
+.v5-greet h1 span{font-weight:400}
+.v5-greet p{margin:8px 0 0;font-family:var(--mono5);font-size:10px;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--mute)}
+.v5-greet .st{margin-top:14px;display:inline-flex;align-items:center;gap:9px;font-family:var(--mono5);
+  font-size:9.5px;letter-spacing:.26em;color:var(--cy)}
+.v5-greet .st s{width:24px;height:1px;background:linear-gradient(90deg,transparent,var(--cy));text-decoration:none}
+
+/* Satellites d'information : en orbite, jamais en cartes */
+.v5-sat{position:fixed;z-index:25;display:flex;align-items:center;gap:8px;font-family:var(--mono5);
+  font-size:9.5px;letter-spacing:.14em;color:var(--mute);white-space:nowrap;pointer-events:none;
+  transition:opacity .5s ease}
+.v5-sat b{color:var(--ink);font-weight:500}
+.v5-sat i{width:4px;height:4px;border-radius:50%;background:var(--cy);box-shadow:0 0 7px var(--cy)}
+.v5-sat[data-tone='ok'] i{background:var(--ok5);box-shadow:0 0 7px var(--ok5)}
+.v5-sat[data-tone='warn'] i{background:var(--amber);box-shadow:0 0 7px var(--amber)}
+.v5-sat[data-tone='err'] i{background:var(--err5);box-shadow:0 0 7px var(--err5)}
+
+/* ============================================================ COMMAND BAR */
+/* Même bande que le chat : la barre de commande reste alignée sur le fil de
+   conversation quand le dock s'ouvre, au lieu de rester centrée sur l'écran. */
+.v5-cmd{position:fixed;left:var(--v5rail);right:var(--v5right);bottom:22px;z-index:60;
+  width:auto;max-width:clamp(440px,48vw,760px);margin-inline:auto;
+  display:flex;align-items:center;gap:11px;padding:9px 10px 9px 16px;border-radius:999px;
+  background:linear-gradient(180deg,rgba(9,27,41,.72),rgba(3,12,20,.82));backdrop-filter:blur(20px);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.16),0 18px 50px -28px rgba(0,0,0,.9);
+  transition:width .5s cubic-bezier(.16,.9,.3,1),box-shadow .3s,transform .4s}
+.v5-cmd.focus{box-shadow:inset 0 0 0 1px rgba(56,223,255,.48),0 0 36px -16px rgba(56,223,255,.45),
+  0 18px 50px -28px rgba(0,0,0,.9)}
+.v5-cmd.busy{box-shadow:inset 0 0 0 1px rgba(56,223,255,.28),0 0 28px -18px rgba(56,223,255,.3)}
+.v5-cmd.mini{width:clamp(320px,38vw,500px);transform:translateY(4px) scale(.97)}
+html[data-jarvis-ui='spatial_v5'] #convForm{display:flex;align-items:center;gap:11px;padding:0;
+  background:none!important;border:0!important;box-shadow:none!important;width:100%}
+html[data-jarvis-ui='spatial_v5'] #convForm .composer-main{flex:1;min-width:0;display:flex;align-items:center}
+html[data-jarvis-ui='spatial_v5'] #convInput{width:100%;resize:none;background:none!important;border:0!important;
+  outline:0;color:var(--ink);font:inherit;font-size:13.5px;line-height:1.45;padding:7px 0;max-height:120px}
+html[data-jarvis-ui='spatial_v5'] #convInput::placeholder{color:#4a6274}
+html[data-jarvis-ui='spatial_v5'] #convForm .composer-meta{display:none}
+html[data-jarvis-ui='spatial_v5'] #convForm .composer-actions{display:flex;align-items:center;gap:8px}
+html[data-jarvis-ui='spatial_v5'] #convForm #convOpen{display:none}
+html[data-jarvis-ui='spatial_v5'] #convForm .mic-btn{width:32px;height:32px;flex:0 0 auto;border-radius:50%;
+  border:0;cursor:pointer;display:grid;place-items:center;color:var(--ice);background:rgba(56,223,255,.09);
+  transition:.2s}
+html[data-jarvis-ui='spatial_v5'] #convForm .mic-btn:hover{background:rgba(56,223,255,.18)}
+html[data-jarvis-ui='spatial_v5'] #convForm .mic-btn.live{color:#03141c;background:var(--cy);
+  box-shadow:0 0 22px rgba(56,223,255,.6)}
+html[data-jarvis-ui='spatial_v5'] #convForm .mic-btn svg{width:15px;height:15px}
+html[data-jarvis-ui='spatial_v5'] #convForm .btn.primary.send{width:32px;height:32px;padding:0;border:0;
+  border-radius:50%;display:grid;place-items:center;color:#02141c;cursor:pointer;
+  background:linear-gradient(180deg,var(--ice),var(--cy));box-shadow:0 0 20px -4px rgba(56,223,255,.7)}
+html[data-jarvis-ui='spatial_v5'] #convForm .btn.primary.send span{display:none}
+.v5-cmd .kbd{font-family:var(--mono5);font-size:9px;letter-spacing:.16em;color:var(--faint)}
+#v5Wave{flex:1;height:28px;display:none}
+.v5-cmd.listening #v5Wave{display:block}
+.v5-cmd.listening #convForm .composer-main{display:none}
+
+/* Flux d'activité au-dessus de la barre : éphémère, jamais un historique */
+.v5-activity{position:fixed;left:50%;bottom:118px;translate:-50% 0;z-index:58;width:clamp(440px,48vw,760px);
+  display:flex;flex-direction:column-reverse;gap:3px;pointer-events:none}
+.v5-act{display:flex;align-items:center;gap:8px;font-family:var(--mono5);font-size:9.5px;
+  letter-spacing:.1em;color:var(--mute);animation:v5actIn .3s ease both;transition:opacity .8s}
+.v5-act.fade{opacity:0}
+.v5-act b{color:var(--ink);font-weight:500}
+/* Ancré au-dessus de la barre de commande (--cmdh, mesuré par spatial_shell)
+   pour que la checklist ne glisse jamais derrière le composeur. */
+.v5-task{position:fixed;left:var(--v5rail);right:var(--v5right);
+  bottom:calc(22px + var(--cmdh,56px) + 10px);
+  z-index:59;width:auto;max-width:clamp(440px,48vw,760px);margin-inline:auto;
+  display:flex;align-items:center;gap:10px;pointer-events:none;font-family:var(--mono5)}
+.v5-task[hidden]{display:none!important}
+.v5-task i{width:7px;height:7px;border-radius:50%;background:var(--cy);box-shadow:0 0 8px var(--cy);flex:0 0 auto}
+.v5-task[data-tone='ok'] i{background:var(--ok5);box-shadow:0 0 8px var(--ok5)}
+.v5-task[data-tone='err'] i{background:var(--err5);box-shadow:0 0 8px var(--err5)}
+.v5-task i.spin{animation:v5dot 1.4s ease-in-out infinite}
+.v5-task b{display:block;font-size:9px;letter-spacing:.18em;color:var(--ice);font-weight:500}
+.v5-task span{display:block;font-size:11px;letter-spacing:.02em;color:var(--ink);margin-top:1px}
+.v5-task em{margin-left:auto;font-style:normal;font-size:9px;letter-spacing:.08em;color:var(--mute)}
+/* Checklist d'exécution : rangée complète sous la ligne de titre. Les libellés
+   sont désormais lisibles ("[2/4] Fusion des résultats ●"), donc on enroule au
+   lieu de déborder du bandeau. */
+.v5-task{flex-wrap:wrap}
+.v5-steps{flex:0 0 100%;display:flex;flex-wrap:wrap;gap:4px 10px;margin:6px 0 0 17px;
+  font-size:8.5px;letter-spacing:.12em}
+.v5-steps span{display:inline-block!important;font-size:8.5px!important;margin-top:0!important;
+  color:var(--faint);transition:color .3s ease,opacity .3s ease}
+.v5-steps span[data-st='idle']{opacity:.55}
+.v5-steps span[data-st='done']{color:var(--ok5)!important}
+.v5-steps span[data-st='run']{color:var(--ice)!important;animation:v5stepRun 1.6s ease-in-out infinite}
+.v5-steps span[data-st='err']{color:var(--err5)!important}
+@keyframes v5stepRun{0%,100%{opacity:.62}50%{opacity:1}}
+@keyframes v5actIn{from{opacity:0;transform:translateX(-6px)}}
+
+/* Carte outil éphémère près du Brain */
+.v5-toolcard{position:fixed;z-index:55;padding:9px 13px;border-radius:11px;font-family:var(--mono5);
+  font-size:10px;background:linear-gradient(180deg,rgba(10,30,44,.85),rgba(4,14,22,.75));
+  backdrop-filter:blur(10px);box-shadow:inset 0 0 0 1px rgba(56,223,255,.22),0 0 34px -12px rgba(56,223,255,.5);
+  animation:v5toolIn .4s cubic-bezier(.16,.9,.3,1);max-width:320px}
+.v5-toolcard.out{animation:v5toolOut .3s ease forwards}
+@keyframes v5toolIn{from{opacity:0;translate:0 12px;filter:blur(6px)}}
+@keyframes v5toolOut{to{opacity:0;translate:0 -8px;filter:blur(6px)}}
+.v5-toolcard .t{color:var(--cy);letter-spacing:.2em;font-size:8.5px}
+.v5-toolcard .d{color:var(--ink);margin-top:3px;letter-spacing:.03em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ===================================================== VUE CHAT (flux) == */
+.v5-view{position:fixed;z-index:30;opacity:0;pointer-events:none;
+  transition:opacity .5s ease, transform .55s cubic-bezier(.16,.9,.3,1), filter .5s ease}
+.v5-view.in{opacity:1;pointer-events:auto}
+/* Le fil de conversation occupe la bande disponible (entre le rail et la
+   gouttière droite) et s'y centre tout seul : plus aucune largeur calculée à
+   la main, donc plus de chevauchement possible avec le dock. */
+/* width:auto + left/right → la bande ; max-width (valeur absolue) la plafonne.
+   Surtout pas de pourcentage ici : sur un élément `fixed` il se résout sur le
+   viewport, pas sur la bande, et le fil déborderait sous le dock. */
+.v5-chat{left:var(--v5rail);right:var(--v5right);width:auto;max-width:860px;margin-inline:auto;
+  top:56px;bottom:128px;transform:translateY(16px);filter:blur(6px);
+  transition:opacity .5s ease, transform .55s cubic-bezier(.16,.9,.3,1), filter .5s ease}
+.v5-chat.in{transform:none;filter:none}
+html[data-jarvis-ui='spatial_v5'] #convLog{height:100%;max-height:none;overflow:auto;display:flex;
+  flex-direction:column;gap:18px;padding:0 8px 0 0;background:none!important;border:0!important;
+  mask-image:linear-gradient(180deg,transparent 0,#000 28px,#000 calc(100% - 8px),transparent 100%);
+  scrollbar-width:thin;scrollbar-color:rgba(56,223,255,.14) transparent}
+html[data-jarvis-ui='spatial_v5'] #convLog::-webkit-scrollbar{width:4px}
+html[data-jarvis-ui='spatial_v5'] #convLog::-webkit-scrollbar-thumb{background:rgba(56,223,255,.18);border-radius:3px}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg{max-width:68ch;background:none!important;border:0!important;
+  padding:0;animation:v5msg .45s cubic-bezier(.16,.9,.3,1) both}
+@keyframes v5msg{from{opacity:0;transform:translateY(10px);filter:blur(4px)}}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg .who{font-family:var(--mono5);font-size:8px;
+  letter-spacing:.24em;color:var(--faint);display:flex;align-items:center;gap:7px;margin-bottom:7px}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg:not(.user) .who{color:var(--ice)}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg:not(.user) .who::before{content:'';width:5px;height:5px;
+  border-radius:50%;background:var(--cy);box-shadow:0 0 8px var(--cy)}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg .msg-time{font-size:8px;letter-spacing:.1em;color:var(--faint);
+  font-weight:400;margin-left:2px}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg .bubble{background:none!important;border:0!important;
+  padding:0;font-family:var(--sans5);font-size:15px;line-height:1.7;font-weight:400;color:#e8f4fb}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg.user{align-self:flex-end;max-width:46ch}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg.user .who{justify-content:flex-end}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg.user .bubble{color:#c5d6e2;text-align:right;
+  padding:8px 12px;border-radius:12px 12px 4px 12px;background:rgba(20,110,180,.08)!important;
+  box-shadow:none;font-size:14px;line-height:1.55}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg.error .bubble{color:#ffc2c9}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg:not(.user)::after{content:'';display:block;height:1px;
+  margin-top:14px;background:linear-gradient(90deg,rgba(120,200,230,.16),transparent)}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg .bubble pre{overflow-x:auto;font-family:var(--mono5);
+  font-size:12px;padding:12px;border-radius:10px;background:rgba(3,12,20,.7);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.1)}
+html[data-jarvis-ui='spatial_v5'] #convLog .msg .bubble code{font-family:var(--mono5);font-size:12px}
+.v5-src{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:2px 0;border-radius:0;
+  font-family:var(--mono5);font-size:8.5px;letter-spacing:.14em;color:var(--mute);
+  background:none;box-shadow:none}
+.v5-src i{width:4px;height:4px;border-radius:50%;background:var(--ok5)}
+.v5-phase{font-family:var(--mono5);font-size:10px;letter-spacing:.18em;color:var(--ice)}
+.v5-phase-dots{display:inline-flex;gap:4px;margin-left:9px;vertical-align:middle}
+.v5-phase-dots i{width:4px;height:4px;border-radius:50%;background:var(--cy);
+  animation:v5d 1.05s ease-in-out infinite}
+.v5-phase-dots i:nth-child(2){animation-delay:.16s}.v5-phase-dots i:nth-child(3){animation-delay:.32s}
+@keyframes v5d{0%,100%{opacity:.2;transform:translateY(0)}50%{opacity:1;transform:translateY(-3px)}}
+
+/* =============================== ESPACE DE TRAVAIL (pages héritées) ===== */
+/* Les pages existantes (Analyse, Sync, Agents, Memory, Tools, Settings…)
+   restent fonctionnelles et sont posées sur la scène, sans chrome de carte. */
+/* L'espace de travail (Analysis Workspace, pages héritées) respecte la même
+   gouttière : il ne glisse plus sous le dock navigateur ni sous le panneau
+   d'état. C'était le chevauchement principal du « panneau droit ». */
+.v5-work{position:fixed;left:var(--v5rail);right:var(--v5right);top:56px;bottom:132px;z-index:28;overflow:auto;
+  opacity:0;pointer-events:none;transform:scale(.99) translateY(12px);filter:blur(6px);
+  transition:opacity .5s ease, transform .55s cubic-bezier(.16,.9,.3,1), filter .5s ease;
+  scrollbar-width:thin;scrollbar-color:rgba(56,223,255,.18) transparent}
+.v5-work.in{opacity:1;pointer-events:auto;transform:none;filter:none}
+.v5-work::-webkit-scrollbar{width:6px}
+.v5-work::-webkit-scrollbar-thumb{background:rgba(56,223,255,.18);border-radius:3px}
+html[data-jarvis-ui='spatial_v5'] #pageWrap{padding:0;background:none;overflow:visible}
+html[data-jarvis-ui='spatial_v5'] .page{height:auto;min-height:0;padding:0 2px 16px;background:none}
+html[data-jarvis-ui='spatial_v5'] .card,
+html[data-jarvis-ui='spatial_v5'] .ctx-card{border-radius:12px;border:0;background:var(--glass5);
+  backdrop-filter:blur(10px);box-shadow:var(--edge5)}
+html[data-jarvis-ui='spatial_v5'] .page-head{display:flex;align-items:baseline;gap:12px;padding:2px 2px 12px;
+  margin-bottom:14px;box-shadow:inset 0 -1px 0 rgba(120,200,230,.1)}
+html[data-jarvis-ui='spatial_v5'] .page-head h1,
+html[data-jarvis-ui='spatial_v5'] .page-head .page-title{font-size:18px;font-weight:250;letter-spacing:-.01em}
+html[data-jarvis-ui='spatial_v5'] .zone-kicker,
+html[data-jarvis-ui='spatial_v5'] .nav-group-label{font-family:var(--mono5);font-size:8.5px;
+  letter-spacing:.22em;color:var(--faint)}
+html[data-jarvis-ui='spatial_v5'] h2{font-size:15px;font-weight:400}
+html[data-jarvis-ui='spatial_v5'] h3{font-size:13px;font-weight:400}
+/* le chat legacy de la page d'accueil est remonté dans la scène */
+html[data-jarvis-ui='spatial_v5'] #chatRow,
+html[data-jarvis-ui='spatial_v5'] .home-cmd,
+html[data-jarvis-ui='spatial_v5'] .home-greet{display:none!important}
+
+/* Modules contextuels (n'existent que pour le contexte demandé) */
+.v5-mods{position:fixed;right:16px;top:50%;translate:0 -50%;z-index:50;display:flex;flex-direction:column;
+  gap:8px;width:248px;pointer-events:none}
+.v5-mod{pointer-events:auto;padding:11px 13px;border-radius:12px;background:var(--glass5);
+  backdrop-filter:blur(13px);box-shadow:var(--edge5),0 24px 60px -30px rgba(0,0,0,.9);
+  opacity:0;translate:16px 0;filter:blur(6px);animation:v5modIn .46s cubic-bezier(.16,.9,.3,1) forwards}
+.v5-mod.out{animation:v5modOut .3s ease forwards}
+@keyframes v5modIn{to{opacity:1;translate:0 0;filter:blur(0)}}
+@keyframes v5modOut{to{opacity:0;translate:12px 0;filter:blur(5px)}}
+.v5-mod h4{margin:0 0 7px;font-family:var(--mono5);font-size:8.5px;letter-spacing:.22em;color:var(--mute);
+  font-weight:500;display:flex;align-items:center;gap:7px}
+.v5-mod h4 i{width:4px;height:4px;border-radius:50%;background:var(--cy);box-shadow:0 0 7px var(--cy)}
+.v5-mod .row{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:11.5px;color:var(--mute)}
+.v5-mod .row b{color:var(--ink);font-weight:400;font-family:var(--mono5);font-size:10.5px}
+.v5-mod .row+.row{box-shadow:inset 0 1px 0 rgba(120,200,230,.06)}
+
+/* Overlays réutilisés (Analysis Workspace, Sync Feedback) harmonisés */
+html[data-jarvis-ui='spatial_v5'] #analysisWorkspace,
+html[data-jarvis-ui='spatial_v5'] .aw-overlay{
+  background:radial-gradient(90% 80% at 50% 0%, rgba(0,217,255,.07), transparent 60%),
+             rgba(1,5,10,.92)!important;backdrop-filter:blur(16px)}
+html[data-jarvis-ui='spatial_v5'] .aw-panel,
+html[data-jarvis-ui='spatial_v5'] .aw-card{border:0!important;background:var(--glass5)!important;
+  box-shadow:var(--edge5);border-radius:12px}
+html[data-jarvis-ui='spatial_v5'] #syncFeedback{background:radial-gradient(80% 70% at 50% 10%,
+  rgba(255,176,87,.09), transparent 60%), rgba(1,5,10,.92)!important;backdrop-filter:blur(14px)}
+html[data-jarvis-ui='spatial_v5'] .toasts .toast{border:0;background:rgba(5,18,29,.9);
+  backdrop-filter:blur(12px);box-shadow:var(--edge5);border-radius:10px}
+html[data-jarvis-ui='spatial_v5'] #modalRoot .modal{border:0!important;background:rgba(5,18,29,.94)!important;
+  backdrop-filter:blur(16px);box-shadow:var(--edge5),0 40px 90px -40px #000;border-radius:16px}
+
+/* ============================================================ RESPONSIVE */
+/* Les largeurs ne sont plus calculées à la main : seul le plafond du fil de
+   conversation change, la bande disponible s'occupe du reste. */
+@media (max-width:1600px){
+  .v5-chat{max-width:760px}
+}
+@media (max-width:1440px){
+  .v5-mods{width:228px} .v5-hud-sys span:nth-child(n+4){display:none}
+  .v5-mini-meta{display:none}
+  .v5-rpanel{width:160px;right:12px}
+  html[data-jarvis-ui='spatial_v5']{--rpw:160px}
+  .v5-rpanel .rp-ctx{display:none}
+}
+@media (max-width:1366px){
+  .v5-chat{max-width:680px}
+  html[data-jarvis-ui='spatial_v5']{--v5rail:58px;--v5edge:14px}
+  html[data-context='chat'] .v5-brain-wrap{opacity:.35!important}
+}
+@media (max-width:1100px){
+  .v5-mods{display:none}
+  .v5-rpanel{display:none}
+  /* Le panneau d'état disparaît : il ne réserve plus rien à droite. */
+  html[data-jarvis-ui='spatial_v5']{--rpw:0px}
+  html[data-context='chat'] .v5-brain-wrap, html[data-context='chat'] .v5-avatar{opacity:0!important;pointer-events:none}
+  .v5-chat{max-width:none}
+}
+@media (max-width:860px){
+  .v5-avatar{opacity:0!important}
+  .v5-rail{left:50%;top:auto;bottom:92px;translate:-50% 0;flex-direction:row;max-width:calc(100vw - 24px);
+    overflow-x:auto}
+  .v5-rail-sep{width:1px;height:auto;margin:7px 5px}
+  /* Le rail passe en bas : la bande occupe toute la largeur, moins le dock
+     s'il est ouvert (--brow reste honoré, le panneau d'état est masqué). */
+  html[data-jarvis-ui='spatial_v5']{--v5rail:12px;--v5edge:12px;--rpw:0px}
+  .v5-cmd{max-width:none;bottom:20px}
+  .v5-activity{display:none}
+  .v5-chat{max-width:none;top:52px;bottom:150px}
+  .v5-work{top:48px;bottom:150px}
+  .v5-task{max-width:none}
+  .v5-grain{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  html[data-jarvis-ui='spatial_v5'] *,
+  html[data-jarvis-ui='spatial_v5'] *::before,
+  html[data-jarvis-ui='spatial_v5'] *::after{
+    animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important}
+  .v5-grain,.v5-sky{display:none}
+}
+
+/* ======================================================== APERÇU NAVIGATEUR */
+/* Le dock s'aligne sur --v5edge, la même marge que celle réservée par
+   --v5right. Une constante en dur ici laissait 2 px de recouvrement
+   avec la bande centrale aux points de rupture où --v5edge change. */
+.v5-browser{position:fixed;top:200px;right:var(--v5edge);bottom:132px;z-index:70;width:36vw;max-width:640px;min-width:320px;
+  display:flex;flex-direction:column;border-radius:14px;background:rgba(4,16,26,.86);backdrop-filter:blur(16px);
+  box-shadow:inset 0 0 0 1px rgba(120,200,230,.16),0 30px 80px -30px rgba(0,0,0,.95);
+  overflow:hidden;opacity:0;translate:24px 0;filter:blur(6px);pointer-events:none;
+  transition:opacity .38s cubic-bezier(.16,.9,.3,1),translate .4s cubic-bezier(.16,.9,.3,1),filter .4s,width .4s,right .4s,inset .4s}
+.v5-browser.in{opacity:1;translate:0 0;filter:blur(0);pointer-events:auto}
+.v5-browser[data-mode='wide']{width:52vw;max-width:820px}
+.v5-browser[data-mode='full']{top:40px;right:0;bottom:0;width:100vw;max-width:100vw;border-radius:0;
+  border-top:1px solid rgba(56,223,255,.25);box-shadow:inset 0 0 0 1px rgba(120,200,230,.14)}
+.b-head{display:flex;align-items:center;gap:10px;padding:9px 12px;box-shadow:inset 0 -1px 0 rgba(120,200,230,.1);
+  font-family:var(--mono5)}
+.b-title{font-size:9px;letter-spacing:.24em;color:var(--ice)}
+.b-state{margin-left:auto;font-size:8.5px;letter-spacing:.16em;color:var(--faint)}
+.b-state[data-tone='ok']{color:var(--ok5)}
+.b-state[data-tone='warn']{color:var(--amber)}
+.b-size{display:flex;gap:2px}
+.b-size button{width:22px;height:20px;display:grid;place-items:center;border:0;border-radius:5px;
+  background:none;color:var(--faint);font-size:11px;cursor:pointer;font-family:var(--mono5)}
+.b-size button.on,.b-size button:hover{background:rgba(56,223,255,.14);color:var(--cy)}
+.b-close{width:22px;height:20px;display:grid;place-items:center;border:0;border-radius:5px;background:none;
+  color:var(--faint);cursor:pointer;font-size:11px}
+.b-close:hover{background:rgba(255,91,110,.14);color:var(--err5)}
+.b-bar{display:flex;align-items:center;gap:6px;padding:7px 10px}
+.b-bar input{flex:1;min-width:0;border:0;border-radius:6px;background:rgba(3,12,20,.72);color:var(--ink);
+  font-family:var(--mono5);font-size:11px;padding:7px 10px;box-shadow:inset 0 0 0 1px rgba(120,200,230,.12)}
+.b-bar input:focus{outline:none;box-shadow:inset 0 0 0 1.5px rgba(56,223,255,.5)}
+.b-btn{width:26px;height:28px;display:grid;place-items:center;border:0;border-radius:6px;background:rgba(56,223,255,.07);
+  color:var(--cy);cursor:pointer;font-size:15px;line-height:1}
+.b-btn:hover{background:rgba(56,223,255,.16)}
+.b-go{height:28px;padding:0 10px;border:0;border-radius:6px;background:var(--cy);color:#01131c;
+  font-family:var(--mono5);font-size:11px;font-weight:600;cursor:pointer}
+.b-go:hover{background:var(--ice)}
+.b-stage{position:relative;flex:1;min-height:0;margin:0 10px 4px;border-radius:10px;overflow:hidden;
+  background:radial-gradient(80% 70% at 50% 30%,rgba(16,74,126,.22),rgba(3,12,20,.9));box-shadow:inset 0 0 0 1px rgba(120,200,230,.12)}
+.b-stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#050d16}
+.b-splash{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--mono5);
+  font-size:10px;letter-spacing:.26em;color:var(--faint)}
+.b-halo{position:absolute;border:1.5px solid var(--cy);box-shadow:0 0 14px rgba(56,223,255,.55),inset 0 0 10px rgba(56,223,255,.25);
+  border-radius:4px;pointer-events:none;transition:left .1s,top .1s,width .1s,height .1s}
+.b-gate{position:absolute;left:10px;right:10px;bottom:10px;display:flex;align-items:center;gap:12px;
+  padding:11px 14px;border-radius:10px;background:rgba(20,110,180,.16);backdrop-filter:blur(12px);
+  box-shadow:inset 0 0 0 1px rgba(56,223,255,.3);z-index:5}
+.b-gate[hidden]{display:none}
+.b-gate p{flex:1;margin:0;font-size:11.5px;color:var(--ice)}
+.b-gate button{height:28px;padding:0 12px;border:0;border-radius:6px;background:var(--amber);color:#201102;
+  font-family:var(--mono5);font-size:10px;font-weight:600;letter-spacing:.08em;cursor:pointer}
+.b-gate button:hover{filter:brightness(1.12)}
+.b-log{height:110px;min-height:70px;overflow:auto;padding:8px 12px 10px;display:flex;flex-direction:column;
+  gap:3px;scrollbar-width:thin;scrollbar-color:rgba(56,223,255,.14) transparent;opacity:.92}
+.b-log::-webkit-scrollbar{width:4px}
+.b-log::-webkit-scrollbar-thumb{background:rgba(56,223,255,.18);border-radius:3px}
+.b-log-row{font-family:var(--mono5);font-size:9px;letter-spacing:.05em;color:var(--mute);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.b-log-row.priv{color:var(--faint);font-style:italic}
+.b-log-row:first-child{color:var(--ice)}
+
+/* ------------------------------------------------- échec de montage du shell
+   Affiché à la place de l'ancienne interface V4, supprimée. Un message exact
+   vaut mieux qu'un produit fantôme maintenu pour un incident rarissime. */
+#v5BootError{
+  position:fixed; inset:0; z-index:9999; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:14px; padding:32px;
+  background:#01060c; color:#dbeafe; font-family:var(--sans5,system-ui),sans-serif; text-align:center;
+}
+#v5BootError h1{ margin:0; font-size:20px; font-weight:600; letter-spacing:.02em; }
+#v5BootError p{ margin:0; max-width:52ch; line-height:1.55; color:#93b4cc; }
+#v5BootError pre{
+  max-width:min(92vw,760px); max-height:38vh; overflow:auto; margin:0; padding:14px 16px;
+  text-align:left; font-size:12px; line-height:1.5; color:#7dd3fc;
+  background:rgba(8,26,40,.72); border:1px solid rgba(56,223,255,.22); border-radius:10px;
+}
+#v5BootError button{
+  padding:10px 20px; font:inherit; font-size:13px; color:#01151f; cursor:pointer;
+  background:#22d3ee; border:0; border-radius:8px;
+}
+#v5BootError button:hover{ background:#67e8f9; }

@@ -1,0 +1,11 @@
+<meta charset="utf-8"><title>Holo humanoid</title>
+<style>html,body{margin:0;height:100%;background:#05080d}#wrap{position:absolute;inset:0}</style>
+<script type="importmap">
+{ "imports": { "three": "../vendor/three.module.js", "three/addons/": "../vendor/" } }
+</script>
+<div id="wrap"><canvas id="cv" style="width:100%;height:100%;display:block"></canvas></div>
+<script type="module">
+import { createHoloHumanoid } from '../js/avatar/holo_humanoid.js';
+const body = await createHoloHumanoid({ canvas: document.getElementById('cv'), framing: 'FULL' });
+window.body = body;
+</script>

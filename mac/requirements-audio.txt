@@ -1,0 +1,25 @@
+# Optional: double clap detection. Browser voice needs no Python audio package.
+numpy>=1.24,<3
+sounddevice>=0.4.6,<0.6
+
+# Optional: server-side speech recognition (fallback when the browser has no
+# Web Speech API, e.g. Firefox). Pulls ctranslate2 + PyAV; models land in
+# data/stt on first use.
+faster-whisper>=1.0,<2
+
+# Optional: cloud-free TTS fallback used when no local Piper voice is
+# installed. Microsoft Edge voices, no API key and no subscription.
+edge-tts>=6.1,<8
+
+# Optional: Discord voice calls (jarvis/discord_call.py, morning report).
+# PyNaCl lets the bot SPEAK in a voice channel; FFmpeg must also be on PATH --
+# it is a system binary, not a Python package. Without them the morning report
+# falls back to a written post in the text channel.
+# Borne haute imposee par discord.py[voice] : installer PyNaCl 1.6 puis
+# discord-ext-voice-recv fait redescendre pip a 1.5.0. Autant le dire ici.
+PyNaCl>=1.5,<1.6
+
+# Optional: Discord voice RECEIVE. discord.py cannot capture audio on its own;
+# this extension feeds the PCM that faster-whisper transcribes. Without it
+# JARVIS speaks but cannot hear, and asks for a written answer instead.
+discord-ext-voice-recv>=0.5,<1

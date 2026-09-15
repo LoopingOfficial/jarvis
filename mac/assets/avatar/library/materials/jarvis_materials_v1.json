@@ -1,0 +1,6 @@
+{
+  "id": "jarvis_materials_v1",
+  "skin": {"shader": "Principled BSDF", "roughness": 0.58, "subsurface": 0.12},
+  "hair": {"shader": "Principled BSDF", "roughness": 0.42},
+  "clothing": ["cotton_shirt", "grey_overshirt", "trousers", "leather_belt", "white_sneakers"]
+}
