@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<title>JARVIS // Humanoid Core</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #020208; overflow: hidden;
+               font-family: 'Segoe UI', Tahoma, sans-serif; color: #00f0ff; }
+  #wrap { position: absolute; inset: 0; }
+  #cv { width: 100%; height: 100%; display: block; }
+  #hud { position: absolute; top: 20px; left: 22px; pointer-events: none;
+         text-shadow: 0 0 10px rgba(0, 240, 255, .55); letter-spacing: .06em; }
+  #hud h2 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+  #hud p { margin: 0; font-size: 12px; opacity: .78; }
+  #bar { position: absolute; bottom: 22px; left: 22px; display: flex; gap: 10px; }
+  button { pointer-events: auto; background: rgba(0, 240, 255, .07); color: #00f0ff;
+           border: 1px solid rgba(0, 240, 255, .38); border-radius: 4px;
+           padding: 8px 14px; font: inherit; font-size: 12px; letter-spacing: .08em;
+           cursor: pointer; transition: background .15s, box-shadow .15s; }
+  button:hover { background: rgba(0, 240, 255, .18); box-shadow: 0 0 14px rgba(0, 240, 255, .3); }
+</style>
+
+<script type="importmap">
+{ "imports": { "three": "../vendor/three.module.js", "three/addons/": "../vendor/" } }
+</script>
+
+<div id="wrap"><canvas id="cv"></canvas></div>
+
+<div id="hud">
+  <h2>JARVIS // HUMANOID CORE v2.4</h2>
+  <p id="status">STATUS: STANDBY</p>
+  <p id="meta" style="margin-top:4px;opacity:.5">[O] open humanoid &nbsp;·&nbsp; [C] check system &nbsp;·&nbsp; [1/2/3] framing</p>
+</div>
+
+<div id="bar">
+  <button id="btn-open">OPEN HUMANOID</button>
+  <button id="btn-check">CHECK SYSTEM</button>
+</div>
+
+<script type="module">
+  import { createParticleHumanoid } from '../js/avatar/particle_humanoid.js';
+
+  const label = document.getElementById('status');
+  const LABELS = {
+    STANDBY:   'STATUS: STANDBY',
+    OPENING:   'STATUS: OPENING HUMANOID...',
+    IDLE:      'STATUS: ONLINE // NEURAL CORE NOMINAL',
+    SCANNING:  'STATUS: CHECKING SYSTEM...',
+    ALL_CLEAR: 'STATUS: ALL CLEAR — 11 OF 11 CHECKS PASSED',
+  };
+
+  const core = await createParticleHumanoid({
+    canvas: document.getElementById('cv'),
+    framing: 'BUST',
+    onStatus: (s) => { label.textContent = LABELS[s] || `STATUS: ${s}`; },
+  });
+  window.jarvisHumanoid = core;
+  // Noms exposés par la spec, pour un appel direct depuis la console ou le bus.
+  window.triggerStartupAnimation = () => core.triggerStartupAnimation();
+  window.triggerSystemCheckAnimation = () => core.triggerSystemCheckAnimation();
+
+  document.getElementById('btn-open').onclick = () => core.triggerStartupAnimation();
+  document.getElementById('btn-check').onclick = () => core.triggerSystemCheckAnimation();
+
+  addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === 'o') core.triggerStartupAnimation();
+    if (k === 'c') core.triggerSystemCheckAnimation();
+    if (k === '1') core.setViewMode('WIDE');
+    if (k === '2') core.setViewMode('BUST');
+    if (k === '3') core.setViewMode('HEAD');
+  });
+
+  // Le regard suit la souris : un buste parfaitement fixe se lit comme figé.
+  addEventListener('pointermove', (e) => {
+    core.lookAt({ x: (e.clientX / innerWidth) * 2 - 1, y: (e.clientY / innerHeight) * 2 - 1 });
+  });
+
+  // Onglet caché : on rend la main au GPU plutôt que d'animer dans le vide.
+  document.addEventListener('visibilitychange', () => {
+    document.hidden ? core.pause() : core.resume();
+  });
+
+  core.triggerStartupAnimation();
+</script>
+</html>
