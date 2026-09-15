@@ -45,3 +45,24 @@ pytest tests/test_crm_api.py
 
 Ils tournent sur SQLite en mémoire : ils valident le contrat HTTP, pas le
 dialecte MySQL.
+
+## Pont avec l'assistant
+
+`jarvis/crm_remote.py` relie le carnet local (`jarvis/crm.py`, SQLite) à cette
+API. Le local reste la source de lecture — instantané, disponible hors-ligne ;
+le distant est la mémoire partagée vers laquelle on publie.
+
+Configuration (variables d'environnement de JARVIS) :
+
+```
+CRM_API_URL=https://mon-domaine.fr/crm
+CRM_API_KEY=...   # la même que côté API
+```
+
+Sans ces variables, les outils distants répondent « non configuré » et
+l'assistant continue de fonctionner sur le carnet local.
+
+Outils exposés : `crm.remote_search`, `crm.remote_push_contact` (rapprochement
+par e-mail : met à jour au lieu de dupliquer) et `crm.remote_log_interaction`.
+Les deux derniers demandent confirmation — ils écrivent dans une base partagée.
+Le `vat_number` local n'a pas d'équivalent distant et n'est pas synchronisé.
