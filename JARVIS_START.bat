@@ -1,16 +1,26 @@
 @echo off
+REM JARVIS_START.bat - demarre JARVIS avec le Boot Screen (aucune console).
+REM Le Boot Screen affiche l'etat reel du demarrage puis ouvre l'interface.
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 set "PYTHONUTF8=1"
-if not exist ".venv\Scripts\python.exe" (
+set "PY=.venv\Scripts\python.exe"
+if not exist "%PY%" (
   echo Environnement virtuel introuvable : lance install_windows.bat d'abord.
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" -m jarvis.startup %*
+
+REM pythonw = pas de fenetre console. Le Boot Screen ecrit ses logs dans logs\startup.
+if exist ".venv\Scripts\pythonw.exe" (
+  start "" ".venv\Scripts\pythonw.exe" -m jarvis.boot %*
+  exit /b 0
+)
+
+REM Repli si pythonw absent : Boot Screen en console.
+"%PY%" -m jarvis.boot %*
 set "RC=%errorlevel%"
-REM Ctrl+C (arret normal de JARVIS) renvoie un code special : ce n'est pas un echec.
 if "%RC%"=="0" exit /b 0
 if "%RC%"=="130" exit /b 0
 if "%RC%"=="-1073741510" exit /b 0

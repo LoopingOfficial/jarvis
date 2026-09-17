@@ -25,6 +25,7 @@ from typing import Any, Callable
 from .config import IS_WINDOWS, ROOT
 from .doctor import (
     BLOCKED,
+    DEGRADED,
     ERROR,
     LLM_API_PORT,
     MAIN_API_PORT,
@@ -83,12 +84,81 @@ _TAIL = (
 
 
 def _safe_print(text: str) -> None:
-    """Un terminal cp1252 ne doit pas faire échouer le démarrage."""
+    """Un terminal cp1252 (ou absent, sous pythonw) ne doit pas faire échouer."""
+    if sys.stdout is None:  # pythonw.exe : aucune console
+        return
     try:
         print(text)
     except UnicodeEncodeError:
         encoding = sys.stdout.encoding or "ascii"
         print(text.encode(encoding, "replace").decode(encoding, "replace"))
+
+
+def _emit(on_event: Callable[[dict[str, Any]], None] | None, **event: Any) -> None:
+    """Publie un événement d'état. Une UI cassée ne doit jamais bloquer le boot."""
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:
+        pass
+
+
+def interface_url() -> str:
+    """Adresse réelle de l'interface, dérivée de la configuration, jamais figée."""
+    host = (os.getenv("JARVIS_HOST") or "127.0.0.1").strip()
+    if host in {"0.0.0.0", "::", ""}:
+        host = "127.0.0.1"
+    try:
+        port = int(os.getenv("JARVIS_PORT", str(MAIN_API_PORT)))
+    except ValueError:
+        port = MAIN_API_PORT
+    return f"http://{host}:{port}/"
+
+
+def open_interface(url: str | None = None) -> bool:
+    """Ouvre l'interface via le mécanisme existant (Chrome/Edge app, sinon navigateur)."""
+    target = url or interface_url()
+    try:
+        from .windows import launch_ui
+
+        if launch_ui(target):
+            return True
+    except Exception:
+        pass
+    try:
+        import webbrowser
+
+        return bool(webbrowser.open(target))
+    except Exception:
+        return False
+
+
+def open_doctor() -> bool:
+    """Lance JARVIS_DOCTOR.bat pour le diagnostic détaillé, sans le réécrire."""
+    bat = ROOT / "JARVIS_DOCTOR.bat"
+    if not bat.exists():
+        return False
+    try:
+        if IS_WINDOWS:
+            os.startfile(str(bat))  # noqa: S606 — fichier local de confiance
+            return True
+        return bool(subprocess.Popen(["cmd", "/c", str(bat)]).pid)
+    except Exception:
+        try:
+            subprocess.Popen([str(bat)], shell=True)
+            return True
+        except Exception:
+            return False
+
+
+def _log_tail(path: Path, lines: int = 8) -> str:
+    """Dernières lignes utiles d'un log, pour ne masquer aucune erreur Python."""
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return ""
+    return "\n".join(content[-lines:])
 
 
 # --------------------------------------------------------------- état réel
@@ -269,6 +339,32 @@ def _run_foreground(entrypoint: Path) -> int:
     return int(subprocess.call([sys.executable, str(entrypoint)], cwd=str(ROOT)))
 
 
+def _launch_jarvis_detached(entrypoint: Path) -> Any:
+    """Lance JARVIS sans fenêtre visible, sortie dans un log.
+
+    JARVIS garde une vraie console (créée puis masquée) : c'est indispensable à
+    l'arrêt propre (`JARVIS_STOP.bat` envoie un vrai Ctrl+C à cette console).
+    `JARVIS_LAUNCH_UI=0` empêche JARVIS d'ouvrir lui-même le navigateur : le
+    Boot Screen ouvre l'interface une seule fois, quand le serveur est healthy.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / "jarvis.log"
+    handle = log_path.open("a", encoding="utf-8", errors="replace")
+    env = os.environ.copy()
+    env["JARVIS_LAUNCH_UI"] = "0"
+    creationflags = 0
+    startupinfo = None
+    if IS_WINDOWS:
+        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE : console réelle mais invisible
+    return subprocess.Popen([sys.executable, str(entrypoint)], cwd=str(ROOT),
+                            stdout=handle, stderr=subprocess.STDOUT,
+                            env=env, creationflags=creationflags,
+                            startupinfo=startupinfo)
+
+
 def _launcher_command(path: Path) -> list[str]:
     suffix = path.suffix.lower()
     if suffix == ".ps1":
@@ -287,16 +383,31 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
           launcher: Path | None = None,
           no_launch: bool = False,
           log_dir: Path = LOG_DIR,
-          emit: Callable[[str], None] = _safe_print) -> int:
-    """Prépare l'environnement puis lance JARVIS au premier plan. Renvoie 0/1."""
+          emit: Callable[[str], None] = _safe_print,
+          on_event: Callable[[dict[str, Any]], None] | None = None,
+          detach: bool = False,
+          spawn_jarvis: Callable[[Path], Any] | None = None,
+          health_wait_s: float = 90.0,
+          health_interval_s: float = 0.6,
+          open_ui: bool = False) -> int:
+    """Prépare l'environnement puis lance JARVIS. Renvoie 0 (ok) ou 1 (échec).
+
+    `on_event` publie les états réels mesurés (diagnostic du Doctor, LLM, ports,
+    lancement, résultat) que le Boot Screen se contente d'afficher. `detach`
+    lance JARVIS sans console et attend qu'il soit vraiment healthy.
+    """
+    _emit(on_event, type="phase", phase="preflight")
     report = _run_quiet(run_doctor)
     emit(render_preflight(report))
     emit("")
+    _emit(on_event, type="diagnosis", report=report)
 
     ports: dict[str, Any] = {MAIN_API_PORT: port_state(MAIN_API_PORT),
                              LLM_API_PORT: port_state(LLM_API_PORT),
                              SUPERVISOR_PORT: port_state(SUPERVISOR_PORT),
                              COMFY_PORT: port_state(COMFY_PORT)}
+    port_states = {str(k): v.get("state") for k, v in ports.items()}
+    _emit(on_event, type="ports", states=port_states)
     jarvis_port = ports[MAIN_API_PORT]
 
     # JARVIS tourne déjà ? On ne lance jamais une deuxième instance.
@@ -305,15 +416,23 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
         if health is not None:
             emit(f"JARVIS ALREADY RUNNING — {_process_label(jarvis_port)} "
                  f"· v{health.get('version', '?')} · http://127.0.0.1:{MAIN_API_PORT}/")
+            _emit(on_event, type="result", outcome="already_running",
+                  version=health.get("version"), port=MAIN_API_PORT,
+                  llm=None, ports=port_states)
             write_log({"ts": datetime.now().isoformat(timespec="seconds"),
                        "event": "already_running", "health": report.get("health"),
-                       "ports": {str(k): v.get("state") for k, v in ports.items()},
-                       "result": "ok"}, log_dir)
+                       "ports": port_states, "result": "ok"}, log_dir)
+            if detach and open_ui:
+                open_interface()
             return 0
         # Port occupé par un AUTRE programme : on signale, on ne tue jamais.
         emit(f"PORT {MAIN_API_PORT} OCCUPÉ PAR {_process_label(jarvis_port)} — "
              f"ce n'est pas JARVIS.\nJARVIS START FAILED : conflit de port.")
         emit("Utilise JARVIS_DOCTOR.bat pour le diagnostic détaillé.")
+        _emit(on_event, type="result", outcome="blocked", blocking=[],
+              message=f"Port {MAIN_API_PORT} occupé par {_process_label(jarvis_port)} "
+                      "— ce n'est pas JARVIS.",
+              owner=_process_label(jarvis_port), ports=port_states)
         write_log({"ts": datetime.now().isoformat(timespec="seconds"),
                    "event": "port_conflict", "port": MAIN_API_PORT,
                    "owner": _process_label(jarvis_port), "result": "failed"}, log_dir)
@@ -324,11 +443,14 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
     llm = llm_state(report, ports[LLM_API_PORT], found_launcher)
     emit(llm["message"])
     emit("")
+    _emit(on_event, type="llm", state=llm["state"], message=llm["message"],
+          providers=llm.get("providers", []))
 
     if llm["state"] == "launchable" and not no_launch and found_launcher is not None:
         try:
             spawn(_launcher_command(found_launcher))
             emit("Serveur LLM lancé (détaché). JARVIS patientera le temps du chargement.")
+            _emit(on_event, type="phase", phase="llm_start")
         except Exception as exc:  # le lancement LLM ne doit jamais masquer l'erreur
             emit(f"Lancement du serveur LLM impossible : {type(exc).__name__}: {exc}")
 
@@ -336,6 +458,11 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
         emit("JARVIS START FAILED : dépendance bloquante hors service.")
         emit("Bloquant : " + ", ".join(report.get("blocking", [])))
         emit("Utilise JARVIS_DOCTOR.bat pour le diagnostic détaillé.")
+        _emit(on_event, type="result", outcome="blocked",
+              blocking=report.get("blocking", []), llm=llm["state"],
+              message="Dépendance bloquante hors service : "
+                      + ", ".join(report.get("blocking", [])) + ".",
+              ports=port_states)
         write_log({"ts": datetime.now().isoformat(timespec="seconds"),
                    "event": "blocked", "health": BLOCKED,
                    "blocking": report.get("blocking", []),
@@ -345,6 +472,8 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
     if not entrypoint.exists():
         emit(f"JARVIS START FAILED : point d'entrée introuvable ({entrypoint}).")
         emit("Utilise JARVIS_DOCTOR.bat pour le diagnostic détaillé.")
+        _emit(on_event, type="result", outcome="failed", llm=llm["state"],
+              message=f"Point d'entrée introuvable : {entrypoint}.")
         write_log({"ts": datetime.now().isoformat(timespec="seconds"),
                    "event": "missing_entrypoint", "entrypoint": str(entrypoint),
                    "result": "failed"}, log_dir)
@@ -352,16 +481,24 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
 
     if no_launch:
         emit(f"[--no-launch] environ prêt, JARVIS ne sera pas lancé ({entrypoint}).")
+        _emit(on_event, type="result", outcome="ready", no_launch=True,
+              degraded=report.get("degraded", []), llm=llm["state"], ports=port_states)
         return 0
 
+    _emit(on_event, type="phase", phase="launch")
     emit(f"Démarrage de JARVIS ({entrypoint.name})…")
     emit("")
     write_log({"ts": datetime.now().isoformat(timespec="seconds"),
                "event": "launch", "entrypoint": str(entrypoint),
                "health": report.get("health"), "llm": llm["state"],
                "degraded": report.get("degraded", []),
-               "ports": {str(k): v.get("state") for k, v in ports.items()},
-               "result": "started"}, log_dir)
+               "ports": port_states, "result": "started"}, log_dir)
+
+    if detach:
+        return _start_detached(report, llm, ports, log_dir, entrypoint, detach and open_ui,
+                               spawn_jarvis or _launch_jarvis_detached, probe_health,
+                               health_wait_s, health_interval_s, emit, on_event)
+
     run = runner or _run_foreground
     started = time.time()
     try:
@@ -369,6 +506,8 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
     except Exception as exc:  # jamais masquer une erreur Python
         emit(f"JARVIS START FAILED : {type(exc).__name__}: {exc}")
         emit("Utilise JARVIS_DOCTOR.bat pour le diagnostic détaillé.")
+        _emit(on_event, type="result", outcome="failed", llm=llm["state"],
+              message=f"{type(exc).__name__}: {exc}")
         write_log({"ts": datetime.now().isoformat(timespec="seconds"),
                    "event": "launch_exception", "error": f"{type(exc).__name__}: {exc}",
                    "llm": llm["state"], "result": "failed"}, log_dir)
@@ -378,16 +517,84 @@ def start(*, run_doctor: Callable[[], dict[str, Any]] = full_diagnose,
                           "event": "jarvis_exit", "code": code,
                           "uptime_s": round(time.time() - started, 1),
                           "health": report.get("health"), "llm": llm["state"],
-                          "ports": {str(k): v.get("state") for k, v in ports.items()},
+                          "ports": port_states,
                           "result": "ok" if code == 0 else "failed"}, log_dir)
     if code != 0:
         emit("")
         emit(f"JARVIS START FAILED : JARVIS s'est arrêté avec le code {code}.")
         emit(f"Log : {log_path}")
         emit("Utilise JARVIS_DOCTOR.bat pour le diagnostic détaillé.")
+        _emit(on_event, type="result", outcome="failed", llm=llm["state"],
+              message=f"JARVIS s'est arrêté avec le code {code}.", log=str(log_path))
         return code if code > 0 else 1
     emit("JARVIS arrêté proprement.")
+    _emit(on_event, type="result", outcome="stopped", llm=llm["state"])
     return 0
+
+
+def _start_detached(report: dict[str, Any], llm: dict[str, Any],
+                    ports: dict[str, Any], log_dir: Path, entrypoint: Path,
+                    open_ui: bool, spawn_jarvis: Callable[[Path], Any],
+                    probe_health: Callable[[int], dict[str, Any] | None],
+                    health_wait_s: float, health_interval_s: float,
+                    emit: Callable[[str], None],
+                    on_event: Callable[[dict[str, Any]], None] | None) -> int:
+    """Démarre JARVIS sans console puis attend sa santé réelle via /api/health."""
+    port_states = {str(k): v.get("state") for k, v in ports.items()}
+    started = time.time()
+    try:
+        proc = spawn_jarvis(entrypoint)
+    except Exception as exc:  # jamais masquer une erreur Python
+        emit(f"JARVIS START FAILED : {type(exc).__name__}: {exc}")
+        _emit(on_event, type="result", outcome="failed", llm=llm["state"],
+              message=f"Lancement impossible : {type(exc).__name__}: {exc}")
+        write_log({"ts": datetime.now().isoformat(timespec="seconds"),
+                   "event": "launch_exception", "error": f"{type(exc).__name__}: {exc}",
+                   "llm": llm["state"], "result": "failed"}, log_dir)
+        return 1
+
+    _emit(on_event, type="process", pid=getattr(proc, "pid", None),
+          entrypoint=str(entrypoint))
+    log_file = log_dir / "jarvis.log"
+    deadline = time.time() + max(1.0, health_wait_s)
+    while time.time() < deadline:
+        health = probe_health(MAIN_API_PORT)
+        if health is not None:
+            outcome = "degraded" if report.get("health") == DEGRADED else "ready"
+            _emit(on_event, type="result", outcome=outcome,
+                  version=health.get("version"), degraded=report.get("degraded", []),
+                  llm=llm["state"], ports=port_states,
+                  uptime_s=round(time.time() - started, 1))
+            write_log({"ts": datetime.now().isoformat(timespec="seconds"),
+                       "event": "ready", "outcome": outcome,
+                       "uptime_s": round(time.time() - started, 1),
+                       "health": report.get("health"), "llm": llm["state"],
+                       "degraded": report.get("degraded", []),
+                       "ports": port_states, "result": "ok"}, log_dir)
+            if open_ui:
+                open_interface()
+            return 0
+        if proc.poll() is not None:
+            tail = _log_tail(log_file)
+            message = f"JARVIS s'est arrêté pendant le démarrage (code {proc.returncode})."
+            emit(message)
+            _emit(on_event, type="result", outcome="failed", llm=llm["state"],
+                  message=message, detail=tail, log=str(log_file))
+            write_log({"ts": datetime.now().isoformat(timespec="seconds"),
+                       "event": "startup_failed", "code": proc.returncode,
+                       "llm": llm["state"], "tail": tail, "result": "failed"}, log_dir)
+            return 1
+        time.sleep(max(0.1, health_interval_s))
+
+    tail = _log_tail(log_file)
+    message = f"JARVIS n'a pas répondu sur {interface_url()} à temps."
+    emit(message)
+    _emit(on_event, type="result", outcome="failed", llm=llm["state"],
+          message=message, detail=tail, log=str(log_file))
+    write_log({"ts": datetime.now().isoformat(timespec="seconds"),
+               "event": "startup_timeout", "llm": llm["state"],
+               "tail": tail, "result": "failed"}, log_dir)
+    return 1
 
 
 # --------------------------------------------------------------- arrêt propre
