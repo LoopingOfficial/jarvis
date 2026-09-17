@@ -312,5 +312,142 @@ class LogTests(unittest.TestCase):
             self.assertIsNone(startup.find_llama_launcher(root=Path(tmp)))
 
 
+class DetachAndEventTests(unittest.TestCase):
+    """Le Boot Screen suit l'état réel via `on_event` et le mode détaché."""
+
+    def _run(self, tmp, report, *, probe, proc, events, **kwargs):
+        entry = Path(tmp) / "jarvis.py"
+        entry.write_text("# fake entrypoint", encoding="utf-8")
+        return startup.start(
+            run_doctor=lambda: report,
+            port_state=_free_ports(),
+            probe_health=probe,
+            spawn=lambda command: None,
+            launcher=Path(tmp) / "llama.bat",
+            spawn_jarvis=lambda ep: proc,
+            entrypoint=entry,
+            log_dir=Path(tmp) / "logs",
+            detach=True,
+            on_event=events.append,
+            emit=lambda *_: None,
+            health_interval_s=0.01,
+            health_wait_s=2.0,
+            **kwargs)
+
+    def test_detach_attend_la_sante_et_emet_les_etats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+
+            class Proc:
+                pid = 123
+                returncode = None
+
+                def poll(self):
+                    return None
+
+            code = self._run(tmp, _report(doctor.HEALTHY, checks=[_check("python")]),
+                             probe=lambda port: {"version": "3.0.0"}, proc=Proc(),
+                             events=events)
+            self.assertEqual(code, 0)
+            types = [e["type"] for e in events]
+            for expected in ("phase", "diagnosis", "ports", "llm", "process", "result"):
+                self.assertIn(expected, types)
+            result = [e for e in events if e["type"] == "result"][-1]
+            self.assertEqual(result["outcome"], "ready")
+            self.assertEqual(result["version"], "3.0.0")
+
+    def test_detach_health_degradee_donne_degraded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+
+            class Proc:
+                pid = 1
+                returncode = None
+
+                def poll(self):
+                    return None
+
+            report = _report(doctor.DEGRADED)
+            report["degraded"] = ["comfyui"]
+            code = self._run(tmp, report, probe=lambda port: {"version": "3"},
+                             proc=Proc(), events=events)
+            self.assertEqual(code, 0)
+            result = [e for e in events if e["type"] == "result"][-1]
+            self.assertEqual(result["outcome"], "degraded")
+
+    def test_detach_processus_mort_donne_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+
+            class DeadProc:
+                pid = 9
+                returncode = 1
+
+                def poll(self):
+                    return 1
+
+            code = self._run(tmp, _report(doctor.HEALTHY), probe=lambda port: None,
+                             proc=DeadProc(), events=events)
+            self.assertEqual(code, 1)
+            result = [e for e in events if e["type"] == "result"][-1]
+            self.assertEqual(result["outcome"], "failed")
+            self.assertIn("message", result)
+
+    def test_blocked_emet_result_sans_lancer(self):
+        spawned = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+            entry = Path(tmp) / "jarvis.py"
+            entry.write_text("# fake", encoding="utf-8")
+            report = _report(doctor.BLOCKED, blocking=["llm_server"])
+
+            def spawn_jarvis(ep):
+                spawned["called"] = True
+
+            code = startup.start(
+                run_doctor=lambda: report, port_state=_free_ports(),
+                probe_health=lambda port: None, spawn=lambda c: None,
+                launcher=Path(tmp) / "llama.bat", spawn_jarvis=spawn_jarvis,
+                entrypoint=entry, log_dir=Path(tmp) / "logs", detach=True,
+                on_event=events.append, emit=lambda *_: None)
+            self.assertEqual(code, 1)
+            self.assertNotIn("called", spawned)
+            result = [e for e in events if e["type"] == "result"][-1]
+            self.assertEqual(result["outcome"], "blocked")
+            self.assertEqual(result["blocking"], ["llm_server"])
+
+    def test_already_running_emet_result_sans_relancer(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            code = startup.start(
+                run_doctor=lambda: _report(doctor.HEALTHY),
+                port_state=_free_ports(except_listening=[startup.MAIN_API_PORT]),
+                probe_health=lambda port: {"version": "3.0.0"},
+                spawn=lambda c: None, launcher=Path(tmp) / "llama.bat",
+                entrypoint=Path(tmp) / "jarvis.py",
+                log_dir=Path(tmp) / "logs", detach=True,
+                on_event=events.append, emit=lambda *_: None)
+            self.assertEqual(code, 0)
+            result = [e for e in events if e["type"] == "result"][-1]
+            self.assertEqual(result["outcome"], "already_running")
+
+    def test_open_interface_utilise_le_navigateur_en_repli(self):
+        called = {}
+
+        def fake_launch_ui(url):
+            called["url"] = url
+            return False
+
+        with mock.patch("jarvis.windows.launch_ui", fake_launch_ui):
+            with mock.patch("webbrowser.open", lambda url: called.setdefault("browser", url) or True):
+                startup.open_interface("http://127.0.0.1:8765/")
+        self.assertEqual(called["url"], "http://127.0.0.1:8765/")
+        self.assertIn("browser", called)
+
+    def test_interface_url_remplace_zero_zero_zero_zero(self):
+        with mock.patch.dict("os.environ", {"JARVIS_HOST": "0.0.0.0", "JARVIS_PORT": "9000"}):
+            self.assertEqual(startup.interface_url(), "http://127.0.0.1:9000/")
+
+
 if __name__ == "__main__":
     unittest.main()
