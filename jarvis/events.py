@@ -24,6 +24,8 @@ EVENT_TYPES = {
     # JARVIS 4 — cerveau vivant, états, activité temps réel.
     "jarvis.state", "jarvis.activity", "jarvis.tool.notice",
     "activity.trace",
+    # Analyse Google Sheet : progression reelle du pipeline (aucune etape simulee).
+    "sheet.progress",
     "brain.search", "brain.node.selected", "brain.path", "brain.tool.active",
     "brain.learn.created", "brain.learn.updated",
     "knowledge.learn.created", "knowledge.learn.updated",
@@ -74,6 +76,18 @@ EVENT_TYPES = {
     "coding.started", "coding.completed",
     "deploy.started", "deploy.completed",
     "verification.started", "verification.completed",
+    # Self Upgrade V1 — contrat temps réel avec la page Self Upgrades.
+    "upgrade.started", "upgrade.progress", "upgrade.log", "upgrade.plan_ready",
+    "upgrade.workspace_ready", "upgrade.building", "upgrade.testing", "upgrade.candidate",
+    "upgrade.promoting", "upgrade.installed", "upgrade.completed", "upgrade.failed",
+    "upgrade.rolled_back", "upgrade.cancelled",
+    # Tri de la boîte mail — contrat temps réel avec le Kanban du Command
+    # Center. `mail.message.classified` est émis au fil du tri, pas en bloc.
+    "mail.inbox.started", "mail.message.classified", "mail.inbox.completed",
+    "mail.inbox.failed",
+    # CRM & documents — levée d'ambiguïté et aperçu du PDF généré.
+    "crm.clarification.needed", "crm.contact.saved", "document.generated",
+    "transcript.parsed",
 }
 
 LEVELS = ("info", "warn", "error", "live", "tip", "meeting", "focus", "overdue")
@@ -112,10 +126,17 @@ class EventBus:
             self._listeners.setdefault(event_type, []).append(callback)
 
     # -- émission ----------------------------------------------------------
-    def emit(self, event_type: str, payload: dict[str, Any] | None = None, *, persist: bool = False) -> dict[str, Any]:
+    def emit(self, event_type: str, payload: dict[str, Any] | None = None, *,
+             persist: bool = False, cache: bool = True) -> dict[str, Any]:
+        """Émet un événement.
+
+        `cache=False` (flux haute fréquence comme les frames navigateur) :
+        distribué aux abonnés mais exclu de l'historique rejoué au SSE.
+        """
         event = {"type": event_type, "ts": time.time(), "data": payload or {}}
         with self._lock:
-            self._history.append(event)
+            if cache:
+                self._history.append(event)
             if len(self._history) > self._history_max:
                 del self._history[: len(self._history) - self._history_max]
             subs = list(self._subscribers.items())

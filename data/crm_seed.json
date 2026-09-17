@@ -1,0 +1,55 @@
+{
+  "_comment": "Carnet de contacts d'amorçage. Chargé UNIQUEMENT si la table crm_contacts est vide. Les deux « Martin » sont volontaires : ils servent à vérifier la levée d'ambiguïté. Aucune coordonnée réelle.",
+  "contacts": [
+    {
+      "id": "ct_martin_atelier",
+      "name": "Martin Lefevre",
+      "company": "L'Atelier",
+      "email": "martin@latelier-exemple.fr",
+      "phone": "+33 1 23 45 67 89",
+      "address": "12 rue des Arts\n75011 Paris",
+      "vat_number": "FR12345678901",
+      "notes": "Refonte de site, facturation a 30 jours."
+    },
+    {
+      "id": "ct_martin_pixel",
+      "name": "Martin Roux",
+      "company": "Pixel Studio",
+      "email": "m.roux@pixel-studio-exemple.fr",
+      "phone": "+33 1 98 76 54 32",
+      "address": "5 avenue du Numerique\n69002 Lyon",
+      "vat_number": "FR98765432109",
+      "notes": "Identite visuelle, TVA 20 %."
+    },
+    {
+      "id": "ct_pierre_martin",
+      "name": "Pierre Martin",
+      "company": "Studio Bleu",
+      "email": "pierre.martin@studio-bleu-exemple.fr",
+      "phone": "+33 2 11 22 33 44",
+      "address": "8 quai Sud\n44000 Nantes",
+      "vat_number": "FR11122233344",
+      "notes": "Homonyme partiel : « Martin » est ici le nom de famille."
+    },
+    {
+      "id": "ct_sophie_renard",
+      "name": "Sophie Renard",
+      "company": "Renard & Associes",
+      "email": "s.renard@renard-exemple.fr",
+      "phone": "+33 3 44 55 66 77",
+      "address": "22 place Centrale\n33000 Bordeaux",
+      "vat_number": "FR44455566677",
+      "notes": "Client recurrent, remise habituelle de 10 %."
+    },
+    {
+      "id": "ct_camille_dubois",
+      "name": "Camille Dubois",
+      "company": "",
+      "email": "camille@exemple-client.fr",
+      "phone": "",
+      "address": "3 impasse Verte\n35000 Rennes",
+      "vat_number": "",
+      "notes": "Particulier : pas de TVA intracommunautaire."
+    }
+  ]
+}

@@ -21,7 +21,9 @@
   --danger: #fb7185;
   --anim: all .18s ease;
   --radius: 12px;
-  --sidebar-w: 236px;
+  --sidebar-w: 220px;
+  --sidebar-w-collapsed: 72px;
+  --context-w: 300px;
   --header-h: 58px;
   --footer-h: 78px;
   font-size: 13px;
@@ -81,7 +83,7 @@ kbd {
   grid-template-rows: 100vh;
   height: 100vh;
 }
-.app.sidebar-compact { --sidebar-w: 178px; }
+.app.sidebar-compact { --sidebar-w: var(--sidebar-w-collapsed); }
 
 .sidebar {
   display: flex; flex-direction: column; gap: 14px;
@@ -1447,3 +1449,274 @@ textarea { resize: vertical; min-height: 64px; line-height: 1.55; }
     rgba(34, 211, 238, .05), rgba(4, 7, 15, 0) 62%); }
 .avatar-mode-switch { margin-left: auto; }
 .avatar-mode-switch + .quality-switch { margin-left: 8px; }
+
+/* ==========================================================================
+   JARVIS Command Center v2 — refonte premium.
+   Colonne centrale (JARVIS dominant) + panneau de contexte à droite.
+   Rayons uniformisés, bordures allégées, halos contenus.
+   ========================================================================== */
+
+/* --------------------------------------- sidebar : groupes + repli --------- */
+.nav-group { margin: 0 0 6px; }
+.nav-group-label {
+  font-size: 8px; letter-spacing: 2.2px; color: var(--text-faint);
+  padding: 9px 10px 3px; text-transform: uppercase; user-select: none;
+}
+.nav-item { border-radius: 7px; }
+
+.sidebar-collapse {
+  flex: none; align-self: center; display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px;
+  border: 1px solid var(--line); background: rgba(10, 18, 34, .5);
+  color: var(--text-faint); cursor: pointer; transition: var(--anim);
+}
+.sidebar-collapse:hover { color: var(--cyan); border-color: rgba(34, 211, 238, .5); }
+
+.app.sidebar-compact .brand { justify-content: center; padding: 2px 0 12px; }
+.app.sidebar-compact .brand-text,
+.app.sidebar-compact .nav-group-label,
+.app.sidebar-compact .nav-item span,
+.app.sidebar-compact .side-chip span { display: none; }
+.app.sidebar-compact .nav-item { justify-content: center; padding-inline: 6px; }
+.app.sidebar-compact .side-chip { justify-content: center; padding-inline: 4px; }
+.app.sidebar-compact .sidebar { padding-inline: 10px; }
+.app.sidebar-compact .sidebar-collapse svg { transform: rotate(180deg); }
+
+/* --------------------------------------- header : statut discret ----------- */
+.status-pill {
+  font-size: 9.5px; letter-spacing: 1.4px; color: var(--text-dim);
+  border: 0; background: transparent; padding: 0; gap: 7px;
+}
+.status-pill b { letter-spacing: .5px; font-weight: 600; }
+
+/* --------------------------------------- Command Center v2 ---------------- */
+.command-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--context-w);
+  gap: 14px;
+  height: 100%; min-height: 0; padding: 14px;
+}
+
+.jarvis-column {
+  display: grid;
+  grid-template-rows: minmax(300px, 44%) minmax(0, 1fr);
+  gap: 14px; min-height: 0;
+}
+
+.stage-card {
+  display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--line-soft); border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(10, 18, 34, .5), rgba(6, 12, 24, .32));
+  overflow: hidden;
+}
+
+/* ---- scène JARVIS ---- */
+.stage-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px 8px; flex: none;
+}
+.stage-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.stage-core {
+  width: 26px; height: 26px; border-radius: 50%; flex: none; position: relative;
+  background: radial-gradient(circle at 35% 30%, rgba(34,211,238,.95), rgba(14,165,183,.55));
+  box-shadow: 0 0 16px rgba(34, 211, 238, .45);
+}
+.stage-core::after {
+  content: ''; position: absolute; inset: -5px; border-radius: 50%;
+  border: 1px dashed rgba(34, 211, 238, .45);
+  animation: stageCore-rot 16s linear infinite;
+}
+@keyframes stageCore-rot { to { transform: rotate(360deg); } }
+.stage-id-text b { display: block; font-size: 12.5px; letter-spacing: 3.5px; color: #eef6ff; text-shadow: 0 0 14px rgba(34, 211, 238, .35); }
+.stage-id-text span { font-size: 8px; letter-spacing: 1.6px; color: var(--text-faint); text-transform: uppercase; }
+.stage-head .icon-btn { margin-left: auto; }
+.state-badge { padding: 5px 11px; border-radius: 999px; gap: 7px; }
+.state-badge b { font-size: 9.5px; letter-spacing: 1.6px; }
+
+.stage-foot {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px 12px; flex: none;
+}
+.stage-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.stage-vignette {
+  position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background:
+    radial-gradient(90% 70% at 50% 32%, transparent 55%, rgba(3, 7, 15, .5) 100%),
+    linear-gradient(180deg, rgba(3, 7, 15, .22), transparent 13%, transparent 88%, rgba(3, 7, 15, .3));
+}
+
+/* ---- conversation + composer ---- */
+.conv-card { min-width: 0; }
+.conv-log { padding: 6px 16px 10px; gap: 10px; }
+
+.composer {
+  flex: none; display: flex; align-items: stretch; gap: 10px;
+  padding: 12px 16px; border-top: 1px solid var(--line-soft);
+}
+.composer .mic-btn { width: 42px; height: 42px; flex: none; align-self: center; }
+.composer-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+#convInput {
+  width: 100%; border: 0; background: transparent; outline: 0;
+  color: var(--text); font-size: 13.5px; font-family: inherit; resize: none;
+  line-height: 1.55; max-height: 124px; padding: 2px 0; overflow-y: auto;
+}
+.composer-meta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 9px; color: var(--text-faint); letter-spacing: .7px;
+}
+.composer-mode { color: var(--cyan); font-weight: 600; letter-spacing: 1px; }
+.composer-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.composer-meta #voiceWave { width: 88px; height: 22px; margin-left: auto; display: block; }
+.composer-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.composer-actions .send { align-self: center; padding: 7px 13px; }
+
+/* ---- pièces jointes ---- */
+.attach-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  padding: 4px 7px 4px 5px; border-radius: 7px;
+  border: 1px solid var(--line-soft);
+  background: rgba(14, 26, 48, .6); color: var(--text-dim);
+  font-size: 10.5px;
+}
+.attach-chip.image { border-color: rgba(34, 211, 238, .35); color: var(--text); }
+.attach-chip svg { flex: none; color: var(--cyan); }
+.att-thumb { width: 22px; height: 22px; border-radius: 5px; object-fit: cover; flex: none; }
+.att-cc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-remove {
+  flex: none; border: 0; background: transparent; color: var(--text-faint);
+  font-size: 13px; line-height: 1; cursor: pointer; padding: 0 1px;
+}
+.att-remove:hover { color: var(--danger); }
+.attach-drop-zone {
+  border: 1px dashed rgba(34, 211, 238, .4); border-radius: 8px;
+  padding: 10px; text-align: center; font-size: 11px; color: var(--cyan); letter-spacing: .5px;
+  background: rgba(34, 211, 238, .05);
+}
+.attach-btn:active { transform: scale(.94); }
+
+/* pièces jointes affichées dans les messages */
+.msg .att-region { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg .att-region .att-chip { pointer-events: none; }
+.msg .att-region .att-chip a.att-open { pointer-events: auto; color: var(--cyan); text-decoration: none; }
+
+/* ---- messages : plus sobres ---- */
+.msg .bubble { border-radius: 10px; font-size: 12.5px; }
+.msg.user .bubble { border-radius: 10px; }
+.msg .who { font-size: 8px; letter-spacing: 1.8px; }
+
+/* --------------------------------------- panneau de contexte --------------- */
+.context-panel { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.ctx-card {
+  display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--line-soft); border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(10, 18, 34, .5), rgba(6, 12, 24, .3));
+  overflow: hidden;
+}
+.ctx-card:last-child { flex: 1; }
+.ctx-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px 8px; flex: none; }
+.ctx-title h3 { font-size: 13px; letter-spacing: 1px; color: #eafcff; margin-top: 1px; }
+
+/* ---- carte mémoire ---- */
+.ctx-body { margin: 2px 14px 12px; min-height: 0; }
+.mem-summary { display: flex; flex-direction: column; gap: 11px; }
+.mem-metrics { display: flex; gap: 8px; }
+.mem-metric {
+  flex: 1; text-align: center; padding: 9px 4px;
+  border: 1px solid var(--line-soft); border-radius: 9px;
+  background: rgba(6, 12, 24, .45);
+}
+.mem-metric b {
+  display: block; font-size: 17px; font-weight: 700; color: #eafcff;
+  letter-spacing: .3px; font-variant-numeric: tabular-nums;
+}
+.mem-metric span { font-size: 8px; letter-spacing: 1.4px; color: var(--text-faint); text-transform: uppercase; }
+.mem-families { display: flex; flex-wrap: wrap; gap: 5px; min-height: 18px; }
+.mem-fam {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 9px; color: var(--text-dim); letter-spacing: .5px;
+  padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--line-soft); background: rgba(8, 15, 28, .55);
+}
+.mem-fam b { color: var(--text); font-weight: 600; }
+.mem-empty { font-size: 9.5px; color: var(--text-faint); font-style: italic; }
+
+/* ---- carte opérations ---- */
+.ops-summary { display: flex; flex-direction: column; gap: 9px; }
+.ops-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.ops-tile {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  padding: 8px 11px; border-radius: 9px; cursor: pointer;
+  background: rgba(6, 12, 24, .45); border: 1px solid var(--line-soft);
+}
+.ops-tile:hover { border-color: rgba(34, 211, 238, .4); }
+.ops-tile b { font-size: 16px; font-weight: 700; color: #eafcff; line-height: 1.05; letter-spacing: .3px; }
+.ops-tile.live b { color: var(--cyan); text-shadow: 0 0 12px rgba(34, 211, 238, .45); }
+.ops-k { font-size: 7.5px; letter-spacing: 1.2px; color: var(--text-faint); text-transform: uppercase; }
+.ops-live { flex-basis: auto; max-height: 78px; }
+.ops-live:empty { display: none; }
+
+/* ---- activité : timeline compacte ---- */
+#ctxActivity { flex: 1; }
+#ctxActivity .ctx-body { margin: 0; }
+#ctxActivity .activity-list {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 3px 10px 10px; display: flex; flex-direction: column; gap: 3px;
+}
+.act-item { padding: 4px 7px; border: 0; border-radius: 7px; background: transparent; gap: 8px; }
+.act-item:hover { background: rgba(34, 211, 238, .05); }
+.act-ic { width: 6px; height: 6px; }
+.act-line { font-size: 11px; }
+.act-meta { font-size: 9px; }
+.act-item:empty { display: none; }
+
+/* --------------------------------------- page Brain Atlas ------------------ */
+.brain-page-wrap {
+  height: 100%; max-height: 100%;
+  display: flex; flex-direction: column; gap: 12px; padding: 4px 2px;
+}
+.brain-page-head { display: flex; align-items: center; gap: 12px; flex: none; flex-wrap: wrap; }
+.brain-page-head .brain-search { flex: 1; max-width: 300px; }
+.brain-page-actions { display: flex; gap: 6px; }
+#page-brain .brain-zone {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line-soft); border-radius: var(--radius);
+  overflow: hidden;
+}
+#page-brain .brain-stage { flex: 1; min-height: 0; }
+#pageBrainExpand, #page-brain #brainExpand { display: none; }
+
+/* --------------------------------------- adaptatif v2 --------------------- */
+@media (max-width: 1380px) {
+  :root { --context-w: 284px; }
+}
+@media (max-width: 1180px) {
+  .command-shell {
+    grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto;
+    height: auto; overflow: visible;
+  }
+  .jarvis-column { grid-template-rows: minmax(300px, 44vh) minmax(0, 1fr); }
+  .context-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .context-panel .ctx-card:last-child { grid-column: 1 / -1; max-height: 280px; }
+}
+@media (max-width: 760px) {
+  .context-panel { grid-template-columns: 1fr; }
+  .context-panel .ctx-card:last-child { max-height: 240px; }
+  .jarvis-column { grid-template-rows: 300px minmax(0, 1fr); }
+  .composer { gap: 8px; padding: 10px 12px; }
+  .composer-meta #voiceWave { display: none; }
+  .composer-actions .send span { display: none; }
+  .stage-foot .sub-chip { display: none; }
+}
+
+/* JARVIS_SHEET_PROGRESS_AND_COMPARE_V8 — progression reelle de l'analyse Sheet.
+   Les etapes proviennent d'evenements `sheet.progress` : ce bloc ne fait que
+   les afficher, il n'anime jamais une progression de son propre chef. */
+.sheet-progress { display: flex; flex-direction: column; gap: 3px; }
+.sheet-progress b { font-weight: 500; color: var(--text); }
+.sheet-progress .sheet-step { opacity: .55; font-size: 11px; font-variant-numeric: tabular-nums; }
+.sheet-progress .sheet-facts { font-size: 11.5px; opacity: .7; }
+.sheet-duration { margin-top: 6px; font-size: 11px; opacity: .5; font-variant-numeric: tabular-nums; }
+.sheet-progress .sheet-stall:not(:empty) { font-size: 11px; opacity: .55; margin-top: 2px; }

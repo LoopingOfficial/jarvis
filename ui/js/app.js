@@ -6,22 +6,57 @@
    - tts.*    → niveau sonore réel (bouche du robot)
    Rien n'est simulé : si le backend ne dit rien, rien ne bouge.
    ========================================================================== */
+const INERT_CLASSLIST = {
+  add() {}, remove() {}, toggle() {}, contains() { return false; },
+};
+// Cible factice renvoyee quand un element attendu est absent du DOM courant.
+const INERT = {
+  classList: INERT_CLASSLIST,
+  dataset: {},
+  style: {},
+  value: '',
+  textContent: '',
+  innerHTML: '',
+  hidden: false,
+  title: '',
+  addEventListener() {}, removeEventListener() {},
+  setAttribute() {}, getAttribute() { return null; },
+  focus() {}, blur() {}, click() {},
+  querySelector() { return null; }, querySelectorAll() { return []; },
+};
+
 const App = {
 NAV: [
-    ['command', 'Command Center', 'command'],
-    ['code', 'Coding', 'code'],
-    ['terminal', 'Terminal', 'terminal'],
-    ['agents', 'Agents', 'agents'],
-    ['tasks', 'Tasks & To-do', 'tasks'],
-    ['avatar-studio', 'Avatar Studio', 'avatar'],
-    ['knowledge', 'Knowledge Base', 'knowledge'],
-    ['learning', 'Idle Learning', 'brain'],
-    ['memory', 'Memory', 'memory'],
-    ['calendar', 'Calendar', 'calendar'],
-    ['conversations', 'Conversations', 'conversations'],
-    ['tools', 'Tools & Skills', 'tools'],
-    ['workflows', 'Workflows', 'workflows'],
-    ['aicore', 'AI Core', 'core'],
+    { label: 'CORE', items: [
+      ['command', 'Accueil', 'command'],
+      ['chat', 'Chat', 'chat'],
+      ['projects', 'Projets', 'folder'],
+      ['agents', 'Agents IA', 'agents'],
+      ['workflows', 'Automatisations', 'workflows'],
+      ['calendar', 'Calendrier', 'calendar'],
+      ['tasks', 'Tâches', 'tasks'],
+    ]},
+    { label: 'RESSOURCES', items: [
+      ['knowledge', 'Connaissances', 'knowledge'],
+      ['memory', 'Mémoire', 'memory'],
+      ['code', 'Fichiers & Code', 'code'],
+      ['analyses', 'Analyses', 'database'],
+      ['terminal', 'Terminal', 'terminal'],
+      ['brain', 'Brain Atlas', 'brain'],
+    ]},
+    { label: 'ESPACES', items: [
+      ['marketing', 'Marketing', 'globe'],
+      ['finance', 'Finance', 'mail'],
+      ['social', 'Réseaux sociaux', 'link'],
+      ['servers', 'Sites & Serveurs', 'server'],
+      ['tools', 'Outils', 'tools'],
+    ]},
+    { label: 'SYSTÈME', items: [
+      ['avatar-studio', 'Avatar Studio', 'avatar'],
+      ['image-studio', "Génération d'images", 'avatar'],
+      ['aicore', 'AI Core', 'core'],
+      ['settings', 'Paramètres', 'settings'],
+    ]},
   ],
   phase: 0,
   focusMode: false,
@@ -33,10 +68,8 @@ NAV: [
     if (this.initialized) return;
     this.initialized = true;
     console.log('[JARVIS UI BOOT]', 'CHAT_RELOAD_FIX_20260911_A', Date.now(), performance.getEntriesByType('navigation'));
-    this.renderNav();
     this.bindUI();
     this.startClock();
-    this.startAnimation();
     J.connectStream();
     this.bindStream();
     CodeEnv.bind();
@@ -50,15 +83,14 @@ NAV: [
       J.state.settings = settings.settings;
       this.applyAppearance(settings.settings.appearance);
       await VoiceManager.init(settings.settings.voice);
-      const chip = $('#voiceModeChip');
+      const chip = $('#voiceModeChip') || INERT;
       chip.textContent = {
         push_to_talk: 'PTT', always_listening: 'AUTO', wake_word: 'WAKE', conversation: 'CONV',
       }[settings.settings.voice.mode] || '—';
       this.applyQualityListeners(settings.settings.appearance?.quality);
     }
 
-    Dashboard.refreshSoon(6000);
-    await Dashboard.refresh();
+    AppHome?.render();
     const brain = window.JarvisBrain;
     if (brain) {
       brain.onNodeClick = (node) => this.showNodeDetails(node);
@@ -69,69 +101,105 @@ NAV: [
         if (hudE) hudE.textContent = counts.edges;
       };
     }
-    setInterval(() => Dashboard.refresh(), 6000);
     this.goto(location.hash.replace('#', '') || 'command');
   },
 
-  renderNav() {
-    $('#nav').innerHTML = this.NAV.map(([id, label, ic]) => `
-      <button class="nav-item ${id === 'command' ? 'active' : ''}" data-nav="${id}">
-        ${icon(ic, 15)}<span>${label}</span>
-      </button>`).join('') + `
-      <button class="nav-item" data-nav="settings">${icon('settings', 15)}<span>Settings</span></button>`;
-    $$('[data-nav]').forEach((b) => b.onclick = () => this.goto(b.dataset.nav));
-  },
 
-  goto(page, options = {}) {
+goto(page, options = {}) {
     window.AvatarStudio?.restoreAvatarStage();
+    let brainFocus = false;
+    let chatFocus = false;
+    if (page === 'brain') { page = 'command'; brainFocus = true; }
+    else if (page === 'chat') { page = 'command'; chatFocus = true; }
     if (!document.getElementById('page-' + page)) page = 'command';
     J.state.page = page;
     location.hash = page;
     $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + page));
     $$('[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === page));
-    $('#sidebar').classList.remove('open');
-    if (page === 'command') Dashboard.refresh();
-    else if (page === 'settings') Settings.render($('#page-settings'), options.section);
+    if (page === 'settings') Settings.render($('#page-settings'), options.section);
     else if (page === 'terminal') Terminal.render();
+    else if (page === 'image-studio') ImageStudio.render($('#page-image-studio'));
     else if (page === 'code') CodeEnv.render();
+    else if (page === 'projects' || page === 'analyses' || page === 'finance'
+      || page === 'marketing' || page === 'social' || page === 'servers') Pages.render(page);
+    else if (page === 'conversations') Pages.render('conversations');
     else Pages.render(page);
+    if (chatFocus) setTimeout(() => this.focusChat(), 60);
+  },
+
+  focusChat() {
+    const row = $('#chatRow');
+    if (row) {
+      row.classList.remove('chat-flash');
+      void row.offsetWidth;
+      row.classList.add('chat-flash');
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    setTimeout(() => $('#convInput')?.focus(), 300);
+  },
+
+  toggleLauncher(force) {
+    const pop = $('#launcherPop');
+    if (!pop) return;
+    const hide = force !== undefined ? force : !pop.hidden;
+    pop.hidden = hide;
+    pop.classList.toggle('open', !hide);
+    $('#appLauncher')?.setAttribute('aria-expanded', String(!hide));
+  },
+
+  handleNavAction(action) {
+    if (action === 'focus-chat') return this.focusChat();
+    if (action) this.goto(action);
   },
 
   /* --------------------------------------------------------------- UI */
   bindUI() {
-    $('#micBtn').onclick = () => this.toggleVoice();
-    $('#talkBar').onclick = () => this.toggleVoice();
-    $('#consoleToggle').onclick = () => this.toggleConsole();
-    $('#consoleClose').onclick = () => this.closeConsole();
-    $('#consoleNew').onclick = async () => {
+    // Certains elements n'existent plus selon la page rendue : `el()` renvoie
+    // une cible inerte pour que le cablage restant continue de s'appliquer.
+    const el = (sel) => $(sel) || INERT;
+    el('#micBtn').onclick = () => this.toggleVoice();
+    el('#talkBar').onclick = () => this.toggleVoice();
+    const sidebarToggle = el('#sidebarToggle');
+    if (sidebarToggle) {
+      sidebarToggle.onclick = async () => {
+        const compact = !el('#app').classList.contains('sidebar-compact');
+        el('#app').classList.toggle('sidebar-compact', compact);
+        sidebarToggle.setAttribute('aria-expanded', String(!compact));
+        const res = await J.put('/api/settings/appearance', { compact_sidebar: compact });
+        if (res.ok) toast(compact ? 'Barre latérale réduite.' : 'Barre latérale déployée.', 'ok');
+      };
+    }
+    el('#consoleToggle').onclick = () => this.toggleConsole();
+    el('#consoleClose').onclick = () => this.closeConsole();
+    el('#consoleNew').onclick = async () => {
       const r = await J.post('/api/conversations');
       J.state.conversation = r.conversation.id;
       J.state.messages = [];
-      $('#consoleLog').innerHTML = '';
-      $('#convLog').innerHTML = '';
-      $('#consoleConv').textContent = 'nouvelle';
+      el('#consoleLog').innerHTML = '';
+      el('#convLog').innerHTML = '';
+      el('#consoleConv').textContent = 'nouvelle';
       toast('Nouvelle conversation.', 'ok');
     };
-    $('#consoleForm').onsubmit = (e) => {
+    el('#consoleForm').onsubmit = (e) => {
       e.preventDefault();
       console.debug('[CHAT-UI] submit preventDefault', e.defaultPrevented);
-      const input = $('#consoleInput');
+      const input = el('#consoleInput');
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
       this.send(text);
     };
-    $('#convForm').onsubmit = (e) => {
+    el('#convForm').onsubmit = (e) => {
       e.preventDefault();
       console.debug('[CHAT-UI] submit preventDefault', e.defaultPrevented);
-      const input = $('#convInput');
+      const input = el('#convInput');
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
       this.send(text);
     };
-    $('#convOpen').onclick = () => this.openConsole();
-    const studioBtn = $('#avatarStudioOpen');
+    el('#convOpen').onclick = () => this.openConsole();
+    const studioBtn = el('#avatarStudioOpen');
     if (studioBtn) {
       studioBtn.onclick = (e) => {
         e.preventDefault();
@@ -139,7 +207,7 @@ NAV: [
         window.AvatarStudio?.open();
       };
     }
-    const centerBtn = $('#avatarStudioCenter');
+    const centerBtn = el('#avatarStudioCenter');
     if (centerBtn) {
       centerBtn.onclick = (e) => {
         e.preventDefault();
@@ -147,48 +215,48 @@ NAV: [
         this.goto('avatar-studio');
       };
     }
-    const pageAvatarBtn = $('#avatarStudioBack');
+    const pageAvatarBtn = el('#avatarStudioBack');
     if (pageAvatarBtn) pageAvatarBtn.onclick = () => this.goto('command');
-    $('#briefBtn').onclick = () => this.send('Qu\'est-ce qui nécessite mon attention ?');
-    $('#notifBtn').onclick = () => this.goto('tasks');
-    $('#activityClear').onclick = () => { window.ActivityPanel?.clear(); };
-    $('#npClose').onclick = () => {
-      $('#nodePanel').classList.add('hidden');
+    el('#briefBtn').onclick = () => this.send('Qu\'est-ce qui nécessite mon attention ?');
+    el('#notifBtn').onclick = () => this.goto('tasks');
+    el('#activityClear').onclick = () => { window.ActivityPanel?.clear(); };
+    el('#npClose').onclick = () => {
+      el('#nodePanel').classList.add('hidden');
       window.JarvisBrain?.deselect();
     };
-    $('#qualityChip').onclick = () => this.goto('settings', { section: 'appearance' });
-    $('#brainLabels').onclick = (e) => {
+    el('#qualityChip').onclick = () => this.goto('settings', { section: 'appearance' });
+    el('#brainLabels').onclick = (e) => {
       const visible = window.JarvisBrain?.toggleLabels();
       e.currentTarget.setAttribute('aria-pressed', String(visible ?? true));
     };
-    $('#brainReset').onclick = () => {
-      $('#brainSearch').value = '';
+    el('#brainReset').onclick = () => {
+      el('#brainSearch').value = '';
       window.JarvisBrain?.highlight('');
       window.JarvisBrain?.discover();
-      $('#nodePanel').classList.add('hidden');
+      el('#nodePanel').classList.add('hidden');
     };
     const expandBrain = (expanded) => {
-      $('#brainZone').classList.toggle('is-expanded', expanded);
-      $('#brainExpand').setAttribute('aria-expanded', String(expanded));
-      $('#brainExpand').setAttribute('aria-label', expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas');
-      $('#brainExpand').title = expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas';
+      el('#brainZone').classList.toggle('is-expanded', expanded);
+      el('#brainExpand').setAttribute('aria-expanded', String(expanded));
+      el('#brainExpand').setAttribute('aria-label', expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas');
+      el('#brainExpand').title = expanded ? 'Réduire le Brain Atlas' : 'Agrandir le Brain Atlas';
       requestAnimationFrame(() => window.JarvisBrain?.discover(false));
     };
-    $('#brainExpand').onclick = () => expandBrain(!$('#brainZone').classList.contains('is-expanded'));
+    el('#brainExpand').onclick = () => expandBrain(!el('#brainZone').classList.contains('is-expanded'));
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && $('#brainZone').classList.contains('is-expanded')) {
+      if (e.key === 'Escape' && el('#brainZone').classList.contains('is-expanded')) {
         expandBrain(false);
-        $('#brainExpand').focus();
+        el('#brainExpand').focus();
       }
     });
-    $('#termClear').onclick = () => Terminal.clear();
-    $('#codeRefresh').onclick = () => CodeEnv.refresh(true);
+    el('#termClear').onclick = () => Terminal.clear();
+    el('#codeRefresh').onclick = () => CodeEnv.refresh(true);
     $$('[data-goto]').forEach((b) => b.onclick = () =>
       this.goto(b.dataset.goto, { section: b.dataset.section }));
 
     // Recherche dans le Brain Atlas (filtre visuel temps réel).
     let brainTimer;
-    $('#brainSearch').addEventListener('input', (e) => {
+    el('#brainSearch').addEventListener('input', (e) => {
       clearTimeout(brainTimer);
       brainTimer = setTimeout(() => {
         window.JarvisBrain?.highlight(e.target.value);
@@ -203,7 +271,7 @@ NAV: [
     });
 
     // Bouton de commande par recherche globale.
-    $('#globalSearch').addEventListener('keydown', (e) => {
+    el('#globalSearch').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.target.value.trim()) {
         this.send(e.target.value.trim());
         e.target.value = '';
@@ -219,12 +287,20 @@ NAV: [
       if (agent) this.goto('agents');
       const taskRow = e.target.closest('.tl-row[data-task]');
       if (taskRow) Pages.showTask(taskRow.dataset.task);
+      const navAct = e.target.closest('[data-nav-action]');
+      if (navAct) this.handleNavAction(navAct.dataset.navAction);
+      const launcher = e.target.closest('[data-launcher], #appLauncher');
+      if (launcher) {
+        if (!e.target.closest('#appLauncher')) { AppHome?.renderLauncher(); this.toggleLauncher(); }
+      } else {
+        this.toggleLauncher(true);
+      }
     });
 
     document.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        $('#globalSearch').focus();
+        el('#globalSearch').focus();
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
@@ -232,7 +308,8 @@ NAV: [
       }
       if (e.key === 'Escape') {
         this.closeConsole();
-        $('#nodePanel').classList.add('hidden');
+        el('#nodePanel').classList.add('hidden');
+        this.toggleLauncher(true);
       }
     });
 
@@ -242,9 +319,39 @@ NAV: [
       this.applyQualityListeners(q);
       const res = await J.put('/api/settings/appearance', { quality: q });
       if (res.ok) {
-        const chip = $('#qualityChip');
+        const chip = el('#qualityChip');
         chip.textContent = q.toUpperCase();
         toast('Qualité 3D : ' + q + ' (recharge pour l\'appliquer à toute la scène).');
+      }
+    });
+
+    // ---- Command bar de l'accueil (pilotée par les vraies routes JARVIS) ----
+    const homeForm = el('#homeCmdForm');
+    if (homeForm) homeForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const el = el('#homeCmd');
+      const text = (el.value || '').trim();
+      if (!text) return;
+      el.value = '';
+      this.send(text);
+    });
+    const homeMic = el('#homeMic');
+    if (homeMic) homeMic.onclick = () => this.toggleVoice();
+
+    // ---- Lanceur d'applications ----
+    el('#appLauncher').onclick = (e) => {
+      e.stopPropagation();
+      AppHome?.renderLauncher();
+      this.toggleLauncher();
+    };
+    el('#launcherPop').addEventListener('click', (e) => {
+      const go = e.target.closest('[data-launch]');
+      if (go) {
+        this.toggleLauncher(true);
+        const v = go.dataset.launch;
+        if (v === 'focus-chat') this.focusChat();
+        else if (v === 'settings-connectors') this.goto('settings', { section: 'connectors' });
+        else this.goto(v);
       }
     });
   },
@@ -267,6 +374,9 @@ NAV: [
     if (action === 'voice') return this.toggleVoice();
     if (action === 'new-task') return this.newTaskDialog();
     if (action === 'run-workflow') return this.runWorkflowDialog();
+    const prompt = AppHome?.QUICK_PROMPTS?.[action];
+    if (prompt) return this.send(prompt);
+    return this.send(action);
   },
 
   /* ------------------------------------------------------------ console */
@@ -289,7 +399,8 @@ NAV: [
     if (!container) return null;
     const el = document.createElement('div');
     el.className = `msg ${role === 'user' ? 'user' : ''} ${options.error ? 'error' : ''}`;
-    el.innerHTML = `<div class="who">${role === 'user' ? 'VOUS' : 'JARVIS'}</div>
+    const stamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    el.innerHTML = `<div class="who">${role === 'user' ? 'VOUS' : 'JARVIS'} <span class="msg-time">· ${stamp}</span></div>
       <div class="bubble">${role === 'user' ? esc(text) : mdToHtml(text)}</div>`;
     if (options.actions) {
       const actions = document.createElement('div');
@@ -297,8 +408,9 @@ NAV: [
       actions.innerHTML = options.actions;
       el.appendChild(actions);
     }
+    const near = (container.scrollHeight - container.scrollTop - container.clientHeight) < 96;
     container.appendChild(el);
-    container.scrollTop = container.scrollHeight;
+    if (near || options.pending || role === 'user') container.scrollTop = container.scrollHeight;
     return el;
   },
 
@@ -363,6 +475,7 @@ NAV: [
 
   /** Unique point de rendu de la réponse de JARVIS (événement jarvis.reply). */
   renderReply(text, result) {
+    clearTimeout(this._sheetStall);
     this.clearPendingReply();
     const el = this.pushMessage('jarvis', text, { error: result.ok === false });
     console.debug('[CHAT-UI] assistant message added');
@@ -373,20 +486,69 @@ NAV: [
       actions.querySelector('button').onclick = () => Pages.showTask(result.task_id);
       el.appendChild(actions);
     }
+    if (result.analysis_workspace) this.attachWorkspace(el, result.analysis_workspace);
+    // Duree totale, discrete : mesuree par le pipeline, pas estimee ici.
+    if (result.timings && result.timings.total_ms) {
+      const t = document.createElement('div');
+      t.className = 'sheet-duration';
+      t.textContent = `Analyse terminee en ${(result.timings.total_ms / 1000).toFixed(1)} s`;
+      el?.appendChild(t);
+    }
     if (result.needs_confirmation) this.showConfirmation(result.needs_confirmation);
-    Dashboard.refresh();
+  },
+
+  /* Analyse de source : le chat reste court, le detail s'ouvre dans le
+     Analysis Workspace rendu depuis le payload structure du backend. */
+  attachWorkspace(el, payload) {
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    actions.innerHTML = `<button class="btn sm primary" data-open-workspace>${icon('eye', 11)} Ouvrir l'Analysis Workspace</button>`;
+    // Le bouton reste le filet de securite : meme si l'ouverture automatique
+    // echoue, le resultat de l'analyse n'est jamais perdu.
+    actions.querySelector('button').onclick = () => this.openWorkspaceSafely(payload);
+    el?.appendChild(actions);
+    this.openWorkspaceSafely(payload, el);
+  },
+
+  /* Ouverture du Workspace : une exception ici ne doit jamais faire disparaitre
+     l'analyse en silence. On trace, et le message porte de quoi la rouvrir. */
+  openWorkspaceSafely(payload, el) {
+    const AW = window.AnalysisWorkspace;
+    try {
+      if (!AW || typeof AW.open !== 'function') throw new Error('AnalysisWorkspace indisponible');
+      AW.open(payload);
+      if (!AW.isOpen?.()) throw new Error('Workspace monte mais non visible');
+      console.debug('[SHEET-UI] workspace_rendered', payload?.intent, (payload?.sections || []).length);
+      return true;
+    } catch (error) {
+      console.error('[SHEET-UI] workspace_render_failed', error);
+      if (el) {
+        const note = document.createElement('div');
+        note.className = 'actions';
+        note.textContent = 'Analyse terminee — ouvrir le Workspace';
+        el.appendChild(note);
+      }
+      return false;
+    }
   },
 
   async send(text) {
     return this.sendJarvisMessage(text, 'text');
   },
 
-  async sendJarvisMessage(text, source = 'text') {
+  async sendJarvisMessage(text, source = 'text', attachments = null) {
     text = String(text || '').trim();
+    // Les pièces jointes sont prélevées ici, au moment où l'utilisateur
+    // envoie : la barre se vide tout de suite, mais si l'envoi est mis en
+    // file (envoi déjà en cours) les ids voyagent avec le message.
+    if (attachments === null) {
+      attachments = window.AttachmentsUI?.takeIds() || [];
+      if (attachments.length) window.AttachmentsUI.clear();
+    }
     if (!text) return;
     if (this.sending) {
       return new Promise((resolve) => {
-        (this.sendQueue ||= []).push({ text, source, resolve });
+        (this.sendQueue ||= []).push({ text, source, attachments, resolve });
       });
     }
     this.sending = true;
@@ -397,7 +559,7 @@ NAV: [
     this.pushMessage('user', text);
     console.debug('[CHAT-UI] user message added', source);
     this.pendingReply = this.pushMessage('jarvis', '…', { pending: true });
-    const res = await VoiceManager.submit(text, { silent: true, source });
+    const res = await VoiceManager.submit(text, { silent: true, source, attachments });
     if (!res) { this.clearPendingReply(); return; }
     if (res.needs_confirmation) return;
     const response = res.response || res.error || 'Terminé.';
@@ -415,7 +577,7 @@ NAV: [
       this.sending = false;
       J.state.chatStatus = 'idle';
       const next = this.sendQueue?.shift();
-      if (next) this.sendJarvisMessage(next.text, next.source).then(next.resolve);
+      if (next) this.sendJarvisMessage(next.text, next.source, next.attachments).then(next.resolve);
     }
   },
 
@@ -442,7 +604,6 @@ NAV: [
       this.pushMessage('jarvis', text);
       this.openConsole();
       if (approved && VoiceManager.settings?.speak_responses !== false) VoiceManager.speak(text);
-      Dashboard.refresh();
     };
     m.$('[data-yes]').onclick = () => resolve(true);
     m.$('[data-no]').onclick = () => resolve(false);
@@ -470,7 +631,6 @@ NAV: [
         this.pushMessage('user', text);
         this.pushMessage('jarvis', res.response || 'Je m\'en occupe.');
         this.openConsole();
-        Dashboard.refresh();
       } else this.send(text);
     };
   },
@@ -571,7 +731,6 @@ NAV: [
   /* -------------------------------------------------------------- agents */
   onAgentEvent(type, data) {
     data = data || {};
-    Dashboard?.agentEvent(type, data);
     const robot = window.JarvisRobot;
     const agentLabel = data.name || data.id || 'agent';
     if (type === 'agent.started') {
@@ -714,8 +873,8 @@ async showNodeDetails(node) {
       PROCESSING: 'Je réfléchis…', EXECUTING: 'J\'exécute…', SPEAKING: 'Je réponds…',
       INTERRUPTED: 'Interrompu',
     }[state] || '';
-    $('#talkStatus').textContent = status;
-    $('#micHint').textContent = state === 'IDLE' ? 'Tap to Speak' : label;
+    ($('#talkStatus') || INERT).textContent = status;
+    ($('#micHint') || INERT).textContent = state === 'IDLE' ? 'Tap to Speak' : label;
 
     // Robot : miroir du flux vocal local (une brique parmi les autres).
     const robotMap = {
@@ -729,15 +888,77 @@ async showNodeDetails(node) {
     }
   },
 
+  /* ------------------------------------------- progression Google Sheet */
+  /* Chaque etape vient d'un evenement `sheet.progress` emis par le pipeline.
+     Rien n'est simule : pas de barre 0->100 pilotee par un minuteur. */
+  sheetProgress(data) {
+    const bubble = this.pendingReply;
+    if (!bubble) return;
+    // Les faits deja etablis RESTENT affiches aux etapes suivantes : une fois
+    // les 20 onglets lus, l'information ne redevient pas inconnue.
+    const seen = (this._sheetFacts = data.stage === 'sheet_connect' ? {} : (this._sheetFacts || {}));
+    if (data.sheet_count) seen.sheets = data.sheet_count;
+    if (data.table_count) seen.tables = data.table_count;
+    const facts = [];
+    if (seen.sheets) facts.push(`Google Sheet · ${seen.sheets} onglets detectes`);
+    if (seen.tables) facts.push(`${seen.tables} tableaux detectes`);
+    if (data.total_ms) facts.push(`${(data.total_ms / 1000).toFixed(1)} s`);
+
+    // Le libelle vient d'une allowlist backend ; seule la correction precise
+    // son volume reel. Jamais « nouvelle generation complete ».
+    let label = data.label || '';
+    if (data.stage === 'sheet_repair' && data.claims) {
+      label = `Correction de ${data.claims} affirmation${data.claims > 1 ? 's' : ''} non verifiee${data.claims > 1 ? 's' : ''}`;
+    }
+
+    // Etat du cerveau : miroir de l'etape REELLE, jamais une animation libre.
+    const brain = {
+      sheet_connect: 'USING_TOOL', sheet_tabs: 'USING_TOOL',
+      sheet_semantic: 'THINKING', sheet_llm: 'THINKING',
+      sheet_grounding: 'VERIFYING', sheet_repair: 'VERIFYING',
+      sheet_workspace: 'THINKING', sheet_done: 'SUCCESS',
+    }[data.stage];
+    if (brain) this.setRobot(brain, { reason: label });
+    window.dispatchEvent(new CustomEvent('jarvis:brain-state',
+      { detail: { state: brain || 'THINKING', reason: label, zone: this.sheetZone(data.stage) } }));
+
+    const body = bubble.querySelector('.bubble') || bubble;
+    body.innerHTML = `<div class="sheet-progress">`
+      + `<b>${esc(label)}</b>`
+      + ` <span class="sheet-step">${data.step || 0}/${data.total || 9}</span>`
+      + `<div class="sheet-facts">${esc(facts.join(' · '))}</div>`
+      + `<div class="sheet-stall"></div>`
+      + `</div>`;
+
+    // Etape longue : on le DIT, dans une ligne DEDIEE. L'etape courante et les
+    // faits deja obtenus restent affiches : attendre n'est pas tout perdre.
+    clearTimeout(this._sheetStall);
+    if (data.stage !== 'sheet_done') {
+      this._sheetStall = setTimeout(() => {
+        const note = bubble.querySelector('.sheet-stall');
+        if (note) note.textContent = `Analyse toujours en cours — ${data.label || 'lecture du classeur'}`;
+      }, 12000);
+    }
+  },
+
+  sheetZone(stage) {
+    if (stage === 'sheet_connect' || stage === 'sheet_tabs') return 'TOOLS';
+    if (stage === 'sheet_semantic' || stage === 'sheet_llm') return 'KNOWLEDGE';
+    return '';
+  },
+
   /* ------------------------------------------------------------- flux SSE */
   bindStream() {
     // Câblerie unique : chaque événement brut est routé (robot, atlas, activité).
     J.on('event', (event) => this.routeEvent(event));
 
-    J.on('stream.open', () => { $('#sysDot').classList.remove('err'); });
+    J.on('stream.open', () => { $('#sysDot')?.classList.remove('err'); });
     J.on('stream.close', () => {
-      $('#sysStatusTextHdr').textContent = 'RECONNEXION';
-      $('#sysStatusTextHdr').style.color = 'var(--warn)';
+      const hdr = $('#sysStatusTextHdr');
+      if (hdr) {
+        hdr.textContent = 'RECONNEXION';
+        hdr.style.color = 'var(--warn)';
+      }
     });
     J.on('voice.local', ({ state }) => this.updateVoiceUI(state));
     J.on('jarvis.greeting', ({ text }) => this.pushMessage('jarvis', text));
@@ -745,6 +966,7 @@ async showNodeDetails(node) {
       if (J.state.page === 'command' && VoiceManager.state !== 'IDLE') this.openConsole();
     });
     J.on('jarvis.reply', ({ text, result }) => this.renderReply(text, result || {}));
+    J.on('sheet.progress', (data) => this.sheetProgress(data || {}));
     J.on('jarvis.confirmation', (pending) => this.showConfirmation(pending));
     // Génération d'image : le composant dédié écoute image.generation.*
     window.ImageMessages?.bind();
@@ -752,10 +974,9 @@ async showNodeDetails(node) {
     window.ModelMessages?.bind();
     // Refonte d'avatar : le composant dedie ecoute avatar.update_*
     window.AvatarStudio?.init();
+    // Pièces jointes : bouton 📎, drag & drop et collage sur la barre de commande.
+    window.AttachmentsUI?.init();
 
-    J.on('feed.new', () => Dashboard.refresh());
-    J.on('task.completed', () => Dashboard.refresh());
-    J.on('task.failed', () => Dashboard.refresh());
     J.on('task.waiting_confirmation', (data) => {
       if (data.confirmation_id) this.showConfirmation({ ...data, id: data.confirmation_id });
     });
@@ -764,13 +985,6 @@ async showNodeDetails(node) {
     J.on('agent.completed', (d) => this.onAgentEvent('agent.completed', d));
     J.on('agent.failed', (d) => this.onAgentEvent('agent.failed', d));
     J.on('agent.idle', (d) => this.onAgentEvent('agent.idle', d));
-    J.on('task.completed', () => Dashboard.refreshSoon(1500));
-    J.on('task.failed', () => Dashboard.refreshSoon(1500));
-    J.on('task.created', () => Dashboard.refreshSoon(1500));
-    J.on('system.metrics', () => Dashboard.refreshSoon(4000));
-    J.on('connector.connected', () => Dashboard.refresh());
-    J.on('connector.failed', () => Dashboard.refresh());
-    J.on('workflow.completed', () => Dashboard.refresh());
     J.on('settings.updated', async () => {
       const s = await J.get('/api/settings');
       if (s.ok) {
@@ -953,9 +1167,9 @@ async showNodeDetails(node) {
     const tick = () => {
       const now = new Date();
       const use24 = J.state.settings?.appearance?.clock_24h !== false;
-      $('#headerTime').textContent = now.toLocaleTimeString('fr-FR',
+      ($('#headerTime') || INERT).textContent = now.toLocaleTimeString('fr-FR',
         { hour12: !use24, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      $('#headerDate').textContent = now.toLocaleDateString('fr-FR',
+      ($('#headerDate') || INERT).textContent = now.toLocaleDateString('fr-FR',
         { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
         .replace(/^\w/, (c) => c.toUpperCase());
     };
@@ -964,31 +1178,6 @@ async showNodeDetails(node) {
   },
 
   /* ------------------------------------------------------------ animation */
-  startAnimation() {
-    $('#footDots').innerHTML = Array.from({ length: 26 }, () => '<i></i>').join('');
-    const loop = () => {
-      this.phase += 0.08;
-      const state = VoiceManager.state;
-      const active = ['LISTENING', 'WAKE'].includes(state);
-      const speaking = state === 'SPEAKING';
-      const busy = ['PROCESSING', 'EXECUTING'].includes(state);
-      const amplitude = speaking ? 0.75 : active ? 0.6 : busy ? 0.4 : 0.16;
-      const color = speaking ? '#a78bfa' : busy ? '#fbbf24' : '#22d3ee';
-
-      drawWave($('#voiceWave'), { amplitude, phase: this.phase, color, bars: 34 });
-      drawWave($('#talkWaveL'), { amplitude, phase: this.phase, color, bars: 14 });
-      drawWave($('#talkWaveR'), { amplitude, phase: this.phase + 1.2, color, bars: 14 });
-
-      const dots = $$('#footDots i');
-      dots.forEach((d, i) => {
-        const wave = Math.sin(this.phase * 0.8 + i * 0.4);
-        d.style.opacity = String(0.18 + Math.max(0, wave) * 0.75);
-        d.style.transform = `scale(${1 + Math.max(0, wave) * 0.7})`;
-      });
-      requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
-  },
 };
 
 window.addEventListener('DOMContentLoaded', () => App.init());

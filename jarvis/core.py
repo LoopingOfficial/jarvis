@@ -24,11 +24,17 @@ from .idle_learning import IdleLearningEngine
 from .automations import AutomationManager
 from .blender import BlenderManager
 from .brain_manager import BrainManager
+from .browser_manager import BrowserManager, set_manager
+from .crm import CrmStore
+from .crm_pipeline import CrmPipeline
+from .vault_credentials import AgentContext, CredentialVault, VaultDenied
+from .attachments import AttachmentStore
 from .calendar import CalendarManager
 from .config import DATA_DIR, LEGACY_CONNECTIONS, SettingsStore, ensure_dirs
 from .connectors import ConnectorManager
 from .conversations import ConversationManager
 from .db import Database
+from .discord_scheduler import DiscordScheduler
 from .events import EventBus
 from .document_store import DocumentStore
 from .imagegen import ImageGenManager
@@ -43,12 +49,20 @@ from .tools import registry
 from .tools.runner import SecureToolRunner
 from .tts import PiperTTS
 from .voice import VoiceSessionManager, VoiceStateMachine
+from .project_status import ProjectStatusService
+from .validation import ValidationEngine
+
+from .self_upgrade.service import SelfUpgradeService  # noqa: E402
 
 # Enregistre les outils intégrés (import = enregistrement dans le registre).
 from .tools import (avatar_engine_tools, avatar_tools, avatar_update_tools,  # noqa: F401,E402
-                    blender_tools, image_tools,
+                    blender_tools, browser_tools,
+                    crm_tools, discord_tools, pdf_tools, transcript_tools,
+                    image_tools,
+                    file_analysis_tools,  # noqa: F401,E402
                     jarvis_tools,
                     remote_tools,
+                    self_upgrade_tools,
                     system_tools, web_tools)  # noqa: F401,E402
 
 
@@ -73,6 +87,10 @@ class JarvisCore:
         self.agents = AgentManager(self.db, self.events)
         self.llm = LLMManager(self.connectors, self.vault, self.settings, self.events)
         self.automations = AutomationManager(self.db, self.events, self.tasks, self.settings)
+        # Planificateur Discord : dépend de `automations` (calcul du cron) et du
+        # runner, donc construit après eux. Le moteur Discord, lui, reste créé à
+        # la demande : planifier une tâche ne doit pas forcer la connexion du bot.
+        self.discord_scheduler = DiscordScheduler(self)
         self.imagegen = ImageGenManager(self)
         self.blender = BlenderManager(self)
         self.avatar = AvatarDirector(self)
@@ -82,14 +100,36 @@ class JarvisCore:
         self.avatar_live = AvatarLiveManager(self)
         self.gpu = GpuResourceManager(self)
         self.runner = SecureToolRunner(self)
+        self.validation = ValidationEngine()
         self.orchestrator = Orchestrator(self)
         self.voice = VoiceStateMachine(self.events)
         self.sessions = VoiceSessionManager(self.db, self.settings, self.events)
         self.tts = PiperTTS()
         self.registry = registry
         self.brain = BrainManager(self)
+        self.project_status = ProjectStatusService(self)
+        self.attachments = AttachmentStore(self)
+        # CRM local : le carnet s'amorce au premier démarrage seulement, il
+        # n'écrase jamais des contacts existants.
+        self.crm = CrmStore(self.db)
+        try:
+            self.crm.seed_if_empty()
+        except Exception:
+            pass
+        # CRM étendu (sociétés, opportunités, historique, scoring) et coffre-fort
+        # d'identifiants. Le coffre réutilise `self.vault` : une seule
+        # implémentation de chiffrement dans tout le système.
+        self.crm_pipeline = CrmPipeline(self.db, events=self.events)
+        self.credentials = CredentialVault(self.db, self.vault, audit=self.audit, events=self.events)
+        try:
+            self.credentials.sweep_expired()
+        except Exception:
+            pass
+        self.browser = BrowserManager(self)
+        set_manager(self.browser)
         self.auto_learning = AutoLearning(self)
         self.idle_learning = IdleLearningEngine(self)
+        self.self_upgrade = SelfUpgradeService(self)
         self.activity = self.brain.activity
         self.active_task_context: dict[str, Any] = {"active_goal": "", "requested_file": "", "scope": "auto"}
 
@@ -139,7 +179,14 @@ class JarvisCore:
         self.audit.record(action=f"JARVIS {__version__} démarré", tool="core",
                           detail={"vault": self.vault.backend, "tools": registry.count(),
                                   "build": JARVIS_BUILD_ID})
+        try:
+            self.attachments.cleanup()
+        except Exception:
+            pass
         print(f"[jarvis] JARVIS_BUILD_ID={JARVIS_BUILD_ID}", flush=True)
+        # Plans de synchronisation prepares, indexes par empreinte.
+        # Une application ne peut cibler qu'un plan deja prepare ici.
+        self.sync_plans: dict[str, dict] = {}
         self.events.emit("system.ready", {"version": __version__, "tools": registry.count(),
                                           "build": JARVIS_BUILD_ID})
 
@@ -168,6 +215,7 @@ class JarvisCore:
         self.monitor.start_broadcast(interval=5.0, stop_event=self._stop)
         self.idle_learning.start()
         self.automations.start_scheduler()
+        self.discord_scheduler.start()
         threading.Thread(target=self._maintenance_loop, daemon=True, name="jarvis-maintenance").start()
         # Sonde initiale des fournisseurs de modèles hors du chemin des requêtes.
         threading.Thread(target=self._llm_probe_loop, daemon=True, name="jarvis-llm-status").start()
@@ -192,6 +240,7 @@ class JarvisCore:
                 self.audit.prune(int(self.settings.get("security", "audit_retention_days", 90)))
                 self.tasks.prune(int(self.settings.get("automation", "task_retention_days", 30)))
                 self.sessions.prune()
+                self.attachments.cleanup()
                 self.llm.invalidate()
             except Exception:
                 pass
@@ -201,6 +250,7 @@ class JarvisCore:
         if self._clap_listener is not None:
             self._clap_listener.stop()
         self.automations.stop()
+        self.discord_scheduler.stop()
         self.idle_learning.stop()
         try:
             self.blender.shutdown()
@@ -336,6 +386,9 @@ class JarvisCore:
     # -- interface ---------------------------------------------------------
     def launch_ui(self, port: int) -> None:
         if self._ui_launched or not self.settings.get("general", "launch_ui_on_start", True):
+            return
+        if os.getenv("JARVIS_LAUNCH_UI", "1").strip().lower() in {"0", "false", "no"}:
+            self._ui_launched = True
             return
         url = f"http://127.0.0.1:{port}/"
         self._ui_launched = True

@@ -1,0 +1,243 @@
+/* JARVIS V5 — jeu de données du graphe neuronal.
+   Trois niveaux : noyau -> hubs de cluster -> nœuds feuilles.
+   Données d'exemple : remplaçables par un fetch('/api/brain/graph') de même forme. */
+
+export const CLUSTERS = {
+  core:    { name: 'Noyau JARVIS',   color: 0xffd479, css: '#ffd479' },
+  brain:   { name: 'Cerveaux LLM',   color: 0x60a5fa, css: '#60a5fa' },
+  tool:    { name: 'Capacités',      color: 0x34d399, css: '#34d399' },
+  social:  { name: 'Réseaux',        color: 0xc084fc, css: '#c084fc' },
+  finance: { name: 'Finance',        color: 0xfbbf24, css: '#fbbf24' },
+  agent:   { name: 'Agents métiers', color: 0xfb7185, css: '#fb7185' },
+};
+
+/** hub:true = nœud de regroupement (plus gros, label en capitales). */
+export const NODES = [
+  { id: 'jarvis', label: 'NOYAU JARVIS', cluster: 'core', val: 4.2, hub: true,
+    desc: "Orchestrateur central : routage des intentions, mémoire longue durée, supervision des agents.",
+    meta: { Statut: 'ONLINE', Uptime: '17j 04h', Contexte: '218k tok' } },
+
+  // ---- hubs de cluster ----------------------------------------------------
+  { id: 'hub_brain', label: 'CERVEAUX LLM', cluster: 'brain', val: 3.0, hub: true,
+    desc: "Routeur de modèles : choisit le cerveau selon le coût, la latence et le type de tâche.",
+    meta: { Modèles: '12', Actifs: '5', Repli: 'Qwen local' } },
+  { id: 'hub_tool', label: 'CAPACITÉS', cluster: 'tool', val: 3.0, hub: true,
+    desc: "Registre des outils connectés : chaque capacité expose ses actions au planificateur.",
+    meta: { Outils: '13', Quota: '41 %', Santé: 'OK' } },
+  { id: 'hub_social', label: 'RÉSEAUX', cluster: 'social', val: 2.6, hub: true,
+    desc: "Diffusion et veille sociale : publication programmée, écoute des signaux d'intention.",
+    meta: { Comptes: '6', Reach: '291k', Santé: 'OK' } },
+  { id: 'hub_finance', label: 'FINANCE', cluster: 'finance', val: 2.6, hub: true,
+    desc: "Encaissements, trésorerie et facturation consolidés en une seule vue.",
+    meta: { MRR: '18 420 €', Solde: '64 900 €', Santé: 'WARN' } },
+  { id: 'hub_agent', label: 'AGENTS MÉTIERS', cluster: 'agent', val: 2.8, hub: true,
+    desc: "Agents autonomes : chacun possède un cerveau, un périmètre et un journal d'exécution.",
+    meta: { Agents: '5', Tâches: '77/j', Santé: 'OK' } },
+
+  // ---- cerveaux LLM -------------------------------------------------------
+  { id: 'opus',     label: 'Opus 5',     cluster: 'brain', val: 2.4,
+    desc: "Raisonnement long et planification multi-étapes. Cerveau par défaut des agents métiers.",
+    meta: { Rôle: 'Raisonnement', Latence: '1.9 s', Coût: '$$$' } },
+  { id: 'sonnet5',  label: 'Sonnet 5',   cluster: 'brain', val: 1.9,
+    desc: "Débit élevé : classification de mails, extraction, résumés en masse.",
+    meta: { Rôle: 'Débit', Latence: '0.6 s', Coût: '$$' } },
+  { id: 'sonnet45', label: 'Sonnet 4.5', cluster: 'brain', val: 1.5,
+    desc: "Génération précédente, conservée pour les workflows figés et la reproductibilité.",
+    meta: { Rôle: 'Legacy', Latence: '0.7 s', Coût: '$$' } },
+  { id: 'haiku',    label: 'Haiku 4.5',  cluster: 'brain', val: 1.4,
+    desc: "Tâches courtes à très faible latence : routage, étiquetage, pré-filtrage.",
+    meta: { Rôle: 'Réflexe', Latence: '0.3 s', Coût: '$' } },
+  { id: 'fable',    label: 'Fable 5',    cluster: 'brain', val: 1.5,
+    desc: "Écriture longue et rédaction éditoriale pour les contenus publiés.",
+    meta: { Rôle: 'Rédaction', Latence: '1.4 s', Coût: '$$' } },
+  { id: 'gemini',   label: 'Gemini',     cluster: 'brain', val: 1.6,
+    desc: "Analyse multimodale : captures d'écran, PDF scannés, vidéos produit.",
+    meta: { Rôle: 'Multimodal', Latence: '1.1 s', Coût: '$$' } },
+  { id: 'deepseek', label: 'DeepSeek',   cluster: 'brain', val: 1.7,
+    desc: "Génération et revue de code, exécution des tâches d'auto-upgrade.",
+    meta: { Rôle: 'Code', Latence: '0.9 s', Coût: '$' } },
+  { id: 'qwen',     label: 'Qwen',       cluster: 'brain', val: 1.4,
+    desc: "Modèle local de repli : fonctionne hors-ligne quand les APIs sont indisponibles.",
+    meta: { Rôle: 'Local', Latence: '0.4 s', Coût: '—' } },
+  { id: 'llama',    label: 'Llama',      cluster: 'brain', val: 1.3,
+    desc: "Second modèle local, spécialisé sur les documents internes non exposés.",
+    meta: { Rôle: 'Local', Latence: '0.5 s', Coût: '—' } },
+  { id: 'mistral',  label: 'Mistral',    cluster: 'brain', val: 1.3,
+    desc: "Traitement francophone et résumés réglementaires hébergés en Europe.",
+    meta: { Rôle: 'FR / EU', Latence: '0.6 s', Coût: '$' } },
+  { id: 'grok',     label: 'Grok',       cluster: 'brain', val: 1.2,
+    desc: "Veille temps réel adossée au flux social.",
+    meta: { Rôle: 'Veille', Latence: '0.8 s', Coût: '$$' } },
+  { id: 'kimi',     label: 'Kimi',       cluster: 'brain', val: 1.2,
+    desc: "Fenêtre de contexte très large pour l'ingestion de corpus entiers.",
+    meta: { Rôle: 'Contexte', Latence: '1.6 s', Coût: '$' } },
+
+  // ---- capacités / outils -------------------------------------------------
+  { id: 'gmail',    label: 'Gmail',        cluster: 'tool', val: 1.8,
+    desc: "Lecture, tri Kanban et rédaction assistée des messages entrants.",
+    meta: { Appels: '4 812', Quota: '61 %', Santé: 'OK' } },
+  { id: 'drive',    label: 'Google Drive', cluster: 'tool', val: 1.6,
+    desc: "Indexation documentaire et extraction de transcripts vers la mémoire.",
+    meta: { Appels: '1 204', Quota: '22 %', Santé: 'OK' } },
+  { id: 'gdocs',    label: 'Google Docs',  cluster: 'tool', val: 1.3,
+    desc: "Rédaction collaborative des livrables et comptes-rendus.",
+    meta: { Appels: '486', Quota: '8 %', Santé: 'OK' } },
+  { id: 'sheets',   label: 'Sheets',       cluster: 'tool', val: 1.4,
+    desc: "Tableaux de pilotage, rapprochements et exports comptables.",
+    meta: { Appels: '652', Quota: '9 %', Santé: 'OK' } },
+  { id: 'notion',   label: 'Notion',       cluster: 'tool', val: 1.4,
+    desc: "Base de connaissances : specs, comptes-rendus, suivi des décisions.",
+    meta: { Appels: '873', Quota: '14 %', Santé: 'OK' } },
+  { id: 'airtable', label: 'Airtable',     cluster: 'tool', val: 1.3,
+    desc: "Bases structurées : pipeline commercial et suivi des livrables.",
+    meta: { Appels: '344', Quota: '6 %', Santé: 'OK' } },
+  { id: 'clickup',  label: 'ClickUp',      cluster: 'tool', val: 1.2,
+    desc: "Tâches et sprints : JARVIS y pousse les actions issues des réunions.",
+    meta: { Appels: '291', Quota: '5 %', Santé: 'OK' } },
+  { id: 'github',   label: 'GitHub',       cluster: 'tool', val: 1.5,
+    desc: "Dépôts, PR et CI : source des auto-upgrades appliqués par System Master.",
+    meta: { Appels: '1 038', Quota: '17 %', Santé: 'OK' } },
+  { id: 'hf',       label: 'Hugging Face', cluster: 'tool', val: 1.3,
+    desc: "Poids et inférences des modèles locaux (Qwen, Llama).",
+    meta: { Appels: '162', Quota: '3 %', Santé: 'OK' } },
+  { id: 'telegram', label: 'Telegram',     cluster: 'tool', val: 1.4,
+    desc: "Canal de commande mobile : notifications et validations à distance.",
+    meta: { Appels: '2 140', Quota: '18 %', Santé: 'OK' } },
+  { id: 'browser',  label: 'Live Browser', cluster: 'tool', val: 1.7,
+    desc: "Navigation pilotée : veille, collecte autorisée et vérification visuelle.",
+    meta: { Sessions: '37', Quota: '—', Santé: 'OK' } },
+  { id: 'websearch',label: 'Recherche web',cluster: 'tool', val: 1.5,
+    desc: "Recherche indexée avec citation des sources dans les réponses.",
+    meta: { Requêtes: '3 190', Quota: '28 %', Santé: 'OK' } },
+  { id: 'voice',    label: 'Voice Loop',   cluster: 'tool', val: 1.6,
+    desc: "Boucle vocale full-duplex : STT, barge-in et synthèse temps réel.",
+    meta: { Latence: '310 ms', Mode: 'Duplex', Santé: 'OK' } },
+
+  // ---- réseaux ------------------------------------------------------------
+  { id: 'linkedin', label: 'LinkedIn',  cluster: 'social', val: 1.5,
+    desc: "Publication programmée et détection des signaux d'intention d'achat.",
+    meta: { Posts: '48', Reach: '112k', Santé: 'OK' } },
+  { id: 'x',        label: 'X',         cluster: 'social', val: 1.3,
+    desc: "Veille concurrentielle et diffusion des annonces produit.",
+    meta: { Posts: '96', Reach: '64k', Santé: 'OK' } },
+  { id: 'youtube',  label: 'YouTube',   cluster: 'social', val: 1.4,
+    desc: "Transcription des vidéos et recyclage en contenus écrits.",
+    meta: { Vidéos: '21', Reach: '38k', Santé: 'OK' } },
+  { id: 'instagram',label: 'Instagram', cluster: 'social', val: 1.2,
+    desc: "Formats courts générés depuis les visuels produit.",
+    meta: { Posts: '73', Reach: '51k', Santé: 'OK' } },
+  { id: 'tiktok',   label: 'TikTok',    cluster: 'social', val: 1.2,
+    desc: "Découpage automatique des rushes en séquences verticales.",
+    meta: { Posts: '34', Reach: '19k', Santé: 'OK' } },
+  { id: 'facebook', label: 'Facebook',  cluster: 'social', val: 1.1,
+    desc: "Relais des annonces et gestion des messages entrants de la page.",
+    meta: { Posts: '22', Reach: '7k', Santé: 'OK' } },
+
+  // ---- finance ------------------------------------------------------------
+  { id: 'stripe',  label: 'Stripe',      cluster: 'finance', val: 1.9,
+    desc: "Encaissements, abonnements et calcul du MRR consolidé.",
+    meta: { MRR: '18 420 €', Churn: '2,1 %', Santé: 'OK' } },
+  { id: 'paypal',  label: 'PayPal',      cluster: 'finance', val: 1.4,
+    desc: "Second moyen d'encaissement, surtout hors zone euro.",
+    meta: { Volume: '4 120 €', Litiges: '1', Santé: 'OK' } },
+  { id: 'qonto',   label: 'Qonto',       cluster: 'finance', val: 1.5,
+    desc: "Trésorerie temps réel et rapprochement des écritures bancaires.",
+    meta: { Solde: '64 900 €', Flux: '+7,4 %', Santé: 'OK' } },
+  { id: 'invoice', label: 'Factures & devis', cluster: 'finance', val: 1.6,
+    desc: "Génération des PDF, relances et suivi des impayés.",
+    meta: { Émises: '134', Impayées: '6', Santé: 'WARN' } },
+
+  // ---- agents métiers -----------------------------------------------------
+  { id: 'cfo',    label: 'Agent CFO',     cluster: 'agent', val: 2.1,
+    desc: "Pilotage financier : prévisionnel, marge, alertes de trésorerie.",
+    meta: { Cerveau: 'Opus 5', Tâches: '12/j', Santé: 'OK' } },
+  { id: 'cmo',    label: 'Agent CMO',     cluster: 'agent', val: 2.0,
+    desc: "Acquisition : calendrier éditorial, campagnes et reporting d'audience.",
+    meta: { Cerveau: 'Fable 5', Tâches: '19/j', Santé: 'OK' } },
+  { id: 'ops',    label: 'Agent OPS',     cluster: 'agent', val: 1.9,
+    desc: "Back-office : mails, documents, préparation des dossiers clients.",
+    meta: { Cerveau: 'Sonnet 5', Tâches: '41/j', Santé: 'OK' } },
+  { id: 'master', label: 'System Master', cluster: 'agent', val: 2.2,
+    desc: "Auto-upgrade : surveille les erreurs, propose et applique les correctifs.",
+    meta: { Cerveau: 'DeepSeek', Tâches: '5/j', Santé: 'OK' } },
+  { id: 'hermes', label: 'HERMÈS',        cluster: 'agent', val: 1.8,
+    desc: "Agent de liaison : porte les messages entre agents et arbitre les priorités.",
+    meta: { Cerveau: 'Haiku 4.5', Tâches: '64/j', Santé: 'OK' } },
+];
+
+/** flux : 1 = faible, 3 = intense (pilote la densité de particules) */
+export const LINKS = [
+  // noyau -> hubs
+  ['jarvis', 'hub_brain', 3], ['jarvis', 'hub_tool', 3], ['jarvis', 'hub_agent', 3],
+  ['jarvis', 'hub_social', 2], ['jarvis', 'hub_finance', 2],
+  ['jarvis', 'opus', 3], ['jarvis', 'voice', 3], ['jarvis', 'hermes', 3],
+
+  // hub cerveaux
+  ['hub_brain', 'opus', 3], ['hub_brain', 'sonnet5', 3], ['hub_brain', 'sonnet45', 1],
+  ['hub_brain', 'haiku', 2], ['hub_brain', 'fable', 2], ['hub_brain', 'gemini', 2],
+  ['hub_brain', 'deepseek', 2], ['hub_brain', 'qwen', 1], ['hub_brain', 'llama', 1],
+  ['hub_brain', 'mistral', 1], ['hub_brain', 'grok', 1], ['hub_brain', 'kimi', 1],
+
+  // hub capacités
+  ['hub_tool', 'gmail', 3], ['hub_tool', 'drive', 2], ['hub_tool', 'gdocs', 1],
+  ['hub_tool', 'sheets', 2], ['hub_tool', 'notion', 2], ['hub_tool', 'airtable', 1],
+  ['hub_tool', 'clickup', 1], ['hub_tool', 'github', 2], ['hub_tool', 'hf', 1],
+  ['hub_tool', 'telegram', 2], ['hub_tool', 'browser', 2], ['hub_tool', 'websearch', 2],
+  ['hub_tool', 'voice', 2],
+
+  // hub réseaux
+  ['hub_social', 'linkedin', 3], ['hub_social', 'x', 2], ['hub_social', 'youtube', 2],
+  ['hub_social', 'instagram', 2], ['hub_social', 'tiktok', 1], ['hub_social', 'facebook', 1],
+
+  // hub finance
+  ['hub_finance', 'stripe', 3], ['hub_finance', 'paypal', 2],
+  ['hub_finance', 'qonto', 2], ['hub_finance', 'invoice', 3],
+
+  // hub agents
+  ['hub_agent', 'cfo', 3], ['hub_agent', 'cmo', 3], ['hub_agent', 'ops', 3],
+  ['hub_agent', 'master', 2], ['hub_agent', 'hermes', 3],
+
+  // agents -> capacités et cerveaux (les arêtes qui traversent le graphe)
+  ['cfo', 'stripe', 3], ['cfo', 'qonto', 2], ['cfo', 'invoice', 3], ['cfo', 'sheets', 2], ['cfo', 'opus', 2],
+  ['cmo', 'linkedin', 3], ['cmo', 'youtube', 2], ['cmo', 'instagram', 2], ['cmo', 'fable', 2], ['cmo', 'notion', 1],
+  ['ops', 'gmail', 3], ['ops', 'drive', 2], ['ops', 'gdocs', 2], ['ops', 'clickup', 2], ['ops', 'sonnet5', 3],
+  ['master', 'github', 3], ['master', 'deepseek', 3], ['master', 'browser', 2], ['master', 'telegram', 1],
+  ['hermes', 'telegram', 3], ['hermes', 'haiku', 3], ['hermes', 'gmail', 1],
+
+  // affinités transverses
+  ['gemini', 'drive', 2], ['gemini', 'youtube', 1], ['grok', 'x', 2],
+  ['qwen', 'hf', 2], ['llama', 'hf', 2], ['voice', 'qwen', 2],
+  ['stripe', 'invoice', 2], ['paypal', 'invoice', 1], ['qonto', 'sheets', 1],
+  ['websearch', 'browser', 2], ['browser', 'linkedin', 1], ['airtable', 'sheets', 1],
+  ['tiktok', 'youtube', 1], ['facebook', 'instagram', 1], ['kimi', 'drive', 1],
+];
+
+export const METRICS = [
+  { key: 'MRR',             value: 18420, max: 25000, unit: ' €', css: '#34d399' },
+  { key: 'Trésorerie',      value: 64900, max: 90000, unit: ' €', css: '#22d3ee' },
+  { key: 'Charge processeur', value: 63,  max: 100,   unit: ' %', css: '#c084fc' },
+  { key: 'Quota API',       value: 41,    max: 100,   unit: ' %', css: '#fbbf24' },
+  { key: 'Mémoire',         value: 236,   max: 512,   unit: ' Mo', css: '#60a5fa' },
+  { key: 'Impayés',         value: 6,     max: 20,    unit: '',   css: '#fb7185' },
+];
+
+export const LOG_SAMPLES = [
+  ['inf', 'ops', 'triage boîte de réception — 14 messages classés'],
+  ['ok',  'cfo', 'rapprochement Qonto ↔ Stripe terminé (0 écart)'],
+  ['inf', 'cmo', 'brouillon LinkedIn généré depuis transcript YouTube'],
+  ['wrn', 'invoice', 'relance J+15 : 2 factures toujours impayées'],
+  ['ok',  'master', 'auto-upgrade appliqué — spatial_ux.js patché'],
+  ['inf', 'voice', 'barge-in détecté — synthèse interrompue à 1,2 s'],
+  ['ok',  'browser', 'session de veille close — 9 pages indexées'],
+  ['inf', 'opus', 'plan en 6 étapes produit pour "clôture mensuelle"'],
+  ['err', 'gmail', 'quota temporairement dépassé — repli sur cache local'],
+  ['ok',  'sonnet5', 'batch de 42 résumés traité en 11,4 s'],
+  ['inf', 'drive', 'transcript extrait : reunion_produit_2026_09.mp4'],
+  ['ok',  'stripe', 'webhook payment_succeeded — MRR +129 €'],
+  ['inf', 'hermes', 'priorité relevée : dossier client #4412 → CFO'],
+  ['ok',  'github', 'PR #218 fusionnée — 3 fichiers, CI verte'],
+  ['inf', 'websearch', '7 sources citées pour "TVA intracommunautaire"'],
+  ['wrn', 'qwen', 'bascule locale : latence API amont > 4 s'],
+  ['ok',  'haiku', 'routage de 260 intentions en 0,9 s'],
+  ['inf', 'instagram', '3 visuels programmés pour jeudi 09:00'],
+];

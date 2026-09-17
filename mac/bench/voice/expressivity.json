@@ -1,0 +1,78 @@
+{
+  "voice": "fr_FR-tom-medium",
+  "phrase": "Bonsoir Jérôme. Tous les systèmes sont opérationnels. Que puis-je faire pour vous ?",
+  "results": [
+    {
+      "profile": "defaut_piper",
+      "length_scale": 1.0,
+      "noise_scale": 0.667,
+      "noise_w_scale": 0.8,
+      "duration_s": 5.45,
+      "gen_ms": 4513.0,
+      "f0_median_hz": 131.6,
+      "f0_spread_semitones": 7.82,
+      "rhythm_std_s": 0.1529,
+      "sample": "bench/voice/samples_expressivity/defaut_piper.wav"
+    },
+    {
+      "profile": "jarvis_actuel",
+      "length_scale": 1.0,
+      "noise_scale": 0.667,
+      "noise_w_scale": 0.8,
+      "duration_s": 5.36,
+      "gen_ms": 4219.0,
+      "f0_median_hz": 131.6,
+      "f0_spread_semitones": 7.69,
+      "rhythm_std_s": 0.1401,
+      "sample": "bench/voice/samples_expressivity/jarvis_actuel.wav"
+    },
+    {
+      "profile": "pose",
+      "length_scale": 1.06,
+      "noise_scale": 0.667,
+      "noise_w_scale": 0.9,
+      "duration_s": 5.56,
+      "gen_ms": 3650.0,
+      "f0_median_hz": 135.7,
+      "f0_spread_semitones": 8.51,
+      "rhythm_std_s": 0.154,
+      "sample": "bench/voice/samples_expressivity/pose.wav"
+    },
+    {
+      "profile": "naturel",
+      "length_scale": 0.98,
+      "noise_scale": 0.72,
+      "noise_w_scale": 1.0,
+      "duration_s": 5.28,
+      "gen_ms": 3940.0,
+      "f0_median_hz": 139.8,
+      "f0_spread_semitones": 7.83,
+      "rhythm_std_s": 0.1578,
+      "sample": "bench/voice/samples_expressivity/naturel.wav"
+    },
+    {
+      "profile": "expressif",
+      "length_scale": 0.95,
+      "noise_scale": 0.8,
+      "noise_w_scale": 1.15,
+      "duration_s": 5.53,
+      "gen_ms": 4282.0,
+      "f0_median_hz": 134.2,
+      "f0_spread_semitones": 8.36,
+      "rhythm_std_s": 0.1489,
+      "sample": "bench/voice/samples_expressivity/expressif.wav"
+    },
+    {
+      "profile": "tres_expressif",
+      "length_scale": 0.92,
+      "noise_scale": 0.9,
+      "noise_w_scale": 1.35,
+      "duration_s": 5.18,
+      "gen_ms": 595.0,
+      "f0_median_hz": 139.3,
+      "f0_spread_semitones": 7.58,
+      "rhythm_std_s": 0.1483,
+      "sample": "bench/voice/samples_expressivity/tres_expressif.wav"
+    }
+  ]
+}

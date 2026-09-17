@@ -1,0 +1,41 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-static",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8791",
+        "--directory",
+        "ui"
+      ],
+      "port": 8791
+    },
+    {
+      "name": "jarvis",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "jarvis.py"
+      ],
+      "port": 8765
+    },
+    {
+      "name": "jarvis-demo-web",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "demo_web/app.py"
+      ],
+      "port": 8100
+    },
+    {
+      "name": "demo-web",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "demo_web/app.py"
+      ],
+      "port": 8100
+    }
+  ]
+}

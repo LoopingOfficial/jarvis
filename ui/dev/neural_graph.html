@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>JARVIS V5 · Neural Graph & Command Center</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%2322d3ee' stroke-width='2'/><circle cx='16' cy='16' r='5' fill='%2322d3ee'/></svg>" />
+<script type="importmap">
+{ "imports": { "three": "../vendor/three.module.js", "three/addons/": "../vendor/" } }
+</script>
+<style>
+:root{
+  --bg:#050811; --grid:rgba(34,211,238,.055);
+  --cyan:#22d3ee; --emerald:#34d399; --violet:#a78bfa; --amber:#fbbf24; --rose:#fb7185;
+  --ink:#dbeafe; --ink-dim:#7c93b5; --ink-faint:#4d617d;
+  --panel:rgba(8,14,26,.62); --panel-line:rgba(34,211,238,.16);
+  --mono:"JetBrains Mono","Fira Code","SFMono-Regular",ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--mono);font-size:12px;letter-spacing:.02em;
+  overflow:hidden;-webkit-font-smoothing:antialiased;
+}
+/* ---------- fond : grille + vignette ---------- */
+#backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 0%,rgba(34,211,238,.07),transparent 60%),
+    radial-gradient(90% 70% at 50% 120%,rgba(167,139,250,.06),transparent 60%),
+    linear-gradient(transparent 95%,var(--grid) 95%) 0 0/100% 34px,
+    linear-gradient(90deg,transparent 95%,var(--grid) 95%) 0 0/34px 100%,
+    var(--bg);
+}
+#backdrop::after{content:"";position:absolute;inset:0;
+  background:radial-gradient(100% 100% at 50% 50%,transparent 45%,rgba(2,4,9,.82) 100%)}
+#stage{position:fixed;inset:0;z-index:1}
+#stage canvas{display:block;width:100%;height:100%}
+
+/* ---------- chassis HUD ---------- */
+.hud{position:fixed;inset:0;z-index:2;pointer-events:none;
+  display:grid;grid-template-columns:270px 1fr 310px;grid-template-rows:auto 1fr auto;
+  gap:14px;padding:14px}
+.hud > *{pointer-events:auto}
+.panel{
+  background:var(--panel);border:1px solid var(--panel-line);border-radius:12px;
+  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+  box-shadow:0 18px 50px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.04);
+}
+.panel-h{display:flex;align-items:center;gap:8px;padding:9px 12px;
+  border-bottom:1px solid rgba(34,211,238,.12);
+  font-size:10px;letter-spacing:.22em;color:var(--ink-dim);text-transform:uppercase}
+.panel-h .tag{margin-left:auto;color:var(--cyan);letter-spacing:.1em;font-size:9px}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--emerald);flex:none;
+  box-shadow:0 0 10px var(--emerald);animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
+
+/* ---------- barre superieure ---------- */
+#topbar{grid-column:1/-1;display:flex;align-items:center;gap:16px;padding:10px 16px}
+.brand{display:flex;align-items:center;gap:11px}
+.brand svg{width:30px;height:30px}
+.brand b{font-size:14px;letter-spacing:.34em;color:#eaf6ff}
+.brand small{display:block;font-size:9px;letter-spacing:.24em;color:var(--ink-faint)}
+.tbsep{width:1px;height:26px;background:rgba(34,211,238,.16)}
+.stat{display:flex;flex-direction:column;gap:2px;min-width:74px}
+.stat .k{font-size:9px;letter-spacing:.2em;color:var(--ink-faint)}
+.stat .v{font-size:13px;color:var(--cyan);text-shadow:0 0 14px rgba(34,211,238,.45)}
+.stat .v.em{color:var(--emerald);text-shadow:0 0 14px rgba(52,211,153,.4)}
+.stat .v.am{color:var(--amber);text-shadow:0 0 14px rgba(251,191,36,.35)}
+#search{margin-left:auto;display:flex;align-items:center;gap:8px;
+  background:rgba(3,7,15,.7);border:1px solid rgba(34,211,238,.2);border-radius:8px;padding:6px 10px}
+#search input{background:none;border:0;outline:none;color:var(--ink);font:inherit;width:190px}
+#search input::placeholder{color:var(--ink-faint)}
+
+/* ---------- colonnes ---------- */
+#left,#right{display:flex;flex-direction:column;gap:14px;min-height:0}
+.scroll{overflow:auto;scrollbar-width:thin;scrollbar-color:rgba(34,211,238,.3) transparent}
+.scroll::-webkit-scrollbar{width:6px}
+.scroll::-webkit-scrollbar-thumb{background:rgba(34,211,238,.28);border-radius:3px}
+
+/* clusters */
+.cl{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;
+  border-left:2px solid transparent;transition:background .15s}
+.cl:hover{background:rgba(34,211,238,.06)}
+.cl.off{opacity:.34}
+.cl .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.cl .nm{flex:1;font-size:11px}
+.cl .ct{font-size:10px;color:var(--ink-faint)}
+
+/* radar */
+#radarWrap{padding:10px;display:flex;justify-content:center}
+#radar{width:186px;height:186px}
+
+/* metriques */
+#metrics{padding:8px 12px}
+.metric{margin-bottom:10px}
+.metric .row{display:flex;justify-content:space-between;font-size:10px;color:var(--ink-dim);margin-bottom:5px}
+.metric .row b{color:var(--ink)}
+.bar{height:3px;border-radius:2px;background:rgba(34,211,238,.1);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:2px;transition:width .5s ease}
+#spark{width:100%;height:44px;display:block}
+
+/* detail noeud */
+#detail{flex:none}
+#detailBody{padding:12px}
+#detailBody h2{margin:0 0 3px;font-size:15px;letter-spacing:.06em}
+#detailBody .sub{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:10px}
+#detailBody p{margin:0 0 12px;font-size:11px;line-height:1.6;color:var(--ink-dim)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:11px;margin-bottom:12px}
+.kv .k{color:var(--ink-faint)}
+.kv .v{text-align:right}
+.links{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:10px;padding:3px 8px;border-radius:999px;cursor:pointer;
+  border:1px solid rgba(34,211,238,.25);color:var(--ink-dim);background:rgba(34,211,238,.06)}
+.chip:hover{color:#eaf6ff;border-color:var(--cyan)}
+.empty{padding:16px 12px;font-size:11px;color:var(--ink-faint);line-height:1.7}
+
+/* logs */
+#logs{flex:1;min-height:0;display:flex;flex-direction:column}
+#logList{flex:1;min-height:0;overflow:auto;padding:8px 12px;font-size:10.5px;line-height:1.65}
+.log{display:flex;gap:8px;opacity:0;animation:fadein .35s forwards}
+@keyframes fadein{to{opacity:1}}
+.log time{color:var(--ink-faint);flex:none}
+.log .lv{flex:none;width:34px;text-align:center;border-radius:3px;font-size:9px;padding:0 3px}
+.lv.ok{color:var(--emerald);background:rgba(52,211,153,.1)}
+.lv.inf{color:var(--cyan);background:rgba(34,211,238,.1)}
+.lv.wrn{color:var(--amber);background:rgba(251,191,36,.1)}
+.lv.err{color:var(--rose);background:rgba(251,113,133,.12)}
+.log .msg{color:var(--ink-dim);word-break:break-word}
+
+/* bas */
+#bottom{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:8px 14px;
+  font-size:10px;letter-spacing:.16em;color:var(--ink-faint);text-transform:uppercase}
+#bottom .hint{margin-left:auto;text-transform:none;letter-spacing:.02em}
+kbd{border:1px solid rgba(34,211,238,.22);border-radius:4px;padding:1px 5px;color:var(--ink-dim)}
+#center{display:flex;align-items:flex-end;justify-content:center;pointer-events:none}
+#focusTag{pointer-events:none;opacity:0;transition:opacity .3s;padding:6px 14px;border-radius:999px;
+  background:rgba(3,7,15,.66);border:1px solid rgba(34,211,238,.22);font-size:10px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--cyan);backdrop-filter:blur(10px)}
+#focusTag.on{opacity:1}
+
+/* boot */
+#boot{position:fixed;inset:0;z-index:5;display:grid;place-items:center;background:var(--bg);
+  transition:opacity .6s;font-size:11px;letter-spacing:.3em;color:var(--cyan)}
+#boot.gone{opacity:0;pointer-events:none}
+
+@media (max-width:1180px){
+  .hud{grid-template-columns:1fr;grid-template-rows:auto 1fr auto}
+  #left,#right{display:none}
+}
+</style>
+</head>
+<body>
+<div id="backdrop"></div>
+<div id="stage"></div>
+
+<div class="hud">
+  <!-- ===================== TOP BAR ===================== -->
+  <header id="topbar" class="panel">
+    <div class="brand">
+      <svg viewBox="0 0 32 32">
+        <circle cx="16" cy="16" r="14" fill="none" stroke="rgba(34,211,238,.3)" stroke-width="1"/>
+        <circle cx="16" cy="16" r="10" fill="none" stroke="rgba(34,211,238,.6)" stroke-width="1" stroke-dasharray="3 5">
+          <animateTransform attributeName="transform" type="rotate" from="0 16 16" to="360 16 16" dur="14s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="16" cy="16" r="2.6" fill="#22d3ee"/>
+      </svg>
+      <div><b>JARVIS</b><small>NEURAL GRAPH V5</small></div>
+    </div>
+    <div class="tbsep"></div>
+    <div class="stat"><span class="k">NOEUDS</span><span class="v" id="sNodes">—</span></div>
+    <div class="stat"><span class="k">LIENS</span><span class="v" id="sLinks">—</span></div>
+    <div class="stat"><span class="k">MRR</span><span class="v em" id="sMrr">—</span></div>
+    <div class="stat"><span class="k">REQ/MIN</span><span class="v am" id="sReq">—</span></div>
+    <div class="stat"><span class="k">FPS</span><span class="v" id="sFps">—</span></div>
+    <div id="search">
+      <span class="pulse"></span>
+      <input id="q" placeholder="Filtrer un noeud…" autocomplete="off" spellcheck="false" />
+    </div>
+  </header>
+
+  <!-- ===================== COLONNE GAUCHE ===================== -->
+  <aside id="left">
+    <section class="panel">
+      <div class="panel-h"><span class="pulse"></span>Clusters<span class="tag" id="clTag">—</span></div>
+      <div id="clusters"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-h">Analyse d'état<span class="tag">LIVE</span></div>
+      <div id="radarWrap"><canvas id="radar" width="372" height="372"></canvas></div>
+    </section>
+    <section class="panel scroll" style="flex:1;min-height:0">
+      <div class="panel-h">Métriques</div>
+      <div id="metrics"></div>
+    </section>
+  </aside>
+
+  <div id="center"><div id="focusTag"></div></div>
+
+  <!-- ===================== COLONNE DROITE ===================== -->
+  <aside id="right">
+    <section class="panel" id="detail">
+      <div class="panel-h">Inspecteur<span class="tag" id="dTag">—</span></div>
+      <div id="detailBody" class="empty">
+        Aucun noeud sélectionné.<br>Cliquez une sphère pour focaliser la caméra
+        et révéler ses connexions.
+      </div>
+    </section>
+    <section class="panel" id="logs">
+      <div class="panel-h"><span class="pulse"></span>Flux d'exécution<span class="tag" id="sseTag">SIM</span></div>
+      <div id="logList" class="scroll"></div>
+    </section>
+  </aside>
+
+  <!-- ===================== BAS ===================== -->
+  <footer id="bottom" class="panel">
+    <span class="pulse"></span><span>SYSTÈME NOMINAL</span>
+    <span class="tbsep"></span><span id="clock">--:--:--</span>
+    <span class="hint">
+      <kbd>clic</kbd> focus · <kbd>glisser un nœud</kbd> déplacer · <kbd>glisser le fond</kbd> orbite ·
+      <kbd>molette</kbd> zoom · <kbd>Échap</kbd> vue globale · <kbd>L</kbd> labels
+    </span>
+  </footer>
+</div>
+
+<div id="boot">INITIALISATION DU GRAPHE NEURONAL…</div>
+
+<script type="module" src="./neural_graph.js?v=JARVIS_NEURAL_GRAPH_V5_1"></script>
+</body>
+</html>

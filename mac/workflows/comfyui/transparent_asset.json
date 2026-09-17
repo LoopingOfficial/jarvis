@@ -1,0 +1,4 @@
+{
+  "1": {"class_type": "LoadImage", "inputs": {"image": "{{SOURCE}}"}},
+  "2": {"class_type": "SaveImage", "inputs": {"filename_prefix": "jarvis_alpha", "images": ["1", 0]}}
+}
