@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from .config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -684,6 +684,48 @@ class Database:
               metadata TEXT NOT NULL DEFAULT '{}', created_at REAL
             );
             CREATE INDEX IF NOT EXISTS idx_background_task_artifacts ON background_task_artifacts(task_id, id);
+            """)
+
+        # Migration 14 : tables de Mission Control — la supervision persistée
+        # (missions opérateur + timeline rejouable). Tables additives, jamais
+        # destructives : la corbeille de surveillance d'un opérateur humain ne
+        # doit pas être effacée par une mise à jour de JARVIS.
+        if from_version < 14:
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS missions (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL DEFAULT '',
+              kind TEXT NOT NULL DEFAULT 'chat',
+              agent TEXT NOT NULL DEFAULT 'jarvis',
+              status TEXT NOT NULL DEFAULT 'RUNNING',
+              conversation_id TEXT NOT NULL DEFAULT '',
+              created_at REAL, started_at REAL, completed_at REAL,
+              duration REAL NOT NULL DEFAULT 0,
+              tools TEXT NOT NULL DEFAULT '[]',
+              tool_calls INTEGER NOT NULL DEFAULT 0,
+              steps_total INTEGER NOT NULL DEFAULT 0,
+              steps_done INTEGER NOT NULL DEFAULT 0,
+              steps TEXT NOT NULL DEFAULT '[]',
+              files TEXT NOT NULL DEFAULT '[]',
+              error TEXT NOT NULL DEFAULT '',
+              result TEXT NOT NULL DEFAULT '',
+              failed_step TEXT NOT NULL DEFAULT '',
+              failed_tool TEXT NOT NULL DEFAULT '',
+              note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status, created_at);
+            CREATE TABLE IF NOT EXISTS mission_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              mission_id TEXT NOT NULL,
+              ts REAL, offset_ms INTEGER NOT NULL DEFAULT 0,
+              kind TEXT NOT NULL DEFAULT 'log',
+              label TEXT NOT NULL DEFAULT '',
+              state TEXT NOT NULL DEFAULT '',
+              tool TEXT NOT NULL DEFAULT '',
+              ok INTEGER, duration_ms INTEGER NOT NULL DEFAULT 0,
+              detail TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_mission_events ON mission_events(mission_id, id);
             """)
 
     # -- sauvegarde ---------------------------------------------------------

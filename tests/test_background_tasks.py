@@ -111,17 +111,21 @@ class EngineSchedulingTests(unittest.TestCase):
         self.addCleanup(cleanup_tree, self.tmp)
 
     def test_priority_ordering_of_starts(self) -> None:
-        core, engine = _engine(self.tmp, max_background=4)
+        core, engine = _engine(self.tmp, max_background=1)
         recorder = EventRecorder(core, "task.started")
         low = engine.create_task("Basse", task_type="GENERIC_AGENT", priority="LOW",
+                                 auto_submit=False,
                                  metadata={"plan": [{"shell": shell_sleep(900)}]})
         urgent = engine.create_task("Urgente", task_type="GENERIC_AGENT", priority="URGENT",
+                                    auto_submit=False,
                                     metadata={"plan": [{"shell": shell_sleep(900)}]})
-        wait_until(lambda: engine.get(low["task_id"])["status"] == RUNNING, timeout=20)
+        # La décision d'ordonnancement est prise par _tick() sur la file COMPLÈTE :
+        # avec un seul worker, la mission URGENT part la première, l'autre reste en attente.
+        engine._tick()
         wait_until(lambda: engine.get(urgent["task_id"])["status"] == RUNNING, timeout=20)
+        self.assertEqual(engine.get(low["task_id"])["status"], QUEUED)
         self.assertEqual(recorder.first("task.started"), urgent["task_id"])
-        wait_until(lambda: engine.get(low["task_id"])["status"] == COMPLETED, timeout=20)
-        wait_until(lambda: engine.get(urgent["task_id"])["status"] == COMPLETED, timeout=20)
+        engine.cancel(urgent["task_id"])
         engine.shutdown()
 
     def test_dependencies_block_then_release(self) -> None:

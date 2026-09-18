@@ -91,12 +91,15 @@ class EventRecorder:
 
     def __init__(self, core: Any, *event_types: str) -> None:
         self.records: dict[str, list[dict[str, Any]]] = {t: [] for t in event_types}
+        self.records_events: list[dict[str, Any]] = []
         for t in event_types:
             core.events.on(t, self._make_record(t))
 
     def _make_record(self, event_type: str) -> Callable[[dict], None]:
         def record(event: dict[str, Any]) -> None:
-            self.records[event_type].append(dict(event.get("data") or {}))
+            data = dict(event.get("data") or {})
+            self.records[event_type].append(data)
+            self.records_events.append({"type": event_type, "data": data})
         return record
 
     def count(self, event_type: str) -> int:
