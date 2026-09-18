@@ -6,11 +6,12 @@ import time
 import unittest
 
 from jarvis.background_tasks import (BLOCKED, CANCELLED, COMPLETED, FAILED,
-                                     PAUSED, QUEUED, RUNNING, WAITING_RESOURCE,
-                                     WAITING_USER, BackgroundTaskManager)
+                                     PAUSED, QUEUED, READY_TO_MERGE, RUNNING,
+                                     WAITING_RESOURCE, WAITING_USER,
+                                     BackgroundTaskManager)
 
-from .background_support import (EventRecorder, make_core, new_temp_dir,
-                                 cleanup_tree, shell_sleep, wait_until)
+from .background_support import (EventRecorder, make_core, make_git_repo,
+                                 new_temp_dir, cleanup_tree, shell_sleep, wait_until)
 
 
 def _engine(tmp_path, **kwargs):
@@ -54,6 +55,32 @@ class EngineBasicsTests(unittest.TestCase):
         self.assertTrue(ok, engine.get(task_id))
         self.assertEqual(out.read_text(encoding="utf-8").strip(), "bonjour")
         self.assertTrue(engine.logs(task_id))
+
+    def test_code_plan_shell_runs_through_secure_runner(self) -> None:
+        # Le shell d'un plan CODE (et la commande de test) doit passer par le
+        # SecureToolRunner (terminal.run) : même politique d'exécution, mêmes
+        # permissions, même redaction que tout autre outil. Un subprocess brut
+        # contournerait ces gardes — régression interdite.
+        repo = make_git_repo(self.tmp / "repo")
+        core, engine = _engine(self.tmp)
+        original_run = core.runner.run
+        recorded: list[str] = []
+
+        def spy(tool_id: str, args: dict, **kwargs):
+            recorded.append(str(tool_id))
+            return original_run(tool_id, args, **kwargs)
+
+        core.runner.run = spy
+        engine.create_task(
+            "Mission CODE", task_type="CODE", workspace=str(repo),
+            metadata={"plan": [{"shell": "echo construit > code.txt"}],
+                      "test_command": "echo tests-ok > tests.txt"},
+        )
+        task_id = engine.list(limit=1)[0]["task_id"]
+        ok = wait_until(lambda: engine.get(task_id)["status"] == READY_TO_MERGE, timeout=30)
+        self.assertTrue(ok, engine.get(task_id))
+        self.assertEqual(recorded.count("terminal.run"), 2, recorded)
+        engine.shutdown()
 
     def test_failed_tool_step_fails_the_mission(self) -> None:
         core, engine = _engine(self.tmp)

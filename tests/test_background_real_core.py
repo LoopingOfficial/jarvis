@@ -205,6 +205,39 @@ class RealCoreRestartRecoveryTests(RealCoreBackgroundTests):
         self.assertEqual(self.engine.get(done)["status"], COMPLETED)
         self.assertTrue((self.tmp / "q.txt").exists())
 
+    def test_restart_waiting_user_resume_restarts_instead_of_stuck_running(self) -> None:
+        # Mission en attente d'une réponse quand JARVIS tombe : son état
+        # WAITING_USER survit en base, mais son worker a disparu. Reprendre
+        # cette mission ne doit PAS créer un fantôme RUNNING sans exécutant :
+        # elle doit être relancée (et re-demander si nécessaire).
+        waiting_id = self._mission("Attente post-crash", task_type="GENERIC_AGENT",
+                                   auto_submit=False,
+                                   metadata={"plan": [
+                                       {"ask_user": "On continue ?"},
+                                       {"shell": f"echo ok > {self.tmp / 'ok.txt'}"},
+                                   ]})["task_id"]
+        self.assertEqual(self.engine.get(waiting_id)["status"], QUEUED)
+        self.engine.store.set(waiting_id, status=WAITING_USER, note="En attente (crash simulé).")
+
+        # Redémarrage : nouvel engine sur la même base, aucun worker vivant.
+        self._stop_core(self.core)
+        self.core.db.close()
+        self.core = JarvisCore(db_path=str(self.tmp / "real_core.db"))
+        self.addCleanup(self._stop_core, self.core)
+        self.engine = self.core.background
+        self.core.start_background()
+
+        self.assertEqual(self.engine.get(waiting_id)["status"], WAITING_USER)
+        # La reprise n'a pas le droit de rester piégée en RUNNING ; l'entrée
+        # fournie à un worker mort est explicitement ignorée (relance propre).
+        self.engine.resume_task(waiting_id, user_input="pré-crash")
+        self.assertTrue(wait_until(lambda: self.engine.get(waiting_id)["status"] == WAITING_USER,
+                                   timeout=30), "mission relancée, elle re-demande")
+        # La réponse utile arrive APRÈS le redémarrage : mission terminée.
+        self.engine.resume_task(waiting_id, user_input="ok")
+        self.assertTrue(wait_until(lambda: self.engine.get(waiting_id)["status"] == COMPLETED, timeout=30))
+        self.assertTrue((self.tmp / "ok.txt").exists())
+
 
 class RealCoreApiTests(RealCoreBackgroundTests):
     def _start_server(self):

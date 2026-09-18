@@ -188,7 +188,11 @@ class ResourceScheduler:
         with self._lock:
             for name, count in wanted:
                 slot = self._slots.setdefault(name, ResourceSlot(self._limits.get(name, 1)))
-                if slot.used + count > slot.capacity:
+                # Ré-entrance : une mission qui détient déjà une part peut
+                # ré-acquérir la même ressource (ex. LLM_GPU déclaré au départ
+                # PUIS autour de chaque inférence) sans se bloquer sur elle-même.
+                held = slot.holders.get(task_id, 0)
+                if slot.used - held + count > slot.capacity:
                     return False
             for name, count in wanted:
                 slot = self._slots.setdefault(name, ResourceSlot(self._limits.get(name, 1)))
@@ -675,6 +679,16 @@ class TaskContext:
         return [t for t in self._core.registry.all() if t.enabled]
 
     # -- tools réels --------------------------------------------------------
+    def _scrub(self, text: str) -> str:
+        """Redaction best-effort des secrets avant log/erreur."""
+        try:
+            scrub = getattr(self._core, "vault", None) and getattr(self._core.vault, "scrub")
+            if scrub is not None:
+                return scrub(text) or text
+        except Exception:
+            pass
+        return text
+
     def run_tool(self, tool_id: str, arguments: dict[str, Any] | None = None,
                  *, agent: str = "jarvis", confirmed: bool = False) -> ToolResult:
         args = dict(arguments or {})
@@ -691,11 +705,11 @@ class TaskContext:
                 self.engine.events.emit("tool.denied", {"tool": tool_id, "reason": result.output,
                                                         "agent": agent, "task_id": self._task_id})
         except ToolDenied as exc:
-            result = ToolResult(False, str(exc))
-            self.engine.events.emit("tool.denied", {"tool": tool_id, "reason": str(exc),
+            result = ToolResult(False, self._scrub(str(exc)))
+            self.engine.events.emit("tool.denied", {"tool": tool_id, "reason": self._scrub(str(exc)),
                                                     "agent": agent, "task_id": self._task_id})
         except Exception as exc:
-            result = ToolResult(False, f"{tool_id}: {exc}")
+            result = ToolResult(False, f"{tool_id}: {self._scrub(str(exc))}")
         level = "info" if result.ok else "error"
         self.log(f"Outil {tool_id} : {result.output[:400]}", level=level,
                  data={"tool": tool_id, "ok": result.ok})
@@ -835,11 +849,15 @@ def _handle_code(ctx: TaskContext) -> dict[str, Any]:
         step = dict(step or {})
         shell = step.get("shell")
         if shell:
-            proc = subprocess.run(str(shell), shell=True, capture_output=True, text=True,
-                                  cwd=str(worktree_path), timeout=int(step.get("timeout") or 300))
-            output = ((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")).strip()
-            if proc.returncode != 0:
-                raise RuntimeError(f"Plan CODE, étape {index} : {output[:500]}")
+            # On passe TOUJOURS par SecureToolRunner (terminal.run) — jamais un
+            # subprocess brut : l'exécution respecte l'execution_policy, les
+            # permissions et la redaction des secrets du moteur normal.
+            result = ctx.run_tool("terminal.run", {
+                "command": str(shell), "cwd": str(worktree_path),
+                "timeout": min(int(step.get("timeout") or 300), 300)})
+            if not result.ok:
+                raise RuntimeError(f"Plan CODE, étape {index} : {(result.output or '')[:500]}")
+            output = str(result.output or "").strip()
             ctx.log(f"Plan CODE, étape {index} : {output[:200]}")
         else:
             tool_id = str(step.get("tool") or "")
@@ -854,15 +872,13 @@ def _handle_code(ctx: TaskContext) -> dict[str, Any]:
     test_command = ctx.semantics("test_command") or ctx.semantics("tests")
     if test_command:
         started = time.time()
-        try:
-            proc = subprocess.run(str(test_command), shell=True, capture_output=True, text=True,
-                                  cwd=str(worktree_path), timeout=300)
-            tests = {"ran": True, "ok": proc.returncode == 0, "command": str(test_command)[:300],
-                     "duration_ms": int((time.time() - started) * 1000),
-                     "output": ((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")).strip()[:2000]}
-        except subprocess.TimeoutExpired:
-            tests = {"ran": True, "ok": False, "command": str(test_command)[:300],
-                     "duration_ms": int((time.time() - started) * 1000), "output": "Dépassement du délai (300 s)."}
+        # Le sondage des tests passe lui aussi par SecureToolRunner : une
+        # commande de test a exactement les mêmes droits qu'une commande de plan.
+        test_result = ctx.run_tool("terminal.run", {
+            "command": str(test_command), "cwd": str(worktree_path), "timeout": 300})
+        tests = {"ran": True, "ok": test_result.ok, "command": str(test_command)[:300],
+                 "duration_ms": int((time.time() - started) * 1000),
+                 "output": str(test_result.output or "")[:2000]}
         if not tests["ok"]:
             raise RuntimeError(f"Les tests échouent :\n{str(tests.get('output') or '')[:600]}")
         ctx.log(f"Tests : {'réussis' if tests['ok'] else 'en échec'} ({tests.get('duration_ms')} ms)")
@@ -1193,8 +1209,15 @@ class BackgroundTaskManager:
             live = self._live.get(task_id)
             if status == WAITING_USER:
                 if live is None:
-                    live = _TaskLive(task_id)
-                    self._live[task_id] = live
+                    # Après un redémarrage, la mission était « en attente » mais
+                    # son worker n'existe plus : inutile de créer un fantôme qui
+                    # ne tournerait jamais (statut RUNNING sans exécutant). On
+                    # re-planifie : le handler repart du début, et re-demandera
+                    # si nécessaire. Une mission relancée après crash est
+                    # explicitement relancée : double-exécution non automatique.
+                    self.store.set(task_id, status=QUEUED, note="Relancée après redémarrage.")
+                    self._wake_scheduler()
+                    return self.get(task_id) or row
                 if user_input is not None:
                     with live.cond:
                         live.input_q.append(str(user_input))
@@ -1307,6 +1330,12 @@ class BackgroundTaskManager:
                 pass
             self._sched.wait(0.5)
             self._sched.clear()
+        # Le thread scheduler s'arrête ici : on ferme sa connexion thread-local
+        # (la base appartient au thread qui la crée).
+        try:
+            self._db.close()
+        except Exception:
+            pass
 
     def _busy(self) -> int:
         return sum(1 for tid in self._live
@@ -1412,22 +1441,50 @@ class BackgroundTaskManager:
             self._finish(task_id, CANCELLED, error="Annulée par l'utilisateur.")
         except Exception as exc:
             self._log_worker_error(task_id, exc)
-            self._finish(task_id, FAILED, error=f"{type(exc).__name__}: {exc}")
+            self._finish(task_id, FAILED, error=f"{type(exc).__name__}: {self._scrub_exc(exc)}")
         finally:
             with self._lock:
                 self._live.pop(task_id, None)
                 self._workers.pop(task_id, None)
             self.locks.release_all(task_id)
             self.resources.release_all(task_id)
+            if self.store.status(task_id) != READY_TO_MERGE:
+                # Une mission CODE terminée (échec ou annulation) ne laisse pas
+                # de worktree orphelin. READY_TO_MERGE le conserve : son diff
+                # attend une revue humaine. La branche est toujours conservée.
+                try:
+                    self.worktrees.cleanup(task_id)
+                except Exception:
+                    pass
             self._wake_scheduler()
+            # Le worker est un thread éphémère : on ferme SA connexion thread-local
+            # pour ne pas laisser de base SQLite ouverte (fuite de descripteurs).
+            try:
+                self._db.close()
+            except Exception:
+                pass
+
+    def _scrub_exc(self, exc: Exception) -> str:
+        return self._scrub_text(str(exc))
 
     def _log_worker_error(self, task_id: str, exc: Exception) -> None:
         try:
             import traceback
-            self.store.add_log(task_id, f"{type(exc).__name__}: {exc}", level="error",
-                               data={"traceback": traceback.format_exc()[:4000]})
+            message = self._scrub_text(f"{type(exc).__name__}: {exc}")
+            tb = traceback.format_exc()[:4000]
+            self.store.add_log(task_id, message, level="error",
+                               data={"traceback": self._scrub_text(tb)})
         except Exception:
             pass
+
+    def _scrub_text(self, text: str) -> str:
+        try:
+            scrub = getattr(self._core, "vault", None) and getattr(self._core.vault, "scrub")
+            if scrub is not None:
+                return scrub(text) or text
+        except Exception:
+            pass
+        return text
 
 
 # Raccourcis de lecture publique (pratiques pour l'intégration serveur).

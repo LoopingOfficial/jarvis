@@ -544,7 +544,11 @@ def api_task_complete(req, tid):
 @router.get("/api/background/tasks")
 def api_background_tasks(req):
     status = str(req["query"].get("status", [""])[0])
-    limit = int(req["query"].get("limit", ["50"])[0])
+    try:
+        limit = int(req["query"].get("limit", ["50"])[0])
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(0, min(limit, 500))
     return _ok({"tasks": CORE.background.list(status=status, limit=limit),
                 "stats": CORE.background.stats()})
 
@@ -632,7 +636,12 @@ def api_background_task_logs(req, tid):
     task = CORE.background.get(tid)
     if task is None:
         return _err("Mission introuvable.", 404)
-    return _ok({"logs": CORE.background.logs(tid, limit=int(req["query"].get("limit", ["100"])[0]))})
+    try:
+        limit = int(req["query"].get("limit", ["100"])[0])
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(0, min(limit, 500))
+    return _ok({"logs": CORE.background.logs(tid, limit=limit)})
 
 
 @router.get("/api/background/tasks/<tid>/artifacts")

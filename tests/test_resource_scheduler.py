@@ -77,6 +77,32 @@ class ResourceSchedulerTests(unittest.TestCase):
         self.res.release_all("t1")
         self.assertFalse(self.res.has("t1"))
 
+    def test_reacquire_by_same_holder_is_reentrant(self) -> None:
+        # Une mission qui déclare LLM_GPU au départ puis l'acquiert de nouveau
+        # autour de chaque inférence ne doit JAMAIS se bloquer sur elle-même :
+        # sa part déjà détenue compte comme disponible (self-disponibilité).
+        self.assertTrue(self.res.acquire("t1", ["LLM_GPU"]))
+        self.assertTrue(self.res.acquire("t1", ["LLM_GPU"]))
+        self.res.release_all("t1")
+        self.assertFalse(self.res.has("t1"))
+        # La ré-entrance ne rallonge pas la capacité : t2 reste bloqué.
+        self.assertTrue(self.res.acquire("t1", ["LLM_GPU", "CPU"]))
+        self.res.release("t1", ["CPU"])
+        self.assertFalse(self.res.acquire("t2", ["LLM_GPU"]))
+
+    def test_reentrant_shared_slot_is_refunded_per_holder(self) -> None:
+        # t1 détient LLM_GPU (1/1) et CPU (1/2). Il ré-acquiert LLM_GPU :
+        # sa part est remboursée → toujours 1 <= 1, mais il compte 2 slots.
+        # t2 ne peut PAS prendre LLM_GPU, mais peut prendre CPU (2/2).
+        self.assertTrue(self.res.acquire("t1", ["LLM_GPU", "CPU"]))
+        self.assertTrue(self.res.acquire("t1", ["LLM_GPU"]))
+        self.assertFalse(self.res.acquire("t2", ["LLM_GPU"]))
+        self.assertTrue(self.res.acquire("t2", ["CPU"]))
+        self.assertFalse(self.res.acquire("t3", ["CPU"]))
+        self.res.release_all("t1")
+        self.res.release_all("t2")
+        self.assertTrue(self.res.acquire("t3", ["LLM_GPU"]))
+
 
 class LockRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
