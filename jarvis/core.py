@@ -22,6 +22,7 @@ from .avatar_update import AvatarUpdatePipeline
 from .auto_learning import AutoLearning
 from .idle_learning import IdleLearningEngine
 from .automations import AutomationManager
+from .background_tasks import BackgroundTaskManager
 from .blender import BlenderManager
 from .brain_manager import BrainManager
 from .browser_manager import BrowserManager, set_manager
@@ -102,6 +103,9 @@ class JarvisCore:
         self.runner = SecureToolRunner(self)
         self.validation = ValidationEngine()
         self.orchestrator = Orchestrator(self)
+        # Moteur multitâches en arrière-plan : missions concurrentes dans un
+        # pool de workers, ressources, verrous, worktrees, persistance SQLite.
+        self.background = BackgroundTaskManager(self)
         self.voice = VoiceStateMachine(self.events)
         self.sessions = VoiceSessionManager(self.db, self.settings, self.events)
         self.tts = PiperTTS()
@@ -216,6 +220,12 @@ class JarvisCore:
         self.idle_learning.start()
         self.automations.start_scheduler()
         self.discord_scheduler.start()
+        # Missions multitâches en arrière-plan (pool de workers dédié).
+        try:
+            self.background.start()
+        except Exception as exc:
+            self.events.feed("Moteur de missions arrière-plan indisponible", level="warn",
+                             kind="system", detail=str(exc)[:200], source="core")
         threading.Thread(target=self._maintenance_loop, daemon=True, name="jarvis-maintenance").start()
         # Sonde initiale des fournisseurs de modèles hors du chemin des requêtes.
         threading.Thread(target=self._llm_probe_loop, daemon=True, name="jarvis-llm-status").start()
@@ -252,6 +262,10 @@ class JarvisCore:
         self.automations.stop()
         self.discord_scheduler.stop()
         self.idle_learning.stop()
+        try:
+            self.background.shutdown()
+        except Exception:
+            pass
         try:
             self.blender.shutdown()
         except Exception:

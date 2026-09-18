@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from .config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -416,6 +416,44 @@ CREATE TABLE IF NOT EXISTS self_upgrade_files (
   action TEXT NOT NULL DEFAULT 'modified', created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_self_upgrade_files ON self_upgrade_files(upgrade_id);
+
+-- Moteur multitâches en arrière-plan (BackgroundTaskManager).
+-- `mission_id` relie la mission à sa mission Mission Control ; l'identifiant
+-- de mission (RequestRef) sert de clé à l'écran Mission Control lui-même.
+CREATE TABLE IF NOT EXISTS background_tasks (
+  task_id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  task_type TEXT NOT NULL DEFAULT 'GENERIC_AGENT',
+  priority TEXT NOT NULL DEFAULT 'NORMAL',
+  status TEXT NOT NULL DEFAULT 'QUEUED',
+  agent TEXT NOT NULL DEFAULT 'jarvis',
+  workspace TEXT NOT NULL DEFAULT '',
+  resources TEXT NOT NULL DEFAULT '[]',
+  dependencies TEXT NOT NULL DEFAULT '[]',
+  context TEXT NOT NULL DEFAULT '{}',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  step TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  result TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  progress REAL NOT NULL DEFAULT 0,
+  created_at REAL, started_at REAL, updated_at REAL, completed_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(status, created_at);
+
+CREATE TABLE IF NOT EXISTS background_task_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, ts REAL, level TEXT, message TEXT, data TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_background_task_logs ON background_task_logs(task_id, id);
+
+CREATE TABLE IF NOT EXISTS background_task_artifacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, path TEXT NOT NULL,
+  artifact_type TEXT NOT NULL DEFAULT 'file', name TEXT NOT NULL DEFAULT '',
+  metadata TEXT NOT NULL DEFAULT '{}', created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_background_task_artifacts ON background_task_artifacts(task_id, id);
 """
 
 
@@ -610,6 +648,43 @@ class Database:
             ):
                 if not has_column("crm_contacts", col):
                     c.execute(f"ALTER TABLE crm_contacts ADD COLUMN {col} {ddl}")
+
+        # Migration 13 : moteur multitâches en arrière-plan. Tables additives.
+        if from_version < 13:
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS background_tasks (
+              task_id TEXT PRIMARY KEY,
+              mission_id TEXT NOT NULL DEFAULT '',
+              title TEXT NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              task_type TEXT NOT NULL DEFAULT 'GENERIC_AGENT',
+              priority TEXT NOT NULL DEFAULT 'NORMAL',
+              status TEXT NOT NULL DEFAULT 'QUEUED',
+              agent TEXT NOT NULL DEFAULT 'jarvis',
+              workspace TEXT NOT NULL DEFAULT '',
+              resources TEXT NOT NULL DEFAULT '[]',
+              dependencies TEXT NOT NULL DEFAULT '[]',
+              context TEXT NOT NULL DEFAULT '{}',
+              metadata TEXT NOT NULL DEFAULT '{}',
+              step TEXT NOT NULL DEFAULT '',
+              note TEXT NOT NULL DEFAULT '',
+              result TEXT NOT NULL DEFAULT '',
+              error TEXT NOT NULL DEFAULT '',
+              progress REAL NOT NULL DEFAULT 0,
+              created_at REAL, started_at REAL, updated_at REAL, completed_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(status, created_at);
+            CREATE TABLE IF NOT EXISTS background_task_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, ts REAL, level TEXT, message TEXT, data TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_background_task_logs ON background_task_logs(task_id, id);
+            CREATE TABLE IF NOT EXISTS background_task_artifacts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, path TEXT NOT NULL,
+              artifact_type TEXT NOT NULL DEFAULT 'file', name TEXT NOT NULL DEFAULT '',
+              metadata TEXT NOT NULL DEFAULT '{}', created_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_background_task_artifacts ON background_task_artifacts(task_id, id);
+            """)
 
     # -- sauvegarde ---------------------------------------------------------
     def backup(self, label: str = "") -> Path:

@@ -88,6 +88,15 @@ EVENT_TYPES = {
     # CRM & documents — levée d'ambiguïté et aperçu du PDF généré.
     "crm.clarification.needed", "crm.contact.saved", "document.generated",
     "transcript.parsed",
+    # Mission Control — contrat documenté avec l'écran (mission.started,
+    # mission.update, mission.completed, mission.failed). L'observateur les
+    # publie ; il ne les invente jamais.
+    "mission.started", "mission.update", "mission.completed", "mission.failed",
+    "mission.diagnostic",
+    # Moteur multitâches en arrière-plan — états d'attente, pause/reprise et
+    # blocage par dépendance, consommés par Mission Control (WAITING sinon).
+    "task.waiting_resource", "task.waiting_user", "task.paused", "task.resumed",
+    "task.blocked",
 }
 
 LEVELS = ("info", "warn", "error", "live", "tip", "meeting", "focus", "overdue")

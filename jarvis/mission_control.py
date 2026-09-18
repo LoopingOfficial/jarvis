@@ -236,6 +236,11 @@ class MissionControl:
         on("task.started", self._on_task_started)
         on("task.progress", self._on_task_progress)
         on("task.waiting_confirmation", self._on_task_waiting)
+        on("task.waiting_resource", self._on_task_waiting)
+        on("task.waiting_user", self._on_task_waiting)
+        on("task.paused", self._on_task_waiting)
+        on("task.resumed", self._on_task_resumed)
+        on("task.blocked", self._on_task_waiting)
         on("task.completed", self._on_task_completed)
         on("task.failed", self._on_task_failed)
         on("task.cancelled", self._on_task_cancelled)
@@ -425,6 +430,16 @@ class MissionControl:
             mission.set_state("WAITING")
             mission.note = str(data.get("action") or "Confirmation requise")[:120]
             mission.add_history("waiting", mission.note)
+            self._publish(mission)
+
+    def _on_task_resumed(self, event: dict) -> None:
+        data = event.get("data") or {}
+        with self._lock:
+            mission = self._resolve(data)
+            if not mission:
+                return
+            mission.set_state("RUNNING")
+            mission.note = ""
             self._publish(mission)
 
     def _finish(self, data: dict, state: str, *, result: str = "", error: str = "") -> None:

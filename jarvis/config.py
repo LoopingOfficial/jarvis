@@ -211,6 +211,11 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "max_concurrent_tasks": 3,
         "task_retention_days": 30,
     },
+    "background": {
+        "enabled": True,
+        "max_background_tasks": 4,
+        "task_retention_days": 30,
+    },
     "notifications": {
         "desktop": True,
         "feed": True,

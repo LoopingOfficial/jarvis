@@ -539,6 +539,123 @@ def api_task_complete(req, tid):
 
 
 # ---------------------------------------------------------------------------
+# Missions multitâches en arrière-plan
+# ---------------------------------------------------------------------------
+@router.get("/api/background/tasks")
+def api_background_tasks(req):
+    status = str(req["query"].get("status", [""])[0])
+    limit = int(req["query"].get("limit", ["50"])[0])
+    return _ok({"tasks": CORE.background.list(status=status, limit=limit),
+                "stats": CORE.background.stats()})
+
+
+@router.get("/api/background/tasks/<tid>")
+def api_background_task_detail(req, tid):
+    task = CORE.background.get(tid)
+    return _ok({"task": task}) if task else _err("Mission introuvable.", 404)
+
+
+@router.post("/api/background/tasks")
+def api_background_task_create(req):
+    body = req["body"] or {}
+    title = str(body.get("title") or "").strip()
+    if not title:
+        return _err("Titre de mission manquant.")
+    try:
+        task = CORE.background.create_task(
+            title,
+            description=str(body.get("description") or ""),
+            task_type=str(body.get("task_type") or "GENERIC_AGENT"),
+            priority=str(body.get("priority") or "NORMAL"),
+            agent=str(body.get("agent") or "jarvis"),
+            workspace=str(body.get("workspace") or ""),
+            resources=body.get("resources") or (),
+            dependencies=body.get("dependencies") or (),
+            context=body.get("context") if isinstance(body.get("context"), dict) else None,
+            metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+            mission_id=str(body.get("mission_id") or ""),
+            auto_submit=bool(body.get("auto_submit", True)),
+        )
+    except ValueError as exc:
+        return _err(str(exc), 422)
+    except Exception as exc:
+        return _err(f"Création impossible : {exc}", 500)
+    return _ok({"task": task})
+
+
+@router.post("/api/background/tasks/<tid>/submit")
+def api_background_task_submit(req, tid):
+    try:
+        return _ok({"task": CORE.background.submit(tid)})
+    except ValueError as exc:
+        return _err(str(exc), 422)
+
+
+@router.post("/api/background/tasks/<tid>/pause")
+def api_background_task_pause(req, tid):
+    try:
+        return _ok({"task": CORE.background.pause(tid, reason=str(req["body"].get("reason") or ""))})
+    except ValueError as exc:
+        return _err(str(exc), 422)
+
+
+@router.post("/api/background/tasks/<tid>/resume")
+def api_background_task_resume(req, tid):
+    try:
+        return _ok({"task": CORE.background.resume_task(
+            tid, user_input=str(req["body"].get("user_input") or "").strip() or None)})
+    except ValueError as exc:
+        return _err(str(exc), 422)
+
+
+@router.post("/api/background/tasks/<tid>/cancel")
+def api_background_task_cancel(req, tid):
+    try:
+        return _ok({"task": CORE.background.cancel(tid, reason=str(req["body"].get("reason") or ""))})
+    except ValueError as exc:
+        return _err(str(exc), 422)
+
+
+@router.post("/api/background/tasks/<tid>/input")
+def api_background_task_input(req, tid):
+    value = str(req["body"].get("user_input") or "").strip()
+    if not value:
+        return _err("Réponse manquante.")
+    try:
+        return _ok({"task": CORE.background.deliver_user_input(tid, value)})
+    except ValueError as exc:
+        return _err(str(exc), 422)
+
+
+@router.get("/api/background/tasks/<tid>/logs")
+def api_background_task_logs(req, tid):
+    task = CORE.background.get(tid)
+    if task is None:
+        return _err("Mission introuvable.", 404)
+    return _ok({"logs": CORE.background.logs(tid, limit=int(req["query"].get("limit", ["100"])[0]))})
+
+
+@router.get("/api/background/tasks/<tid>/artifacts")
+def api_background_task_artifacts(req, tid):
+    task = CORE.background.get(tid)
+    if task is None:
+        return _err("Mission introuvable.", 404)
+    return _ok({"artifacts": CORE.background.artifacts(tid)})
+
+
+@router.get("/api/background/resources")
+def api_background_resources(req):
+    snap = CORE.background.snapshot()
+    return _ok({"resources": snap["resources"], "holders": snap["resource_holders"],
+                "workers": CORE.background.stats().get("workers")})
+
+
+@router.get("/api/background/locks")
+def api_background_locks(req):
+    return _ok({"locks": CORE.background.snapshot()["locks"]})
+
+
+# ---------------------------------------------------------------------------
 # Agents / outils
 # ---------------------------------------------------------------------------
 @router.get("/api/agents")

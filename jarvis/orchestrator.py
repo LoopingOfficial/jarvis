@@ -675,6 +675,11 @@ class Orchestrator:
             if edit_action is not None:
                 return edit_action
 
+        # 0. Commandes « missions » déterministes (moteur multitâches), sans LLM
+        mission_action = self._run_background_command(routing_text, conversation_id)
+        if mission_action is not None:
+            return mission_action
+
         # 1. Raccourcis déterministes (rapides, sans LLM)
         low = routing_text.casefold().strip(" .!")
         for pattern, tool_id, args in DIRECT_PATTERNS:
@@ -711,6 +716,90 @@ class Orchestrator:
                               attachment_suffix=attachment_suffix)
 
     # -- mode réponse seule (MODEL_ONLY) ---------------------------------
+    def _run_background_command(self, text: str, conversation_id: str = "") -> dict[str, Any] | None:
+        """Commandes « missions » du moteur multitâches, 100 % déterministes.
+
+        Aucun LLM : la création, la liste, le détail, la pause, la reprise et
+        l'annulation répondent avec les faits réels du BackgroundTaskManager.
+        Renvoie None si le message n'est pas une commande mission.
+        """
+        core = self._core
+        low = text.casefold().strip(" .!")
+        if not re.search(r"\b(?:missions?|arri[èe]re[- ]plan)\b", low):
+            return None
+
+        def done(action: str, response: str, task_id: str = "") -> dict[str, Any]:
+            payload: dict[str, Any] = {"ok": True, "response": response, "action": action,
+                                       "conversation_id": conversation_id, "tools_used": []}
+            if task_id:
+                payload["task_id"] = task_id
+            return payload
+
+        if re.search(r"(?:liste des (?:missions|t[âa]ches)|missions en cours|"
+                     r"statut des missions|bord des missions)\s*\??$", low):
+            tasks = core.background.list(status="", limit=50)
+            stats = core.background.stats() or {}
+            lines = ["Voici l'état de mes missions en arrière-plan :"]
+            lines.append(
+                f"- {stats.get('QUEUED', 0)} en file · {stats.get('RUNNING', 0)} en cours · "
+                f"{stats.get('WAITING_RESOURCE', 0)} en attente de ressources · "
+                f"{stats.get('COMPLETED', 0)} terminées · {stats.get('FAILED', 0)} en échec.")
+            for t in tasks[:25]:
+                lines.append(f"  • {t['status'].ljust(16)} {t['task_id']} — {t['title']}")
+            return done("background.mission.list", "\n".join(lines))
+
+        mission_id_match = re.search(r"\b(bt_\w+)\b", low)
+        if mission_id_match:
+            mission_id = mission_id_match.group(1)
+            task = core.background.get(mission_id)
+            if task is None:
+                return done("background.mission.not_found",
+                            f"Mission {mission_id} introuvable.", mission_id)
+            if re.search(r"\b(?:annule|annuler|cancel)", low):
+                try:
+                    core.background.cancel(mission_id, reason="Annulée par l'utilisateur.")
+                except ValueError as exc:
+                    return done("background.mission.cancel", str(exc), mission_id)
+                return done("background.mission.cancel", f"Mission {mission_id} annulée.", mission_id)
+            if re.search(r"\b(?:pause|suspend|mets? (?:en|la) (?:pause|attente))", low):
+                try:
+                    core.background.pause(mission_id, reason="Pause demandée via le chat.")
+                except ValueError as exc:
+                    return done("background.mission.pause", str(exc), mission_id)
+                return done("background.mission.pause", f"Mission {mission_id} en pause.", mission_id)
+            if re.search(r"\b(?:reprends?|relance|resume)", low):
+                try:
+                    core.background.resume_task(mission_id)
+                except ValueError as exc:
+                    return done("background.mission.resume", str(exc), mission_id)
+                return done("background.mission.resume", f"Mission {mission_id} relancée.", mission_id)
+            lines = [f"Mission {mission_id} — {task.get('title')}",
+                     f"État : {task.get('status')} · Type : {task.get('task_type')} "
+                     f"· Priorité : {task.get('priority')}"]
+            if task.get("step"):
+                lines.append(f"Phase : {task.get('step')}")
+            if task.get("progress", 0) > 0:
+                lines.append(f"Progression : {int(task.get('progress', 0) * 100)} %")
+            if task.get("note"):
+                lines.append(f"Note : {task.get('note')}")
+            if task.get("error"):
+                lines.append(f"Erreur : {task.get('error')}")
+            return done("background.mission.detail", "\n".join(lines), mission_id)
+
+        create_match = re.search(
+            r"^(?:lance|lancez|d[ée]marre|d[ée]marrez|cr[ée]e|cr[ée]ez|envoie|programme)\s+"
+            r"(?:une\s+|la\s+)?mission\b\s*(.*)$", low)
+        if create_match:
+            description = create_match.group(1).strip(" .!") or "Mission lancée depuis le chat."
+            task = core.background.create_task(
+                description[:120] if len(description) > 120 else description,
+                description=description, task_type="GENERIC_AGENT", priority="NORMAL",
+                agent="jarvis", auto_submit=True)
+            return done("background.mission.create",
+                        f"Mission {task['task_id']} créée : « {task['title']} » — en file d'attente.",
+                        task["task_id"])
+        return None
+
     def refresh_sync(self, url: str = "", *, request_id: str = "",
                      conversation_id: str = "") -> dict[str, Any]:
         """Recalcule comparaison + plan pour l'URL courante.
