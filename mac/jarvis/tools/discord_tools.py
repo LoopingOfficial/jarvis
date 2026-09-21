@@ -520,6 +520,40 @@ registry.add(
         "query": {"type": "string", "description": "Filtre facultatif sur le nom du salon."}}},
 )
 
+def _latest_message(ctx: ToolContext) -> ToolResult:
+    channel = _channel_ref(ctx.arguments)
+    if not channel:
+        return ToolResult(False, "Indique le nom ou l'identifiant du salon.")
+    return _bridge(ctx, lambda e: e.latest_message(channel), risk=READ_ONLY,
+                   describe=lambda d: f"Dernier message dans #{d['channel_name']} — {d['author_name']} : {d['content']}")
+
+registry.add(
+    id="discord.latest_message", name="Lire le dernier message", category="Discord",
+    description="Lit le dernier message d'un salon Discord par nom ou identifiant.",
+    handler=_latest_message, risk=READ_ONLY, agents=(),
+    input_schema={"type": "object", "properties": {
+        "channel": {"type": "string", "description": "Nom ou identifiant du salon."}},
+        "required": ["channel"]},
+)
+
+def _recent_messages(ctx: ToolContext) -> ToolResult:
+    channel = _channel_ref(ctx.arguments)
+    if not channel:
+        return ToolResult(False, "Indique le nom ou l'identifiant du salon.")
+    limit = int(ctx.arguments.get("limit") or 5)
+    return _bridge(ctx, lambda e: e.recent_messages(channel, limit), risk=READ_ONLY,
+                   describe=lambda d: "\n".join(f"{m['timestamp']} — {m['author_name']} : {m['content']}" for m in d.get('messages', [])))
+
+registry.add(
+    id="discord.recent_messages", name="Lire les derniers messages", category="Discord",
+    description="Lit les derniers messages réels d'un salon Discord, du plus récent au plus ancien.",
+    handler=_recent_messages, risk=READ_ONLY, agents=(),
+    input_schema={"type": "object", "properties": {
+        "channel": {"type": "string", "description": "Nom ou identifiant du salon."},
+        "limit": {"type": "integer", "description": "Nombre de messages (1 à 20)."}},
+        "required": ["channel"]},
+)
+
 
 def _delete_message(ctx: ToolContext) -> ToolResult:
     channel = _channel_ref(ctx.arguments)

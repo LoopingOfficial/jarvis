@@ -10,7 +10,7 @@ import traceback
 import uuid
 from typing import Any
 
-from .agents import AGENTS, blender_tools_for
+from .agents import AGENTS, blender_tools_for, route_request
 from .build import JARVIS_BUILD_ID, scrub_forbidden_roots, trace
 from .intents import (ConnectorIntent, detect_3d_intent, detect_image_intent,
                       detect_read_only_intent, resolve_connector_intent)
@@ -1185,12 +1185,15 @@ class Orchestrator:
 
     def _stream_chat(
         self, messages, *, role: str = "default", tools=None, temperature=0.3,
-        conversation_id: str = "",
+        conversation_id: str = "", model_override: str = "", max_tokens: int = 4096,
+        timeout: float = 90.0,
     ):
         """Appel LLM : stream SSE des le premier token si aucun outil n'est expose."""
         core = self._core
         if tools:
-            return core.llm.chat(messages, role=role, tools=tools, temperature=temperature)
+            return core.llm.chat(messages, role=role, tools=tools, temperature=temperature,
+                                 max_tokens=max_tokens, timeout=timeout,
+                                 model_override=model_override)
         acc: list[str] = []
         started = False
 
@@ -1209,7 +1212,8 @@ class Orchestrator:
             )
 
         return core.llm.chat_stream(
-            messages, role=role, tools=None, temperature=temperature, on_token=on_token)
+            messages, role=role, tools=None, temperature=temperature, on_token=on_token,
+            max_tokens=max_tokens, timeout=timeout, model_override=model_override)
 
     def _run_direct_llm(
         self, text: str, conversation_id: str, *,
@@ -1225,7 +1229,8 @@ class Orchestrator:
         response = self._stream_chat(
             messages, role="default",
             temperature=core.settings.get("ai", "temperature", 0.3),
-            conversation_id=conversation_id)
+            conversation_id=conversation_id, model_override=f"ollama:{spec.model}",
+            max_tokens=spec.token_budget, timeout=spec.timeout)
         if not response.ok:
             fallback = self._offline_fallback(text, response.error)
             core.conversations.add_message(
@@ -1256,6 +1261,22 @@ class Orchestrator:
         policy = dict(execution_policy or detect_read_only_intent(text).to_dict())
         if policy.get("intent") in {"security_audit_readonly", "security_analysis"}:
             return SecurityAuditPipeline(core).run(text, task_id, conversation_id, policy)
+
+        # Routage déterministe avant le planner général : JARVIS ne sérialise
+        # jamais le catalogue complet des outils pour une demande métier.
+        routed_agent, route_mode = route_request(text)
+        if routed_agent != "jarvis":
+            core.events.emit("jarvis.delegation", {
+                "from": "JARVIS", "to": routed_agent, "mode": route_mode,
+                "request": text[:160], "ts": time.time()})
+            delegated = self.run_agent(routed_agent, text, task_id=task_id,
+                                       conversation_id=conversation_id,
+                                       parent_agent="jarvis", action=route_mode)
+            return {"ok": delegated.get("ok", False),
+                    "response": delegated.get("output", "Je n'ai pas pu traiter cette demande."),
+                    "task_id": task_id, "conversation_id": conversation_id,
+                    "tools_used": delegated.get("tools_used", []),
+                    "agent": routed_agent, "route": route_mode}
 
         # Détection déterministe : une action connecteur claire ne doit JAMAIS
         # être « racontée » sans que l'outil n'ait réellement tourné.
@@ -1459,6 +1480,12 @@ class Orchestrator:
             core.events.emit("jarvis.state", {"state": "THINKING", "reason": "llm"})
 
         tools = [t for t in registry.for_agent("jarvis") if t.enabled]
+        # Routage déterministe : une requête Discord ne doit jamais exposer
+        # l'intégralité du registre au modèle local.
+        low = text.casefold()
+        if "discord" in low or "salon" in low or "serveur" in low:
+            discord_ids = {"discord.status", "discord.list_channels", "discord.latest_message", "discord.recent_messages", "discord.summarize_channel"}
+            tools = [t for t in tools if t.id in discord_ids]
         if not need_tools:
             tools = []
         elif policy.get("read_only") and not policy.get("write_allowed"):
@@ -2472,6 +2499,14 @@ class Orchestrator:
         tools = core.agents.allowed_tools(agent_id, registry)
         if agent_id == "blender":
             tools = self._blender_tools(tools, action)
+        elif agent_id == "discord":
+            # Sous-ensemble strict : 2–4 schémas selon la demande.
+            wanted = ("discord.status", "discord.list_channels")
+            if re.search(r"dernier message|5 derniers|historique|messages", instruction, re.I):
+                wanted += ("discord.latest_message", "discord.recent_messages")
+            elif re.search(r"résum|summary", instruction, re.I):
+                wanted += ("discord.summarize_channel",)
+            tools = [t for t in tools if t.id in wanted]
         schemas = [t.llm_schema() for t in tools]
         system = spec.system_prompt.format(user=core.settings.get("general", "user_name", "Jérôme"))
         system += (
@@ -2479,7 +2514,7 @@ class Orchestrator:
             + ", ".join(t.id for t in tools)
             + "\nLes identifiants sont dans un coffre : utilise connector_id, jamais de mot de passe."
         )
-        context = core.memory.context_for(instruction)
+        context = core.memory.context_for(instruction)[:spec.max_context]
         if context:
             system += "\n\nContexte mémorisé :\n" + "\n".join(f"- {m['content']}" for m in context[:8])
         messages = [ChatMessage(role="system", content=system),
@@ -2511,7 +2546,10 @@ class Orchestrator:
                     tool_call_id="forced_inspect", name=inspect_id))
 
         for _ in range(spec.max_iterations):
-            response = core.llm.chat(messages, role=spec.model_role, tools=schemas)
+            response = core.llm.chat(
+                messages, role=spec.model_role, tools=schemas,
+                max_tokens=spec.token_budget, timeout=spec.timeout,
+                model_override=f"ollama:{spec.model}" if spec.model else "")
             if not response.ok:
                 core.agents.set_state(agent_id, "error", error=response.error)
                 return {"ok": False, "output": f"{spec.name} : {response.error}", "agent": agent_id}

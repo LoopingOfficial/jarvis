@@ -145,7 +145,7 @@ class FastActionRouter:
         if not user:
             user = self._name_from_memory()
         return {
-            "assistant": str(get("general", "assistant_name", "JARVIS") or "JARVIS"),
+            "assistant": str(get("general", "assistant_name", "VELKO") or "VELKO"),
             "user": user,
             "title": str(get("general", "operator_title", "") or "").strip(),
         }

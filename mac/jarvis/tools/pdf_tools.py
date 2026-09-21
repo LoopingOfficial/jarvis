@@ -11,6 +11,7 @@ from typing import Any
 
 from ..crm import AMBIGUOUS, NOT_FOUND, clarification_question
 from ..invoicing import INVOICE, QUOTE, build_document, render_pdf
+from ..artifacts import artifact_manager
 from ..permissions import SAFE_WRITE
 from .base import ToolContext, ToolResult, registry
 
@@ -101,6 +102,13 @@ def _generate(kind: str):
         if not out.get("ok"):
             return ToolResult(False, str(out.get("error") or "Génération impossible."),
                               data={k: v for k, v in out.items() if k != "ok"})
+        try:
+            artifact = artifact_manager.materialize(out["path"], filename=out.get("filename", ""))
+        except (OSError, ValueError) as exc:
+            return ToolResult(False, "Je n'ai pas réussi à générer le PDF.",
+                              data={"artifact_verified": False, "error": str(exc)})
+        out["artifact"] = artifact
+        out["artifact_verified"] = True
 
         try:
             ctx.core.events.emit("document.generated", {**out, "task_id": ctx.task_id})
@@ -110,7 +118,7 @@ def _generate(kind: str):
         who = out.get("contact_company") or out.get("contact_name") or ""
         message = (f"{word.capitalize()} {out['number']} — {out['total_ttc_label']} TTC"
                    + (f" pour {who}" if who else "") + ".")
-        return ToolResult(True, message, data=out, risk=SAFE_WRITE)
+        return ToolResult(True, message, data=out, artifacts=[artifact], risk=SAFE_WRITE)
 
     return handler
 

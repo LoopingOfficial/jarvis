@@ -114,6 +114,12 @@ Pages.agents = async function (el) {
               <small>Dernière activité</small><b style="font-size:11px">${fmtAgo(a.last_activity_at)}</b></div></div>
             <div class="list-row" style="padding:6px 8px"><div class="meta">
               <small>Exécutions</small><b style="font-size:11px">${a.runs || 0}</b></div></div>
+            <div class="list-row" style="padding:6px 8px"><div class="meta">
+              <small>Modèle rapide</small><b style="font-size:11px">${esc(a.fast_model || a.model || '—')}</b></div></div>
+            <div class="list-row" style="padding:6px 8px"><div class="meta">
+              <small>Modèle profond</small><b style="font-size:11px">${esc(a.deep_model || '—')}</b></div></div>
+            <div class="list-row" style="padding:6px 8px"><div class="meta">
+              <small>Keep Alive · Context</small><b style="font-size:11px">${esc(a.keep_alive || '—')} · ${esc(a.context_size || '—')}</b></div></div>
             ${a.current_action ? `<div class="list-row" style="padding:6px 8px"><div class="meta">
               <small>En cours</small><b style="font-size:11px">${esc(a.current_action)}</b></div></div>` : ''}
             ${a.last_error ? `<div class="list-row" style="padding:6px 8px;border-color:rgba(251,113,133,.3)">
@@ -556,6 +562,8 @@ Pages.knowledge = async function (el) {
 Pages.tools = async function (el) {
   const res = await J.get('/api/tools');
   const tools = res.tools || [];
+  const discordStatus = await J.get("/api/discord/status").catch(() => ({}));
+  const discord = tools.filter((t) => t.id.startsWith("discord."));
   const byCat = {};
   tools.forEach((t) => { (byCat[t.category] = byCat[t.category] || []).push(t); });
   const riskTag = { read_only: '', safe_write: 'cy', sensitive: 'warn', destructive: 'err' };
@@ -565,6 +573,7 @@ Pages.tools = async function (el) {
         <p>${tools.length} outils · ${tools.filter((t) => t.status === 'ready').length} prêts ·
            ${tools.filter((t) => t.status === 'not_configured').length} en attente de connecteur</p></div>
     </div>
+    <div class="card" style="margin-bottom:11px"><div class="card-head"><h2>DISCORD</h2><span class="tag ${discordStatus.connected ? 'ok' : 'warn'}">${discordStatus.connected ? 'Connecté' : 'Hors ligne'}</span></div><div class="card-body"><p class="text-dim">Utilise les actions Discord directement depuis JARVIS.</p><button class="btn sm primary" data-discord-settings>Configurer / connecter le bot</button><div class="list">${discord.map((t) => `<div class="list-row"><div class="meta"><b>${esc(t.name)}</b><small>${esc(t.description)}</small></div><button class="btn sm primary" data-discord-run="${esc(t.id)}">Exécuter</button></div>`).join('')}</div></div></div>
     ${Object.entries(byCat).map(([cat, list]) => `
       <div class="card" style="margin-bottom:11px"><div class="card-head"><h2>${esc(cat.toUpperCase())}</h2>
         <span class="tools">${list.length}</span></div>
@@ -583,6 +592,7 @@ Pages.tools = async function (el) {
           </div></div>`).join('')}
       </div></div></div>`).join('')}`;
 
+  $('[data-discord-settings]', el).onclick = () => { App.goto('settings'); Settings.section = 'blog'; Settings.render($('#page-settings'), 'blog'); };
   $$('[data-tool-toggle]', el).forEach((b) => b.onclick = async () => {
     const tool = tools.find((t) => t.id === b.dataset.toolToggle);
     await J.post(`/api/tools/${tool.id}/toggle`, { enabled: !tool.enabled });
@@ -617,6 +627,19 @@ Pages.tools = async function (el) {
       const result = r.result || {};
       App.pushMessage('jarvis', result.output || 'Terminé.');
       App.openConsole();
+    };
+  });
+  $$("[data-discord-run]", el).forEach((b) => b.onclick = () => {
+    const tool = tools.find((t) => t.id === b.dataset.discordRun);
+    if (!tool) return;
+    const props = tool.input_schema?.properties || {};
+    const fields = Object.entries(props).map(([key, spec]) => `<div class="field"><label>${esc(key)}</label><textarea data-arg="${esc(key)}" rows="3" placeholder="${esc(spec.description || "")}"></textarea><div class="hint">${esc(spec.description || "")}</div></div>`).join("");
+    const m = modal({title: tool.name + " — Discord", wide: true, body: fields || "<p>Aucun paramètre requis.</p>", footer: '<button class="btn" data-close>Annuler</button><button class="btn primary" data-go>Exécuter</button>'});
+    m.$("[data-go]").onclick = async () => {
+      const args = {}; m.$$("[data-arg]").forEach((i) => { if (i.value.trim()) args[i.dataset.arg] = i.value.trim(); });
+      m.close(); const r = await J.post(`/api/tools/${tool.id}/run`, {arguments: args});
+      if (r.needs_confirmation) return App.showConfirmation({...r.needs_confirmation, message: r.message});
+      toast((r.result || {}).output || "Action terminée.", (r.result || {}).ok ? "ok" : "err"); Pages.tools(el);
     };
   });
 };

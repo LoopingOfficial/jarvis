@@ -49,10 +49,12 @@
       const label = esc(doc.kind_label || 'DOCUMENT');
       const who = esc(doc.contact_company || doc.contact_name || '');
       const ttc = esc(doc.total_ttc_label || (doc.total_ttc ? doc.total_ttc + ' €' : ''));
-      const href = '/api/documents/' + encodeURIComponent(doc.filename || '');
+      const href = doc.url || (doc.artifact && doc.artifact.url) ||
+        '/api/documents/' + encodeURIComponent(doc.filename || '');
       const due = doc.due_on
         ? `<span class="doc-due">Échéance ${esc(frDate(doc.due_on))}</span>` : '';
-      const size = doc.bytes ? `${Math.round(doc.bytes / 1024)} Ko` : '';
+      const sizeBytes = doc.size || doc.bytes || (doc.artifact && doc.artifact.size) || 0;
+      const size = sizeBytes ? `${Math.max(1, Math.round(sizeBytes / 1024))} Ko` : '';
       return `
         <div class="who">JARVIS</div>
         <div class="bubble docbubble">

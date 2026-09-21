@@ -13,7 +13,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("JARVIS_DATA_DIR", str(ROOT / "data"))).expanduser()
 DB_PATH = DATA_DIR / "jarvis.db"
-UI_DIR = ROOT / "ui"
+# VELKO est l'interface du moteur. L'ancienne UI reste sur disque et peut être
+# rappelée avec JARVIS_UI_DIR, mais elle n'est plus servie par défaut.
+_VELKO_UI = ROOT.parent / "velko"
+UI_DIR = Path(os.getenv("JARVIS_UI_DIR",
+    str(_VELKO_UI if (_VELKO_UI / "index.html").is_file() else ROOT / "ui"))).expanduser()
 LOG_DIR = DATA_DIR / "logs"
 BACKUP_DIR = DATA_DIR / "backups"
 USER_CONFIG_DIR = Path(os.getenv("JARVIS_CONFIG_DIR",
@@ -43,7 +47,7 @@ def ensure_dirs() -> None:
 # ---------------------------------------------------------------------------
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
-        "assistant_name": os.getenv("JARVIS_NAME", "JARVIS"),
+        "assistant_name": os.getenv("JARVIS_NAME", "VELKO"),
         "user_name": os.getenv("JARVIS_USER_NAME", "Jérôme"),
         "language": "fr-FR",
         "timezone": "Europe/Paris",
@@ -128,9 +132,9 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "clock_24h": True,
     },
     "voice": {
-        # Fournisseur TTS : "browser" (Web Speech API) ou "macos_say"
-        "tts_provider": "browser",
-        "voice": "",
+        # Fournisseur TTS : browser, piper local ou edge distant.
+        "tts_provider": "edge",
+        "voice": "fr-FR-HenriNeural",
         # Locuteur d'une voix multi-locuteurs (ex. « pierre » pour upmc).
         # Vide = locuteur par défaut du modèle.
         "speaker": "",

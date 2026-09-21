@@ -308,7 +308,7 @@ class JarvisCore:
             "version": __version__,
             "build_id": JARVIS_BUILD_ID,
             "image_pipeline_build_id": IMAGE_PIPELINE_BUILD_ID,
-            "assistant_name": self.settings.get("general", "assistant_name", "JARVIS"),
+            "assistant_name": self.settings.get("general", "assistant_name", "VELKO"),
             "user_name": self.settings.get("general", "user_name", "Jérôme"),
             "operator_title": self.settings.get("general", "operator_title", "Commander"),
             "uptime_s": int(time.time() - self.started_at),

@@ -380,7 +380,8 @@
     /* ------------------------------------------------------ TTS distant Piper */
     /** True quand le moteur doit être Piper (vérifié contre le serveur). */
     _ttsRemote() {
-      return this.settings?.tts_provider === 'piper' && this.piperAvailable;
+      return (this.settings?.tts_provider === 'piper' && this.piperAvailable)
+        || (this.settings?.tts_provider === 'edge' && this.ttsFallback);
     }
 
     /** Récupère l'état des voix françaises Piper auprès du serveur. */
@@ -407,6 +408,7 @@
 
     _pickPiperVoice() {
       const wanted = this.settings?.voice;
+      if (this.settings?.tts_provider === 'edge') return wanted || 'fr-FR-HenriNeural';
       if (wanted && (this.piperVoices || []).some((v) => v.id === wanted && v.installed)) return wanted;
       const installed = (this.piperVoices || []).filter((v) => v.installed);
       return installed.length ? installed[0].id : '';

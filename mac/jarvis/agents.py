@@ -3,6 +3,7 @@ les agents travaillent en sous-traitance et renvoient un résultat au core."""
 from __future__ import annotations
 
 import time
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,9 +21,30 @@ class AgentSpec:
     model_role: str = "default"
     max_iterations: int = 8
     speaks_to_user: bool = False
+    model: str = ""
+    max_context: int = 12
+    timeout: float = 90.0
+    keep_alive: str = "5m"
+    priority: int = 50
+    token_budget: int = 1200
+    fallback_model: str = ""
+    fast_model: str = ""
+    deep_model: str = ""
+    context_size: int = 0
+    thinking: bool = False
 
 
 AGENTS: dict[str, AgentSpec] = {}
+
+class AgentRegistry:
+    """Registre immuable côté routage : un seul spécialiste est chargé par requête."""
+    @staticmethod
+    def get(agent_id: str) -> AgentSpec | None:
+        return AGENTS.get(agent_id)
+
+    @staticmethod
+    def all() -> list[AgentSpec]:
+        return list(AGENTS.values())
 
 
 def _register(spec: AgentSpec) -> None:
@@ -30,11 +52,13 @@ def _register(spec: AgentSpec) -> None:
 
 
 _register(AgentSpec(
-    id="jarvis", name="JARVIS Core", role="Orchestrateur", icon="core", speaks_to_user=True,
-    model_role="default", max_iterations=12,
-    tools=(),  # tous
+    id="jarvis", name="RouterAgent", role="Orchestrateur", icon="core", speaks_to_user=True,
+    model_role="default", model="qwen3.5:4b", max_iterations=4,
+    max_context=8, context_size=8, timeout=60.0, keep_alive="5m", priority=100, token_budget=800,
+    fast_model="qwen3.5:4b", fallback_model="qwen3.5:4b",
+    tools=(),
     system_prompt=(
-        "Tu es JARVIS, l'assistant personnel de {user}. Tu es calme, précis, rapide et concis.\n"
+        "Tu es VELKO, l'assistant personnel de {user}. Tu es calme, précis, rapide et concis.\n"
         "RÈGLES DE STYLE (impératives) :\n"
         "- Réponses courtes. Une à trois phrases sauf si on te demande un détail.\n"
         "- Ne salue jamais l'utilisateur de toi-même. Pas de « Bonjour », pas de « Comment puis-je vous aider ».\n"
@@ -99,6 +123,9 @@ _register(AgentSpec(
 
 _register(AgentSpec(
     id="coding", name="Coding Agent", role="Développement", icon="code", model_role="coding",
+    model="qwen2.5-coder:7b-instruct", fast_model="qwen2.5-coder:7b-instruct",
+    deep_model="qwen2.5-coder:14b-instruct", fallback_model="qwen2.5-coder:7b-instruct",
+    context_size=12, timeout=120.0, keep_alive="5m", thinking=True,
     tools=("fs.", "git.", "terminal.", "code.", "github.", "ssh.", "deploy.", "knowledge."),
     system_prompt=(
         "Tu es l'agent de développement de JARVIS. Tu lis et modifies du code, exécutes des tests, "
@@ -107,6 +134,23 @@ _register(AgentSpec(
         "ce que tu as changé et le résultat des tests."
     ),
 ))
+
+_register(AgentSpec(id="discord", name="Discord Agent", role="Discord", icon="chat",
+    model_role="fast", model="qwen3.5:4b", tools=("discord.",), max_iterations=3,
+    max_context=6, timeout=45.0, priority=95, token_budget=700,
+    system_prompt="Tu es DiscordAgent. Utilise uniquement les outils Discord et ne rapporte que des résultats réels provenant de l'API Discord. Jamais de message inventé."))
+_register(AgentSpec(id="analysis", name="Analysis Agent", role="Analyse", icon="database",
+    model_role="fast", model="gemma4:12b-mlx", fast_model="gemma4:12b-mlx", fallback_model="qwen3.5:4b", tools=("google.sheets.", "file.", "document.", "memory."),
+    max_context=6, timeout=90.0, priority=80, token_budget=1200,
+    system_prompt="Tu es AnalysisAgent. Analyse uniquement les données réellement fournies et signale toute donnée absente."))
+_register(AgentSpec(id="vision", name="Vision Agent", role="Vision", icon="eye",
+    model_role="fast", model="qwen3-vl:8b-instruct", fast_model="qwen3-vl:8b-instruct", fallback_model="qwen3.5:4b", tools=("image.", "file."), max_context=4, context_size=4,
+    timeout=90.0, priority=80, token_budget=900,
+    system_prompt="Tu es VisionAgent. Décris et analyse uniquement les images reçues."))
+_register(AgentSpec(id="memory", name="Memory Agent", role="Mémoire", icon="brain",
+    model_role="fast", model="qwen3.5:4b", tools=("memory.", "knowledge."), max_context=8,
+    timeout=45.0, priority=85, token_budget=700,
+    system_prompt="Tu es MemoryAgent. Réponds seulement à partir de la mémoire et des connaissances réelles."))
 
 _register(AgentSpec(
     id="research", name="Research Agent", role="Recherche", icon="search", model_role="fast",
@@ -181,15 +225,6 @@ _register(AgentSpec(
 ))
 
 _register(AgentSpec(
-    id="memory", name="Memory Agent", role="Mémoire", icon="brain", model_role="fast",
-    tools=("memory.", "knowledge."),
-    system_prompt=(
-        "Tu es l'agent mémoire de JARVIS. Tu ranges, retrouves et consolides les informations durables. "
-        "Tu évites les doublons et tu reformules de façon compacte et utile."
-    ),
-))
-
-_register(AgentSpec(
     id="task", name="Task Agent", role="Tâches", icon="check", model_role="fast",
     tools=("task.", "calendar.", "automation.", "notify.", "memory.search"),
     system_prompt=(
@@ -228,6 +263,41 @@ _register(AgentSpec(
         "« prépare » ou « ne publie pas »."
     ),
 ))
+
+# Politique de modèles : ces valeurs sont des overrides par agent, jamais un
+# chargement global. Ollama ne reçoit donc que le modèle du spécialiste actif.
+for _spec in AGENTS.values():
+    if not _spec.model:
+        _spec.model = "qwen3.5:4b" if _spec.id != "jarvis" else "qwen3.5:4b"
+    _spec.max_context = min(_spec.max_context or 8, 12)
+    _spec.context_size = _spec.context_size or _spec.max_context
+    _spec.fast_model = _spec.fast_model or _spec.model
+    _spec.fallback_model = _spec.fallback_model or _spec.fast_model
+    _spec.deep_model = _spec.deep_model or _spec.fast_model
+
+
+def route_request(text: str) -> tuple[str, str]:
+    """Routage déterministe. Retourne (agent, mode), sans appel LLM."""
+    t = (text or "").lower()
+    if re.search(r"\b(bonjour|salut|hello|merci|bonsoir)\b", t) and not re.search(r"discord|code|image|sheet", t):
+        return "jarvis", "conversation"
+    if re.search(r"\b(cpu|ram|mémoire vive|processus|disque|système|état du mac)\b", t):
+        return "system", "direct_tool"
+    if re.search(r"discord|salon|serveur discord", t):
+        return "discord", "fast"
+    if re.search(r"\b(code|fonction|bug|python|javascript|implémente)\b", t):
+        return "coding", "agent"
+    if re.search(r"\b(sheet|tableur|excel|classeur|analyse les données)\b", t):
+        return "analysis", "agent"
+    if re.search(r"\b(image|photo|capture|vision)\b", t):
+        return "vision", "agent"
+    if re.search(r"\b(que sais-tu|souviens|mémoire|projet)\b", t):
+        return "memory", "agent"
+    if re.search(r"\b(blog|article|rédige|publie)\b", t):
+        return "blog", "agent"
+    if re.search(r"\b(recherche|cherche sur internet|sources|actualité)\b", t):
+        return "research", "agent"
+    return "jarvis", "conversation"
 
 
 # Sous-ensembles d'outils par intention 3D.
@@ -315,6 +385,13 @@ class AgentManager:
             out.append({
                 "id": spec.id, "name": spec.name, "role": spec.role, "icon": spec.icon,
                 "status": (r["status"] if r else "standby"),
+                "model": spec.model, "fast_model": spec.fast_model,
+                "deep_model": spec.deep_model, "fallback_model": spec.fallback_model,
+                "thinking": spec.thinking, "context_size": spec.context_size,
+                "tools": list(spec.tools),
+                "max_context": spec.max_context, "timeout": spec.timeout,
+                "keep_alive": spec.keep_alive, "priority": spec.priority,
+                "token_budget": spec.token_budget,
                 "last_activity_at": (r["last_activity_at"] if r else None),
                 "current_task_id": (r["current_task_id"] if r else ""),
                 "current_action": (r["current_action"] if r else ""),

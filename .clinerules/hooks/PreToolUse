@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+import sys
+import json
+import os
+import tempfile
+import hashlib
+
+data = json.load(sys.stdin)
+
+pre = data.get("preToolUse", {})
+tool = pre.get("tool", "")
+params = pre.get("parameters", {})
+
+task_id = str(data.get("taskId", "unknown"))
+task_hash = hashlib.sha256(task_id.encode()).hexdigest()[:16]
+
+state_file = os.path.join(
+    tempfile.gettempdir(),
+    f"cline-read-success-{task_hash}.json"
+)
+
+if tool not in {"read_file", "read_files"}:
+    print(json.dumps({
+        "cancel": False,
+        "contextModification": "",
+        "errorMessage": ""
+    }))
+    raise SystemExit
+
+signature = tool + "|" + json.dumps(
+    params,
+    sort_keys=True,
+    separators=(",", ":")
+)
+
+try:
+    with open(state_file, "r", encoding="utf-8") as f:
+        seen = json.load(f)
+except Exception:
+    seen = []
+
+if signature in seen:
+    print(json.dumps({
+        "cancel": True,
+        "contextModification":
+            "APPEL DUPLIQUÉ BLOQUÉ. "
+            "Ce fichier a déjà été lu avec succès. "
+            "N'appelle plus read_file/read_files pour ce fichier. "
+            "Utilise immédiatement le résultat précédent et réponds à l'utilisateur.",
+        "errorMessage":
+            "Lecture dupliquée bloquée par l'anti-loop JARVIS. "
+            "Utilise le résultat déjà disponible."
+    }))
+else:
+    print(json.dumps({
+        "cancel": False,
+        "contextModification":
+            "Cette lecture est autorisée une seule fois. "
+            "Après son succès, utilise son résultat sans relire le fichier.",
+        "errorMessage": ""
+    }))

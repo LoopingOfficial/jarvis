@@ -1009,3 +1009,28 @@ def http_json(
         return False, f"HTTP {exc.code}: {detail}"
     except Exception as exc:
         return False, str(exc)
+
+
+def http_line_stream(
+    url: str, *, method: str = "POST", headers: dict[str, str] | None = None,
+    body: Any = None, verify_ssl: bool = True, timeout: float = 180.0,
+):
+    """Itere les lignes d'une reponse HTTP (NDJSON / SSE)."""
+    data = None
+    hdrs = {"Accept": "application/json", "User-Agent": "JARVIS/3.0"}
+    hdrs.update(headers or {})
+    if body is not None:
+        if isinstance(body, (dict, list)):
+            data = json.dumps(body).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/json")
+        else:
+            data = str(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+    ctx = None
+    if url.lower().startswith("https") and not verify_ssl:
+        ctx = ssl._create_unverified_context()
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line:
+                yield line

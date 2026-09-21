@@ -62,7 +62,7 @@ class BrainManager:
             edges.append({"source": source, "target": target, "kind": kind})
 
         # Centre : JARVIS.
-        add_node("jarvis", "JARVIS", core.settings.get("general", "assistant_name", "JARVIS"),
+        add_node("jarvis", "JARVIS", core.settings.get("general", "assistant_name", "VELKO"),
                  kind="core", weight=2.0)
 
         # Mémoire (familles réelles).

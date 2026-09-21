@@ -132,12 +132,14 @@ const Settings = {
     let piperVoices = [];
     let piperEngine = {};
     let ttsFallback = {};
+    let edgeVoices = [];
     try {
       const tv = await J.get('/api/tts/voices');
       if (tv.ok) {
         piperVoices = tv.voices || [];
         piperEngine = tv.engine || {};
         ttsFallback = tv.fallback || {};
+        edgeVoices = tv.fallback_voices || [];
       }
     } catch { /* moteur indisponible */ }
     const piperInstalled = (piperVoices || []).filter((x) => x.installed);
@@ -154,6 +156,9 @@ const Settings = {
     const voiceOptions = provider === 'piper'
       ? `<option value="">Automatique</option>` + piperVoices.map((x) =>
           `<option value="${esc(x.id)}" ${v.voice === x.id ? 'selected' : ''}>${esc(x.label)}${x.installed ? '' : ' (à télécharger)'}</option>`).join('')
+      : provider === 'edge'
+        ? `<option value="">Automatique</option>` + edgeVoices.map((x) =>
+            `<option value="${esc(x.id)}" ${v.voice === x.id ? 'selected' : ''}>${esc(x.label)}</option>`).join('')
       : `<option value="">Automatique</option>` + voices.map((x) =>
           `<option value="${esc(x.name)}" ${v.voice === x.name ? 'selected' : ''}>${esc(x.name)} (${esc(x.lang)})</option>`).join('');
     pane.innerHTML = `
@@ -208,16 +213,19 @@ const Settings = {
       <div class="card"><div class="card-head"><h2>SYNTHÈSE VOCALE</h2></div><div class="card-body">
         ${this.toggle('Lire les réponses à voix haute', 'speak_responses', v.speak_responses)}
         ${this.field('Moteur de synthèse', `<select data-engine-select data-k="tts_provider">
-          <option value="browser" ${provider === 'browser' ? 'selected' : ''}>Browser (Web Speech API)</option>
-          <option value="piper" ${provider === 'piper' ? 'selected' : ''}>Piper (voix locales françaises)</option>
-        </select>`, provider === 'piper'
+           <option value="browser" ${provider === 'browser' ? 'selected' : ''}>Browser (Web Speech API)</option>
+           <option value="piper" ${provider === 'piper' ? 'selected' : ''}>Piper (voix locales françaises)</option>
+           <option value="edge" ${provider === 'edge' ? 'selected' : ''}>Edge TTS (HenriNeural, naturel)</option>
+         </select>`, provider === 'piper'
           ? (piperEngine.available && piperInstalled.length
               ? `${piperInstalled.length} voix française(s) installée(s) · ${esc(piperEngine.voices_dir || '')}`
               : (ttsFallback.available
                   // Le repli fait sortir le texte de la machine : il faut le dire.
                   ? 'Aucune voix Piper locale : repli sur les voix Edge (le texte transite par Microsoft). Installe une voix ci-dessous pour rester 100% local.'
                   : 'Moteur piper non trouvé sur le serveur.'))
-          : 'Synthèse du navigateur : aucune donnée ne quitte ta machine.')
+           : provider === 'edge'
+             ? (ttsFallback.available ? 'Voix naturelle HenriNeural via Microsoft Edge TTS.' : 'edge-tts non installé.')
+             : 'Synthèse du navigateur : aucune donnée ne quitte ta machine.')
           }
         ${this.field('Voix', `<select data-voice-select data-k="voice">${voiceOptions}</select>`)}
         ${this.field('Vitesse', `<input type="range" min="0.5" max="1.6" step="0.05" data-k="speech_rate" value="${v.speech_rate}"/>`)}
@@ -254,6 +262,9 @@ const Settings = {
     const voiceOptionsFor = (eng, prev) => eng === 'piper'
       ? [`<option value="">Automatique</option>`].concat(piperVoices.map((x) =>
           `<option value="${esc(x.id)}"${x.id === prev ? ' selected' : ''}>${esc(x.label)}${x.installed ? '' : ' (à télécharger)'}</option>`)).join('')
+      : eng === 'edge'
+        ? [`<option value="">Automatique</option>`].concat(edgeVoices.map((x) =>
+            `<option value="${esc(x.id)}"${x.id === prev ? ' selected' : ''}>${esc(x.label)}</option>`)).join('')
       : [`<option value="">Automatique</option>`].concat(voices.map((x) =>
           `<option value="${esc(x.name)}"${x.name === prev ? ' selected' : ''}>${esc(x.name)} (${esc(x.lang)})</option>`)).join('');
     const engineSel = $('[data-engine-select]', pane);
@@ -372,6 +383,11 @@ const Settings = {
     $('[data-discord-connect]', pane).onclick = async (ev) => {
       ev.currentTarget.disabled = true; ev.currentTarget.textContent = 'Vérification…';
       const token = $('[data-discord-token]', pane)?.value || '';
+      if (!token.trim()) {
+        ev.currentTarget.disabled = false; ev.currentTarget.textContent = status.connected ? 'Vérifier' : 'Connecter';
+        toast('Saisis le token Discord dans le champ prévu, puis clique sur Connecter.', 'err');
+        return;
+      }
       if (token) {
         const listed = await J.get('/api/connectors');
         const existing = (listed.connectors || []).find(c => c.id === 'discord_bot' || c.type === 'discord');

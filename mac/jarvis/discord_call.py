@@ -656,7 +656,7 @@ class MorningCallSession:
                 return
             answer = await self._engine.llm(
                 f"Rapport du matin :\n{self._report.as_text()}\n\nQuestion : {heard}",
-                system=("Tu es JARVIS, au téléphone. Réponds en français, en deux phrases "
+                system=("Tu es VELKO, au téléphone. Réponds en français, en deux phrases "
                         "maximum, uniquement à partir du rapport ci-dessus. Si le rapport ne "
                         "contient pas la réponse, dis-le franchement."),
                 max_tokens=180)

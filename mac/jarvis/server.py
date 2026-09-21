@@ -1218,6 +1218,19 @@ def api_document_file(req, filename):
     return RawResponse(match.read_bytes(), ctype)
 
 
+@router.get("/api/artifacts/<artifact_id>/download")
+def api_artifact_download(req, artifact_id):
+    """Télécharge uniquement un artefact matérialisé par ArtifactManager."""
+    from .artifacts import artifact_manager
+    base = artifact_manager.root / str(artifact_id)
+    files = [p for p in base.iterdir()] if base.is_dir() else []
+    if len(files) != 1 or not files[0].is_file():
+        return _err("Artefact introuvable.", 404)
+    path = files[0]
+    ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return RawResponse(path.read_bytes(), ctype)
+
+
 @router.post("/api/images/import")
 def api_image_import(req):
     """Register an uploaded image as an image job so it can be edited.
@@ -2370,7 +2383,9 @@ class JarvisHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "Interface introuvable."}, 404)
                 return
         data = candidate.read_bytes()
-        if candidate.name == "index.html":
+        # L'injection n'a de sens que pour une interface qui embarque ce module ;
+        # servie à VELKO, elle produirait un 404 et une erreur console.
+        if candidate.name == "index.html" and (base / "js" / "self_upgrades.js").is_file():
             data = data.replace(
                 b"</body>",
                 b'<script src="/js/self_upgrades.js?v=JARVIS_SELF_UPGRADE_V1"></script></body>'

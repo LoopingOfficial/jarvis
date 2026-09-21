@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+import sys
+import json
+import os
+import tempfile
+import hashlib
+
+data = json.load(sys.stdin)
+
+post = data.get("postToolUse", {})
+tool = post.get("tool", "")
+params = post.get("parameters", {})
+success = post.get("success", False)
+
+task_id = str(data.get("taskId", "unknown"))
+task_hash = hashlib.sha256(task_id.encode()).hexdigest()[:16]
+
+state_file = os.path.join(
+    tempfile.gettempdir(),
+    f"cline-read-success-{task_hash}.json"
+)
+
+context = ""
+
+if tool in {"read_file", "read_files"} and success:
+    signature = tool + "|" + json.dumps(
+        params,
+        sort_keys=True,
+        separators=(",", ":")
+    )
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            seen = json.load(f)
+    except Exception:
+        seen = []
+
+    if signature not in seen:
+        seen.append(signature)
+
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump(seen, f)
+
+    path = params.get("path", params.get("paths", "fichier"))
+    context = (
+        f"LECTURE TERMINÉE AVEC SUCCÈS pour {path}. "
+        "Le contenu retourné par l'outil est maintenant disponible. "
+        "NE RELIS PAS ce même fichier. "
+        "Analyse le résultat déjà reçu et continue la tâche."
+    )
+
+print(json.dumps({
+    "cancel": False,
+    "contextModification": context,
+    "errorMessage": ""
+}))

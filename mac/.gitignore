@@ -3,6 +3,7 @@
 .cache/
 __pycache__/
 *.pyc
+*.blend1
 
 # Données locales — contiennent la base chiffrée et les sauvegardes.
 # `data/*` et non `data/` : en ignorant le DOSSIER, git n'y descend pas et
@@ -38,3 +39,7 @@ backups/
 releases/
 upgrade-workspaces/
 .aider*
+
+# Fichiers de diagnostic locaux et configuration d'outils personnels.
+diag[0-9]*.py
+.continue/

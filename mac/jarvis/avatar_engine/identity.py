@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..config import DATA_DIR, ROOT, UI_DIR
+from ..config import DATA_DIR, ROOT
 
 BASE_BLEND = ROOT / "assets" / "avatar" / "jarvis_base.blend"
 MASTER_BLEND = ROOT / "assets" / "avatar" / "jarvis_master.blend"
 LEGACY_MASTER = ROOT / "assets" / "blender" / "jarvis_avatar.blend"
-LIVE_GLB = UI_DIR / "assets" / "avatar" / "jarvis_avatar.glb"
+# Asset du moteur d'avatar : il vit avec le moteur, pas avec l'interface
+# servie (celle-ci est VELKO et n'héberge pas cette bibliothèque).
+LIVE_GLB = ROOT / "ui" / "assets" / "avatar" / "jarvis_avatar.glb"
 CANDIDATE_DIR = DATA_DIR / "generated" / "avatar" / "candidate"
 LIBRARY_DIR = ROOT / "assets" / "avatar" / "library"
 

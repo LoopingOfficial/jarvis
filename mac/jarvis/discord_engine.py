@@ -242,10 +242,31 @@ class DiscordEngine:
         # n'est copié vers une seconde fiche CredentialVault.
         vault = getattr(self._core, "vault", None)
         if vault is not None:
-            for field in ("bot_token", "token"):
-                token = vault.get(CREDENTIAL_ID, field, "")
-                if token:
-                    return token
+            # Le connecteur Discord stocke le secret sous son identifiant
+            # propre. Ne pas confondre cette fiche avec CredentialVault, qui
+            # n'accepte que les types basic/api_key/oauth2/cookies.
+            connector_ids = [CREDENTIAL_ID]
+            try:
+                connector_ids.extend(c["id"] for c in self._core.connectors.by_type("discord")
+                                     if c.get("id") not in connector_ids)
+            except Exception:
+                pass
+            for connector_id in connector_ids:
+                for field in ("bot_token", "token"):
+                    token = vault.get(connector_id, field, "")
+                    if token:
+                        return token
+            # Compatibilité avec un connecteur Discord dont l'identifiant
+            # aurait été généré autrement par l'interface.
+            try:
+                for connector in self._core.connectors.by_type("discord"):
+                    cid = connector.get("id")
+                    if cid and self._core.vault.has(cid, "bot_token"):
+                        token = self._core.vault.get(cid, "bot_token", "")
+                        if token:
+                            return token
+            except Exception:
+                pass
         return os.getenv("DISCORD_BOT_TOKEN", "").strip()
 
     async def verify_channel(self, channel_id: str) -> dict[str, Any]:
@@ -594,6 +615,16 @@ class DiscordEngine:
                 raise ValueError(f"Salon {ref} introuvable.")
             return channel
 
+        # Priorité au nom Discord exact avant la normalisation : deux salons
+        # peuvent partager le même suffixe (ex. staff-chat) mais différer par
+        # leur décoration Unicode. Un résultat ambigu ne doit jamais être
+        # choisi arbitrairement.
+        exact_raw = [c for c in self.text_channels() if str(c.name).casefold() == ref.casefold()]
+        if len(exact_raw) == 1:
+            return exact_raw[0]
+        if len(exact_raw) > 1:
+            raise ValueError(f"Plusieurs salons portent exactement le nom « {channel_ref} ».")
+
         wanted = self._slug(ref)
         if not wanted:
             raise ValueError(f"Nom de salon « {channel_ref} » inexploitable.")
@@ -625,6 +656,34 @@ class DiscordEngine:
                          "can_send": bool(getattr(perms, "send_messages", False))})
         rows.sort(key=lambda r: (r["guild"], r["name"]))
         return {"ok": True, "channels": rows, "count": len(rows), "query": query}
+
+    async def latest_message(self, channel_ref: str) -> dict[str, Any]:
+        """Lit uniquement le dernier message d'un salon résolu par nom ou id."""
+        channel = self._channel(channel_ref)
+        async for message in channel.history(limit=1):
+            content = (message.content or "").strip()
+            if not content and message.embeds:
+                content = "[embed] " + str(message.embeds[0].title or "")
+            return {"ok": True, "guild_id": str(channel.guild.id), "guild_name": channel.guild.name,
+                    "channel_id": str(channel.id), "channel_name": channel.name,
+                    "message_id": str(message.id), "author_id": str(message.author.id),
+                    "author_name": str(message.author), "timestamp": message.created_at.isoformat(),
+                    "content": content, "source": "discord_api"}
+        return {"ok": False, "error": "Aucun message dans ce salon."}
+
+    async def recent_messages(self, channel_ref: str, limit: int = 5) -> dict[str, Any]:
+        channel = self._channel(channel_ref)
+        rows = []
+        async for message in channel.history(limit=max(1, min(int(limit), 20))):
+            content = (message.content or "").strip()
+            if not content and message.embeds:
+                content = "[embed] " + str(message.embeds[0].title or "")
+            rows.append({"guild_id": str(channel.guild.id), "channel_id": str(channel.id),
+                         "channel_name": channel.name, "message_id": str(message.id),
+                         "author_id": str(message.author.id), "author_name": str(message.author),
+                         "timestamp": message.created_at.isoformat(), "content": content,
+                         "source": "discord_api"})
+        return {"ok": True, "messages": rows, "source": "discord_api"}
 
     async def scan_message(self, message) -> dict[str, Any]:
         """Analyse + sanction graduée. Renvoie le verdict appliqué."""
