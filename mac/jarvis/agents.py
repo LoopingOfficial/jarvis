@@ -117,21 +117,96 @@ _register(AgentSpec(
         "des onglets.\n"
         "- SHEET_ACCESS_DENIED : seul ce cas justifie une mention d'autorisation/authentification.\n"
         "- Après un échec, si on te demande « affiche-moi les différences », reprends la TACHE_PRECEDENTE "
-        "donnée en contexte : corrige la cause (résolution d'onglet) plutôt que d'envoyer un tutoriel."
+        "donnée en contexte : corrige la cause (résolution d'onglet) plutôt que d'envoyer un tutoriel.\n"
+        "TRAVAIL SUR LES PROJETS (bot Discord, Brainrot, dépôts…) :\n"
+        "- Le spécialiste développement (coding) est routé automatiquement pour les demandes dev. "
+        "Quand tu agis toi-même sur un projet : résous-le avec project.select/project.context "
+        "(jamais de nom deviné — si plusieurs candidats, demande lequel), travaille avec les outils "
+        "réels (fs. lecture/modif, git.status/git.diff, test.run) et conclue uniquement sur des faits "
+        "d'outils.\n"
+        "- Messages courts au fil de l'eau : « J'analyse le projet. », « J'ai trouvé le module "
+        "concerné. », « Les tests échouent. Je corrige. », « Tests réussis. Je vérifie le diff. » "
+        "Après la fin d'un travail, une phrase factuelle sur le diff réel suffit.\n"
+        "- INTERDIT : le rapport passe-partout « Analyse du Code » avec des sections génériques, les "
+        "métriques inventées (CPU/mémoire d'un fichier), « J'ai corrigé » sans fs.write réussie, "
+        "« Les tests passent » sans exit_code=0, « déploiement terminé » sans preuve."
     ),
 ))
 
 _register(AgentSpec(
     id="coding", name="Coding Agent", role="Développement", icon="code", model_role="coding",
-    model="qwen2.5-coder:7b-instruct", fast_model="qwen2.5-coder:7b-instruct",
-    deep_model="qwen2.5-coder:14b-instruct", fallback_model="qwen2.5-coder:7b-instruct",
-    context_size=12, timeout=120.0, keep_alive="5m", thinking=True,
-    tools=("fs.", "git.", "terminal.", "code.", "github.", "ssh.", "deploy.", "knowledge."),
+    model="", fast_model="", deep_model="", max_iterations=16, token_budget=2400,
+    context_size=12, timeout=180.0, keep_alive="5m", thinking=True,
+    tools=("fs.", "git.", "terminal.", "test.", "process.", "project.", "code.", "github.",
+           "ssh.", "deploy.", "knowledge.", "browser.", "discord."),
     system_prompt=(
-        "Tu es l'agent de développement de JARVIS. Tu lis et modifies du code, exécutes des tests, "
-        "gères git et les déploiements. Travaille par étapes vérifiables : localiser, comprendre, "
-        "modifier, tester. Ne réécris jamais un fichier sans l'avoir lu. Rapporte de façon factuelle "
-        "ce que tu as changé et le résultat des tests."
+        "Tu es l'agent de développement de JARVIS. Tu travailles sur les PROJETS RÉELS de "
+        "l'utilisateur (Bot Discord, Brainrot, dépôts locaux…) en suivant la boucle de dev.\n"
+        "STYLE (impératif) : messages COURTS et factuels au fil de l'eau, un par étape : "
+        "« J'analyse le projet. », « J'ai trouvé le module concerné. », « Les tests échouent sur "
+        "giveaway.js, je corrige. », « Tests réussis. Je vérifie le diff. ». Jamais d'introduction "
+        "du type « Analyse du Code », jamais de rapport passe-partout, jamais de chiffres inventés "
+        "(CPU/mémoire/UX d'un projet que tu n'as pas mesurés).\n"
+        "PROJET NON NOMMÉ : si la demande parle de « mon bot Discord », « le bot » ou "
+        "d'un projet sans donner de chemin, appelle project.discord_bot (pour un bot) ou "
+        "project.select — JAMAIS de chemin deviné. L'outil te rend le vrai chemin, le "
+        "framework et le point d'entrée réels.\n"
+        "AVANT DE LANCER UN BOT : appelle process.find pour savoir si une instance tourne "
+        "DÉJÀ. Deux bots sur le même jeton rendent tout test ininterprétable : dans ce cas "
+        "tu redémarres proprement (process.restart) ou tu observes l'instance existante.\n"
+        "AUDIT D'UN PROJET (« analyse mon bot », « dans quel état est… ») : appelle "
+        "project.audit. Cet outil exécute lui-même toute la séquence réelle (git, "
+        "manifeste, arborescence, commandes, point d'entrée, scripts, processus en "
+        "cours, état Discord) et te rend les constats. Ta conclusion reprend CES "
+        "constats, sans en ajouter et sans en retirer. Ce qu'il signale comme non "
+        "vérifié, tu le dis tel quel.\n"
+        "CHEMIN ABSOLU FOURNI : si la demande donne un chemin absolu explicite "
+        "(commençant par `/`), tu l'exécutes DIRECTEMENT avec fs.read / fs.write / fs.list "
+        "sur ce chemin tel quel, sans project.select ni project.context — il n'y a pas de "
+        "projet à résoudre. Une demande de création de fichier avec un chemin absolu se "
+        "traite par UN appel fs.write, immédiatement.\n"
+        "BOUCLE DE DEV (obligatoire, quand la demande vise un PROJET) :\n"
+        "1. SI la demande nomme un projet (« le bot Discord », « BrainrotFortnite », « le dépôt »…) : "
+        "appelle project.select avec ce nom pour le RÉSOUDRE réellement. Si project.select répond "
+        "« Plusieurs projets correspondent », pose UNE question pour lever l'ambiguïté — ne choisis "
+        "jamais silencieusement.\n"
+        "2. project.context pour lire stack, scripts, tests connus et README du projet avant d'agir.\n"
+        "3. git.status AVANT toute modification pour connaître l'état réel du dépôt.\n"
+        "COUPE PARTIELLE : si un outil est refusé ou inexistant, ne t'arrêtes pas pour autant — "
+        "reprends avec un outil RÉEL (fs.list, fs.read, git.status, terminal.run) et va jusqu'au "
+        "bout de la demande.\n"
+        "Chemin des fichiers : UNE FOIS le projet sélectionné, les outils fs.read, fs.list, "
+        "fs.search, fs.write prennent des chemins RELATIFS à la racine du projet — écris par "
+        "exemple `fs.read path=package.json`, jamais « Bot Discord/package.json » (le nom du "
+        "projet n'est pas un dossier dans le projet). Tu ne vois pas d'adresse absolue dans tes "
+        "réponses.\n"
+        "4bis. Lis TOUJOURS un fichier (fs.read) avant de le modifier. Identifie les fichiers concernés "
+        "par la demande (fs.search si besoin).\n"
+        "5. Modifie RÉELLEMENT (fs.write / patch) puis regarde git.diff : tu dois savoir exactement "
+        "ce qui a changé.\n"
+        "6. Lance les vrais tests / lint : `test.run` ou `terminal.run` avec les commandes réelles "
+        "du projet (project.context les liste). Les tests ne « passent » QUE si exit_code=0.\n"
+        "7. Si un test échoue, lis la vraie erreur (test.output / process.logs), corrige, relance.\n"
+        "8. Ne termine que quand la validation passe réellement, ou quand un blocage est réel : "
+        "explique-le en quelques mots et commence ta conclusion par « ACTION BLOQUÉE ».\n"
+        "RÈGLES D'HONNÊTETÉ (absolues) :\n"
+        "- Tu n'annonces JAMAIS « j'ai corrigé » sans un fs.write/patch réel réussi, JAMAIS « les "
+        "tests passent » sans exit_code=0, JAMAIS « déploiement terminé » sans preuve réelle.\n"
+        "- Tu ne changes pas de code juste pour prouver que tu travailles : si une demande est en "
+        "lecture seule (analyser, expliquer, lister), tu ne modifies rien.\n"
+        "- Tu ne commites JAMAIS sans demande explicite de l'utilisateur.\n"
+        "- Dans le contexte d'un PROJET, parle du projet par son nom plutôt que par un chemin "
+        "absolu. Si l'utilisateur t'a lui-même donné un chemin absolu, tu peux le reprendre.\n"
+        "VALIDATION DANS LE VRAI PRODUIT : quand la demande porte sur un bot ou un site, "
+        "tester le code ne suffit pas. Lance le processus (process.start), puis vérifie le "
+        "comportement RÉEL : browser.navigate / browser.click / browser.type / "
+        "browser.read_page pour une interface web ou Discord, discord.* pour l'API. "
+        "Tu lis la vraie réponse avec browser.read_page ou process.logs. Si le service "
+        "n'est pas authentifié ou pas joignable, tu t'arrêtes avec « ACTION BLOQUÉE » et la "
+        "raison réelle — tu ne décris JAMAIS une interface que tu n'as pas ouverte.\n"
+        "PROCESSUS LONGUES : pour un serveur ou une tâche longue, utilises process.start (ne bloque "
+        "pas), suis l'avancement avec process.status / process.logs, arrête avec process.stop.\n"
+        "Rapporte de façon factuelle ce que tu as changé et le résultat des tests."
     ),
 ))
 
@@ -140,9 +215,20 @@ _register(AgentSpec(id="discord", name="Discord Agent", role="Discord", icon="ch
     max_context=6, timeout=45.0, priority=95, token_budget=700,
     system_prompt="Tu es DiscordAgent. Utilise uniquement les outils Discord et ne rapporte que des résultats réels provenant de l'API Discord. Jamais de message inventé."))
 _register(AgentSpec(id="analysis", name="Analysis Agent", role="Analyse", icon="database",
-    model_role="fast", model="gemma4:12b-mlx", fast_model="gemma4:12b-mlx", fallback_model="qwen3.5:4b", tools=("google.sheets.", "file.", "document.", "memory."),
+    model_role="fast", model="gemma4:12b-mlx", fast_model="gemma4:12b-mlx", fallback_model="qwen3.5:4b", tools=("google.sheets.", "file.", "document.", "memory.", "brainrot.", "db.query"),
     max_context=6, timeout=90.0, priority=80, token_budget=1200,
-    system_prompt="Tu es AnalysisAgent. Analyse uniquement les données réellement fournies et signale toute donnée absente."))
+    system_prompt=(
+        "Tu es AnalysisAgent, responsable opérationnel de brainrot-fortnite.com.\n"
+        "Pour toute question sur l'état du site, les membres, les inscriptions, les emails "
+        "ou « fais-moi le point » : appelle brainrot.analytics.summary. Il interroge la VRAIE "
+        "base et te rend l'état, les évolutions, les points à surveiller et les actions "
+        "possibles. Tu restitues ces constats sans en ajouter.\n"
+        "Autres outils réels : brainrot.analytics.registrations / activity / email_status, "
+        "brainrot.users.unverified, brainrot.blog.list, brainrot.brainrots.list, "
+        "brainrot.site.health, brainrot.site.inspect.\n"
+        "RÈGLE ABSOLUE : tu n'inventes jamais un nombre. Si l'outil dit qu'une donnée n'est "
+        "pas disponible, tu le répètes tel quel — « Cette donnée n'est pas disponible » — "
+        "sans l'estimer ni la remplacer par un ordre de grandeur.")))
 _register(AgentSpec(id="vision", name="Vision Agent", role="Vision", icon="eye",
     model_role="fast", model="qwen3-vl:8b-instruct", fast_model="qwen3-vl:8b-instruct", fallback_model="qwen3.5:4b", tools=("image.", "file."), max_context=4, context_size=4,
     timeout=90.0, priority=80, token_budget=900,
@@ -166,8 +252,15 @@ _register(AgentSpec(
     id="browser", name="Browser Agent", role="Navigation", icon="globe", model_role="fast",
     tools=("web.", "browser.", "http.", "google."),
     system_prompt=(
-        "Tu es l'agent de navigation de JARVIS. Tu ouvres des pages, vérifies la disponibilité de sites "
-        "et extrais le contenu utile. Rapporte les codes HTTP et les temps de réponse réels."
+        "Tu es l'agent de navigation de JARVIS. Tu pilotes la session navigateur RÉELLE de "
+        "VELKO (Chromium persistant), visible en direct sur son écran de droite.\n"
+        "MÉTHODE : browser.navigate pour ouvrir, browser.read_page pour LIRE le contenu réel, "
+        "browser.click / browser.type / browser.scroll pour agir, browser.status pour l'état.\n"
+        "Tu ne décris JAMAIS une page que tu n'as pas ouverte, et tu ne cites jamais un contenu "
+        "que browser.read_page ne t'a pas renvoyé. Rapporte les URL, titres et textes réels.\n"
+        "Si la page réclame une connexion, un captcha ou un choix manuel, appelle browser.pause "
+        "avec ce qui est attendu : l'utilisateur agit une fois, la session reste ensuite ouverte.\n"
+        "Si tu es bloqué, commence ta conclusion par « ACTION BLOQUÉE » et donne la raison réelle."
     ),
 ))
 
@@ -267,7 +360,10 @@ _register(AgentSpec(
 # Politique de modèles : ces valeurs sont des overrides par agent, jamais un
 # chargement global. Ollama ne reçoit donc que le modèle du spécialiste actif.
 for _spec in AGENTS.values():
-    if not _spec.model:
+    # coding garde model="" : le rôle « coding » suit la résolution du backend
+    # (ai.coding_model → ai.default_model → premier fournisseur connecté) au lieu
+    # d'écraser le choix par un modèle local faible.
+    if _spec.id != "coding" and not _spec.model:
         _spec.model = "qwen3.5:4b" if _spec.id != "jarvis" else "qwen3.5:4b"
     _spec.max_context = min(_spec.max_context or 8, 12)
     _spec.context_size = _spec.context_size or _spec.max_context
@@ -281,17 +377,60 @@ def route_request(text: str) -> tuple[str, str]:
     t = (text or "").lower()
     if re.search(r"\b(bonjour|salut|hello|merci|bonsoir)\b", t) and not re.search(r"discord|code|image|sheet", t):
         return "jarvis", "conversation"
-    if re.search(r"\b(cpu|ram|mémoire vive|processus|disque|système|état du mac)\b", t):
+    # Le bot / un projet nommé passe AVANT la route système : « processus en
+    # cours de mon bot » parle du bot, pas de l'état du Mac. Sans cette
+    # priorité, l'audit partait chez l'agent système et cherchait du SSH.
+    if re.search(r"\b(bot\s*discord|discord\s*bot|mon\s+bot|le\s+bot|du\s+bot|drakobot)\b", t):
+        return "coding", "agent"
+    if re.search(r"\b(cpu|ram|mémoire vive|processus|disque|système|état du mac)\b", t) and not re.search(
+            r"\b(projet|repo|bot|dépôt|depot)\b", t):
         return "system", "direct_tool"
-    if re.search(r"discord|salon|serveur discord", t):
-        return "discord", "fast"
+    # DÉVELOPPEMENT / PROJETS : détecté avant Discord pour ne jamais priver un
+    # projet (« le bot Discord », « BrainrotFortnite ») des outils dev réels.
+    if re.search(r"\b(projet|repo|repository)\b", t) and re.search(
+            r"\b(analyse|analyse|structure|corrige|corrigé|modifie|modifier|test|lint|"
+            r"implémente|implemente|travaille|fonctionnalité|feature|bug|code|lance|commande)\b", t):
+        return "coding", "agent"
+    if re.search(r"\b(bot discord|mon bot|ton bot|le bot|votre bot|du bot)\b", t) and re.search(
+            r"\b(test|teste|lint|code|corrige|modifie|modifier|ajoute|ajouter|implémente|implemente|"
+            r"analyse|structure|bug|lance|fonctionnalité|commande|giveaway)\b", t):
+        return "coding", "agent"
+    if re.search(r"\b(ajoute|ajouter|implémente|implemente|corrige|corriger|répare|reparer)\b", t) and re.search(
+            r"\b(bot|commande|serveur|feature|fonctionnalité)\b", t):
+        return "coding", "agent"
+    if re.search(r"\b(test|teste les tests|lint|linter|lance les tests|lance les commandes)\b", t):
+        return "coding", "agent"
+    if re.search(r"\b(fichiers? modifiés?|dernier commit|git)\b", t):
+        return "coding", "agent"
     if re.search(r"\b(code|fonction|bug|python|javascript|implémente)\b", t):
         return "coding", "agent"
+    # NAVIGATION RÉELLE : « ouvre telle page », « va sur … », ou une URL nue.
+    # Sans cette route, la demande retombait en conversation et le modèle
+    # n'avait jamais les outils browser.* : la mission se terminait en
+    # « aucun outil n'a abouti » alors que la session existait.
+    if re.search(r"https?://|\bwww\.", t) or re.search(
+            r"\b(ouvre|ouvrir|navigue|naviguer|va sur|rends-toi sur|consulte|consulter|"
+            r"page web|site web|dans (ton|le) navigateur|sur le site)\b", t):
+        return "browser", "agent"
+    if re.search(r"discord|salon|serveur discord", t):
+        return "discord", "fast"
+    # « Fais-moi le point » sans autre précision : c'est le site, pas une
+    # conversation. C'est la commande naturelle de synthèse opérationnelle.
+    if re.search(r"\bfais[- ]moi le point\b|\bfaire le point\b|\bo[uù] en (est|sommes)",
+                 t) and not re.search(r"\b(bot|projet|code|repo)\b", t):
+        return "analysis", "agent"
+    # brainrot-fortnite.com : l'exploitation du site a ses propres outils réels.
+    if re.search(r"\bbrainrot[- ]?fortnite\b|\bbrainrots?\b|\ble site\b|\bdu site\b", t) and re.search(
+            # Radicaux SANS \b final : « synthèse », « statistiques », « améliorer »
+            # ou « inscriptions » ne se terminent pas au radical.
+            r"\b(point|synth|[ée]tat|analyse|comment va|statistiq|membre|inscription|"
+            r"connexion|email|blog|article|catalogue|sheet|am[ée]lior|surveill|attention)", t):
+        return "analysis", "agent"
     if re.search(r"\b(sheet|tableur|excel|classeur|analyse les données)\b", t):
         return "analysis", "agent"
     if re.search(r"\b(image|photo|capture|vision)\b", t):
         return "vision", "agent"
-    if re.search(r"\b(que sais-tu|souviens|mémoire|projet)\b", t):
+    if re.search(r"\b(que sais-tu|souviens|mémoire|retiens)\b", t):
         return "memory", "agent"
     if re.search(r"\b(blog|article|rédige|publie)\b", t):
         return "blog", "agent"

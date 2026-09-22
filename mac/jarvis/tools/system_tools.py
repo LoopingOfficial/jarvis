@@ -6,6 +6,7 @@ import platform
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +29,12 @@ def _check_path(ctx: ToolContext, path: str) -> tuple[Path | None, str]:
     if not path:
         return None, "Chemin manquant."
     p = Path(str(path)).expanduser()
+    if not p.is_absolute():
+        # Sans projet sélectionné, un chemin relatif se résoudrait contre le
+        # répertoire du processus JARVIS : une écriture atterrissait dans le
+        # code source du moteur. On refuse et on dit quoi faire.
+        return None, (f"Chemin relatif « {path} » sans projet sélectionné : "
+                      "appelle project.select d'abord, ou donne un chemin absolu.")
     try:
         resolved = p.resolve()
     except Exception as exc:
@@ -36,6 +43,44 @@ def _check_path(ctx: ToolContext, path: str) -> tuple[Path | None, str]:
         if resolved == root or root in resolved.parents:
             return resolved, ""
     return None, f"Accès refusé : {resolved} est hors des dossiers autorisés (Settings → Security)."
+
+
+def _resolve_arg_path(ctx: ToolContext, raw: str) -> str:
+    """Résout un chemin relatif dans le projet sélectionné (project.select).
+
+    Sans projet sélectionné, le chemin est renvoyé tel quel. C'est ce qui
+    permet de « travailler dans le projet » sans chemins absolus : quand VELKO
+    sélectionne Bot Discord, `fs.read "package.json"` lit
+    « /Users/jerome/Desktop/Bot Discord/package.json ».
+    """
+    if not raw:
+        return raw
+    p = Path(str(raw)).expanduser()
+    if p.is_absolute():
+        return str(p)
+    try:
+        proj = getattr(ctx.core, "projects", None)
+    except Exception:
+        proj = None
+    # Dossier de travail RÉEL de la tâche : le dernier répertoire que le moteur
+    # a effectivement utilisé (cwd d'une commande, dossier d'un fichier lu ou
+    # écrit). C'est le comportement d'un shell, pas une supposition : sans lui,
+    # un « fs.read calc.py » juste après un « terminal.run cwd=/…/projet »
+    # échouait alors que l'intention était sans ambiguïté.
+    if proj is None or proj.current is None:
+        cwd = str(getattr(ctx.core, "active_task_context", {}).get("working_dir") or "")
+        if cwd:
+            return str(Path(cwd) / p)
+    if proj is not None and proj.current is not None:
+        rel = p
+        # Si le modèle répète le nom du dossier projet (« Bot Discord/x », déjà
+        # sous le projet sélectionné), on retire le segment redondant.
+        parts = rel.parts
+        if parts and parts[0].casefold() in {proj.current.name.casefold(),
+                                            proj.current.display_name.casefold()}:
+            rel = Path(*parts[1:])
+        return str(Path(proj.current.path) / rel)
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +108,15 @@ registry.add(
 
 
 # ---------------------------------------------------------------------------
+def _emit_terminal(ctx: ToolContext, event_type: str, payload: dict, *, cache: bool = True) -> None:
+    """Diffuse un fait réel du terminal. Le contenu n'est jamais fabriqué."""
+    try:
+        ctx.core.events.emit(event_type, {"task_id": ctx.task_id, "ts": time.time(), **payload},
+                             cache=cache)
+    except Exception:
+        pass
+
+
 def _shell(ctx: ToolContext) -> ToolResult:
     if not ctx.core.settings.get("security", "allowed_shell", True):
         return ToolResult(False, "L'exécution de commandes locales est désactivée dans les réglages.")
@@ -72,21 +126,83 @@ def _shell(ctx: ToolContext) -> ToolResult:
     cwd = str(ctx.arguments.get("cwd") or "").strip()
     workdir = None
     if cwd:
-        workdir, err = _check_path(ctx, cwd)
+        workdir, err = _check_path(ctx, _resolve_arg_path(ctx, cwd))
         if err:
             return ToolResult(False, err)
+    workdir_s = str(workdir) if workdir else ""
+    if workdir:
+        _remember_dir(ctx, workdir)
     timeout = int(ctx.arguments.get("timeout") or ctx.core.settings.get("security", "shell_timeout_s", 120))
+    _emit_terminal(ctx, "terminal.command", {"command": command, "cwd": workdir_s,
+                                             "timestamp": time.time()}, cache=False)
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+    started = time.time()
+
+    def _pump(pipe, stream: str) -> None:
+        try:
+            for line in iter(pipe.readline, ""):
+                if stream == "stdout":
+                    out_lines.append(line)
+                else:
+                    err_lines.append(line)
+                _emit_terminal(ctx, "terminal.output",
+                               {"command": command, "cwd": workdir_s, "timestamp": time.time(),
+                                "stream": stream, "text": line}, cache=False)
+        except Exception:
+            pass
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
     try:
-        proc = subprocess.run(command, shell=True, capture_output=True, text=True,
-                              timeout=min(timeout, 900), cwd=str(workdir) if workdir else None)
-        out = ((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")).strip()
-        ok = proc.returncode == 0
-        return ToolResult(ok, out[:20000] or (f"Code {proc.returncode}." if not ok else "Exécuté sans sortie."),
-                          data={"exit_code": proc.returncode})
+        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace",
+                                bufsize=1, cwd=str(workdir) if workdir else None)
+    except Exception as exc:
+        _emit_terminal(ctx, "terminal.failed", {"command": command, "cwd": workdir_s,
+                                                "error": str(exc)}, cache=False)
+        return ToolResult(False, f"Terminal: {exc}")
+    readers = [threading.Thread(target=_pump, args=(proc.stdout, "stdout"), daemon=True),
+               threading.Thread(target=_pump, args=(proc.stderr, "stderr"), daemon=True)]
+    for r in readers:
+        r.start()
+    try:
+        proc.wait(timeout=min(timeout, 900))
     except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        _emit_terminal(ctx, "terminal.completed",
+                       {"command": command, "cwd": workdir_s, "exit_code": -1,
+                        "timed_out": True, "duration_ms": int((time.time() - started) * 1000),
+                        "stdout": "".join(out_lines), "stderr": "".join(err_lines)}, cache=False)
         return ToolResult(False, f"La commande a dépassé {timeout}s.")
     except Exception as exc:
+        try:
+            proc.kill()
+        except Exception:
+            pass
         return ToolResult(False, f"Terminal: {exc}")
+    for r in readers:
+        r.join(timeout=2)
+    code = proc.returncode
+    out_text = "".join(out_lines)
+    err_text = "".join(err_lines)
+    combined = (out_text + ("\n" + err_text if err_text else "")).strip()
+    ok = code == 0
+    duration_ms = int((time.time() - started) * 1000)
+    _emit_terminal(ctx, "terminal.completed",
+                   {"command": command, "cwd": workdir_s, "exit_code": code,
+                    "timed_out": False, "duration_ms": duration_ms,
+                    "stdout": out_text, "stderr": err_text}, cache=False)
+    return ToolResult(ok, combined[:20000] or (f"Code {code}." if not ok else "Exécuté sans sortie."),
+                      data={"exit_code": code, "duration_ms": duration_ms,
+                            "stdout": out_text, "stderr": err_text})
 
 
 registry.add(
@@ -109,8 +225,24 @@ registry.add(
 
 
 # ---------------------------------------------------------------------------
+def _remember_dir(ctx: ToolContext, path: Path) -> None:
+    """Retient le répertoire RÉELLEMENT utilisé par la tâche en cours."""
+    try:
+        ctx.core.active_task_context["working_dir"] = str(path if path.is_dir() else path.parent)
+    except Exception:
+        pass
+
+
+def _emit_file(ctx: ToolContext, event_type: str, payload: dict) -> None:
+    """Diffuse un fait fichier réel — émis uniquement après l'opération réussie."""
+    try:
+        ctx.core.events.emit(event_type, {"task_id": ctx.task_id, "ts": time.time(), **payload})
+    except Exception:
+        pass
+
+
 def _fs_read(ctx: ToolContext) -> ToolResult:
-    path, err = _check_path(ctx, str(ctx.arguments.get("path") or ""))
+    path, err = _check_path(ctx, _resolve_arg_path(ctx, str(ctx.arguments.get("path") or "")))
     if err:
         return ToolResult(False, err)
     if not path.is_file():
@@ -121,6 +253,9 @@ def _fs_read(ctx: ToolContext) -> ToolResult:
         text = path.read_bytes().decode("utf-8")
     except Exception as exc:
         return ToolResult(False, f"Lecture impossible: {exc}")
+    _remember_dir(ctx, path)
+    _emit_file(ctx, "file.opened", {"path": str(path)})
+    _emit_file(ctx, "code.file.active", {"path": str(path), "source": "fs"})
     max_lines = int(ctx.arguments.get("max_lines") or 400)
     lines = text.splitlines()
     truncated = len(lines) > max_lines
@@ -141,13 +276,14 @@ registry.add(
 
 
 def _fs_write(ctx: ToolContext) -> ToolResult:
-    path, err = _check_path(ctx, str(ctx.arguments.get("path") or ""))
+    path, err = _check_path(ctx, _resolve_arg_path(ctx, str(ctx.arguments.get("path") or "")))
     if err:
         return ToolResult(False, err)
     content = ctx.arguments.get("content")
     if content is None:
         return ToolResult(False, "Contenu manquant.")
     mode = str(ctx.arguments.get("mode") or "write")
+    existed = path.exists()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and mode == "write":
@@ -155,6 +291,13 @@ def _fs_write(ctx: ToolContext) -> ToolResult:
             shutil.copy2(path, backup)
         with path.open("a" if mode == "append" else "w", encoding="utf-8") as fh:
             fh.write(str(content))
+        _remember_dir(ctx, path)
+        _emit_file(ctx, "file.changed" if existed else "file.created",
+                   {"path": str(path), "mode": mode})
+        if str(path).endswith((".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".md",
+                               ".php", ".html", ".css", ".sh", ".yml", ".yaml", ".go", ".rs")):
+            _emit_file(ctx, "code.patch.applied", {"path": str(path), "mode": mode,
+                                                   "chars": len(str(content))})
         return ToolResult(True, f"Écrit dans {path} ({len(str(content))} caractères).", data={"path": str(path)})
     except Exception as exc:
         return ToolResult(False, f"Écriture impossible: {exc}")
@@ -171,11 +314,13 @@ registry.add(
 
 
 def _fs_list(ctx: ToolContext) -> ToolResult:
-    path, err = _check_path(ctx, str(ctx.arguments.get("path") or "~"))
+    raw = str(ctx.arguments.get("path") or "~")
+    path, err = _check_path(ctx, _resolve_arg_path(ctx, raw))
     if err:
         return ToolResult(False, err)
     if not path.is_dir():
         return ToolResult(False, f"Dossier introuvable: {path}")
+    _remember_dir(ctx, path)
     entries = []
     for item in sorted(path.iterdir())[:300]:
         try:
@@ -196,7 +341,8 @@ registry.add(
 
 
 def _fs_search(ctx: ToolContext) -> ToolResult:
-    path, err = _check_path(ctx, str(ctx.arguments.get("path") or "~"))
+    raw = str(ctx.arguments.get("path") or "~")
+    path, err = _check_path(ctx, _resolve_arg_path(ctx, raw))
     if err:
         return ToolResult(False, err)
     pattern = str(ctx.arguments.get("pattern") or "").strip()
@@ -243,7 +389,7 @@ registry.add(
 
 
 def _fs_delete(ctx: ToolContext) -> ToolResult:
-    path, err = _check_path(ctx, str(ctx.arguments.get("path") or ""))
+    path, err = _check_path(ctx, _resolve_arg_path(ctx, str(ctx.arguments.get("path") or "")))
     if err:
         return ToolResult(False, err)
     if not path.exists():
@@ -253,6 +399,7 @@ def _fs_delete(ctx: ToolContext) -> ToolResult:
         trash.mkdir(parents=True, exist_ok=True)
         target = trash / path.name
         shutil.move(str(path), str(target))
+        _emit_file(ctx, "file.deleted", {"path": str(path), "trash_path": str(target)})
         return ToolResult(True, f"Déplacé vers la corbeille JARVIS : {target}", risk=DESTRUCTIVE,
                           data={"trash_path": str(target)})
     except Exception as exc:

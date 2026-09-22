@@ -58,13 +58,16 @@ export class VelkoSceneDirector {
  }
  return true;
  }
- setAction(action){this.currentAction=action;this.context.typing=false;this.context.mouse=false;this.context.action='read';this.context.look=0;
+ setAction(action){this.currentAction=action;this.context.typing=false;this.context.mouse=false;this.context.action='read';this.context.look=0;this.context.gesture='ReadScreen';
   if(!this.ready||this.finished())return;
   if(!action){if(this.task.status!=='blocked'&&this.task.status!=='failed')this.machine.set('READING_OUTPUT');return;}
   const states={code:'WORKING_CODE',terminal:'WORKING_TERMINAL',discord:'WORKING_DISCORD',browser:'WORKING_BROWSER',read:'READING_OUTPUT'};
   this.context.look=[-1,0,1][action.screen??1];this.context.action=action.action||'read';
   // Reading output or waiting for a process does not cause decorative keystrokes.
-  this.context.typing=action.action==='type';this.context.mouse=['click','scroll','move'].includes(action.action);
+  this.context.typing=action.action==='type';this.context.mouse=['click','scroll','move','drag'].includes(action.action);
+  // Le geste vient du fait réel traduit par le pont ; à défaut, il découle
+  // de l'action. Jamais de frappe quand un processus travaille seul.
+  this.context.gesture=action.gesture||{type:'TypingNormal',click:'MouseClick',scroll:'MouseScroll',drag:'MouseDrag'}[action.action]||'ReadScreen';
   this.machine.set(states[action.kind]||'READING_OUTPUT');this.bus.emit('action.focus',{...action});
  }
  sync(snapshot){if(!this.active||snapshot.id!==this.task.id)return;this.task.status=snapshot.status;this.machine.setTaskStatus(snapshot.status);if(this.ready&&!['completed','blocked','failed'].includes(snapshot.status))this.setAction(snapshot.currentAction||null);}
@@ -80,7 +83,7 @@ export class VelkoSceneDirector {
   const u=Math.min(1,(this.time-(returning?this.returnStart:this.moveStart))/7),walk=Math.max(0,Math.min(1,(u-.2)/.68));this.context.walking=walk>0&&walk<1;
   const p=returning?1-walk:walk,bend=.8;let dx,dz;if(p<bend){a.position.set(.62*p/bend,0,2.3-3.9*p/bend);dx=.62;dz=-3.9;}else{a.position.set(.62+.78*(p-bend)/(1-bend),0,-1.6);dx=.78;dz=0;}
   const desired=Math.atan2(returning?-dx:dx,returning?-dz:dz),target=walk>=1?(returning?0:Math.PI):desired;let diff=((target-a.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;a.rotation.y+=diff*(1-Math.exp(-dt*5));
-  if(returning&&u>=1){this.context.walking=false;this.context.seated=true;this.context.look=0;this.machine.atWorkstation=false;this.machine.set('IDLE_CONVERSATION');this.camera.set('conversation');this.active=false;this.bus.emit('mission.finished',{taskId:this.task.id});this.bus.emit('demo.finished');}
+  if(returning&&u>=1){this.context.walking=false;this.context.seated=true;this.context.look=0;this.machine.atWorkstation=false;this.machine.set('IDLE_CONVERSATION');this.camera.set('conversation');this.active=false;this.bus.emit('mission.finished',{taskId:this.task.id,status:this.task.status});}
  }
  if(this.machine.atWorkstation&&!this.finished()){a.position.set(1.4,0,-1.6);a.rotation.y=Math.PI;this.context.seated=true;this.context.walking=false;}
  this.avatar.update(dt,performance.now()/1000,this.machine.state.toLowerCase(),this.context);

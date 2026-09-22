@@ -7,8 +7,14 @@ from typing import Any, Callable
 
 from .db import Database, dumps, loads, new_id
 
-STATUSES = ("queued", "planning", "running", "waiting_confirmation", "completed", "failed", "cancelled")
-ACTIVE_STATUSES = ("queued", "planning", "running", "waiting_confirmation")
+# Cycle de vie VELKO — les états intermédiaires correspondent à des faits
+# réels du moteur (outil verrouillé, avatar en attente de validation, phase de
+# test, reprise après échec d'outil). Aucun n'est décoratif.
+STATUSES = ("queued", "planning", "running", "waiting_tool", "waiting_user",
+            "waiting_confirmation", "testing", "retrying", "blocked",
+            "completed", "failed", "cancelled")
+ACTIVE_STATUSES = ("queued", "planning", "running", "waiting_tool", "waiting_user",
+                   "waiting_confirmation", "testing", "retrying", "blocked")
 
 
 class TaskManager:
@@ -24,7 +30,7 @@ class TaskManager:
     def _recover(self) -> None:
         """Après redémarrage, les tâches actives orphelines sont marquées échouées."""
         rows = self._db.query(
-            "SELECT id, name FROM tasks WHERE status IN ('queued','planning','running','waiting_confirmation')")
+            "SELECT id, name FROM tasks WHERE status IN ('queued','planning','running','waiting_tool','waiting_user','waiting_confirmation','testing','retrying','blocked')")
         for r in rows:
             self._db.execute(
                 "UPDATE tasks SET status='failed', error=?, completed_at=? WHERE id=?",
@@ -102,6 +108,8 @@ class TaskManager:
                 "running": "task.started", "planning": "task.started", "completed": "task.completed",
                 "failed": "task.failed", "cancelled": "task.cancelled",
                 "waiting_confirmation": "task.waiting_confirmation", "queued": "task.created",
+                "waiting_tool": "task.waiting_tool", "waiting_user": "task.waiting_user",
+                "testing": "task.testing", "retrying": "task.retrying", "blocked": "task.blocked",
             }.get(status, "task.progress")
             self._events.emit(event, task)
         return task

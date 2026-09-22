@@ -41,3 +41,12 @@ upgrade-workspaces/
 # Fichiers de diagnostic locaux et configuration d'outils personnels.
 diag[0-9]*.py
 .continue/
+
+# Index CodeGraph local (87 Mo, regenerable)
+.codegraph/
+
+# Copies de sauvegarde d'assets deja suivis ailleurs dans le depot
+velko/assets/avatar/_originals/
+
+# Rendus de diagnostic jetables (les ctrl_* sont conserves)
+velko/work/renders/diag_*.png

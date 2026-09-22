@@ -52,6 +52,9 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "language": "fr-FR",
         "timezone": "Europe/Paris",
         "default_project": os.getenv("JARVIS_DEFAULT_PROJECT", ""),
+        # Projet retenu comme « mon bot Discord » : résolu une fois par preuves
+        # réelles, puis réutilisé sans redemander le chemin à l'utilisateur.
+        "discord_bot_project": "",
         "operator_title": "Commander",
         "location": "",
         "launch_ui_on_start": True,

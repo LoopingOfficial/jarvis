@@ -60,6 +60,10 @@ class BrowserManager:
         self._cmd_id = 0
         self._download_dir = Path(DATA_DIR) / "downloads"
         self._download_dir.mkdir(parents=True, exist_ok=True)
+        # Profil du navigateur DE VELKO. Il lui appartient : ce n'est ni le
+        # Chrome de l'utilisateur, ni une fenêtre qu'il faudrait sélectionner.
+        self._profile_dir = Path(DATA_DIR) / "browser-profile"
+        self._headless = True
 
     # -- utilitaires événements -----------------------------------------
     def _emit(self, kind: str, payload: dict[str, Any], cache: bool = True) -> None:
@@ -227,12 +231,21 @@ class BrowserManager:
             try:
                 if self._playwright is None:
                     self._playwright = pw.sync_playwright().start()
-                    self._browser = self._playwright.chromium.launch(headless=True)
+                    # Contexte PERSISTANT : cookies et session restent sur disque.
+                    # Sans cela, une authentification faite une fois (Discord) était
+                    # perdue au redémarrage et VELKO redemandait la connexion.
+                    self._profile_dir.mkdir(parents=True, exist_ok=True)
+                    self._browser = self._playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(self._profile_dir), headless=self._headless,
+                        viewport={"width": 1280, "height": 800},
+                        accept_downloads=True)
                 if self._page is None:
-                    self._page = self._browser.new_page(viewport={"width": 1280, "height": 800})
+                    pages = list(getattr(self._browser, "pages", []) or [])
+                    self._page = pages[0] if pages else self._browser.new_page()
                     self._bind_page(self._page)
                 self._state = "navigating"
                 self._emit("browser.session.started", {"url": url})
+                self._emit("browser.started", {"url": url, "profile": str(self._profile_dir)})
                 self._active = True
                 self._page.goto(url, wait_until="commit", timeout=self.timeout_for(args, 30000))
                 try:
@@ -243,6 +256,7 @@ class BrowserManager:
                 self._title = (self._page.title() or "")[:160]
                 self._state = "running"
                 self._emit("browser.navigate", {"url": self._url, "title": self._title})
+                self._emit("browser.loaded", {"url": self._url, "title": self._title})
                 self._emit("browser.action", {"kind": "OPEN", "target": self._title or self._url})
                 return result(True, url=self._url, title=self._title)
             except Exception as exc:
@@ -264,6 +278,7 @@ class BrowserManager:
                     self._halo_until = time.time() + 0.9
                 locator.click(timeout=12000)
                 label = self._friendly_target(locator, sel)
+                self._emit("browser.click", {"target": label, "url": self._url})
                 self._emit("browser.action", {"kind": "CLICK", "target": label})
                 return result(True, target=label)
             except Exception as exc:
@@ -295,6 +310,7 @@ class BrowserManager:
             y = int(args.get("y") or 0)
             try:
                 self._page.evaluate(f"window.scrollTo(window.scrollX, window.scrollY + {y})")
+                self._emit("browser.scroll", {"delta": y, "url": self._url})
                 self._emit("browser.action", {"kind": "SCROLL", "target": f"{y}px"})
                 return result(True)
             except Exception as exc:
@@ -312,9 +328,37 @@ class BrowserManager:
             except Exception as exc:
                 return result(False, error=str(exc)[:200])
 
+        if op == "reload":
+            try:
+                self._page.reload(wait_until="commit", timeout=self.timeout_for(args, 30000))
+                self._url = self._page.url
+                self._title = (self._page.title() or "")[:160]
+                self._emit("browser.navigate", {"url": self._url, "title": self._title})
+                self._emit("browser.loaded", {"url": self._url, "title": self._title})
+                return result(True, url=self._url, title=self._title)
+            except Exception as exc:
+                self._emit("browser.error", {"message": str(exc)[:200], "stage": "reload"})
+                return result(False, error=str(exc)[:200])
+
+        if op == "read_page":
+            # Texte RÉEL de la page réellement ouverte. Aucun contenu reconstitué.
+            try:
+                text = self._page.inner_text("body", timeout=8000)
+            except Exception as exc:
+                return result(False, error=str(exc)[:200])
+            limit = int(args.get("max_chars") or 6000)
+            body = self.core.vault.scrub(text)[:limit] if hasattr(self.core, "vault") else text[:limit]
+            self._emit("browser.read", {"url": self._url, "title": self._title,
+                                        "chars": len(text)})
+            return result(True, url=self._url, title=self._title, text=body,
+                          truncated=len(text) > limit)
+
         if op == "wait":
-            ms = int(args.get("ms") or 800)
-            time.sleep(min(max(ms, 0), 15000))
+            # Le paramètre est en MILLISECONDES. Il était passé tel quel à
+            # time.sleep(), qui attend des secondes : « wait 2500 ms » bloquait
+            # le thread Playwright 41 minutes et gelait toute la session.
+            ms = max(0, min(int(args.get("ms") or 800), 15000))
+            time.sleep(ms / 1000.0)
             return result(True, waited=ms)
 
         if op == "pause":
@@ -331,6 +375,7 @@ class BrowserManager:
 
         if op == "close":
             self._close_page()
+            self._emit("browser.closed", {})
             return result(True)
 
         if op == "status":

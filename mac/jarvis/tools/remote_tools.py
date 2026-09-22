@@ -23,8 +23,19 @@ def _ssh_run(ctx: ToolContext) -> ToolResult:
         return ToolResult(False, "Aucun serveur SSH sélectionné.")
     timeout = int(ctx.arguments.get("timeout") or 90)
     secrets = ctx.secrets("password", "private_key", "passphrase")
+    try:
+        ctx.core.events.emit("ssh.command", {"connector": ctx.connector["id"],
+                                             "command": command[:2000]}, cache=False)
+    except Exception:
+        pass
     ok, out = ssh_exec(ctx.config, secrets, command, timeout=min(timeout, 600))
     label = ctx.connector["name"]
+    try:
+        ctx.core.events.emit("ssh.output", {"connector": ctx.connector["id"],
+                                            "command": command[:2000], "output": out[:4000],
+                                            "exit_code": 0 if ok else 1}, cache=False)
+    except Exception:
+        pass
     return ToolResult(ok, f"[{label}] {out}" if ok else out, data={"connector": ctx.connector["id"]})
 
 
@@ -416,6 +427,67 @@ def _sql_risk(args: dict[str, Any]) -> str:
     return classify_command(str(args.get("query", "")))
 
 
+
+def _mysql_python(cfg: dict, database: str, password: str, query: str):
+    """(ok, sortie) via PyMySQL, ou (None, "") si le driver n'est pas installé."""
+    try:
+        import pymysql
+    except Exception:
+        return None, ""
+    try:
+        conn = pymysql.connect(
+            host=str(cfg.get("host", "127.0.0.1")), port=int(cfg.get("port") or 3306),
+            user=str(cfg.get("username", "")), password=password,
+            database=database or None, connect_timeout=15, read_timeout=120,
+            charset="utf8mb4", cursorclass=pymysql.cursors.Cursor)
+    except Exception as exc:
+        return False, f"Connexion MySQL impossible : {exc}"
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                rows = cur.fetchall() if cur.description else ()
+                if not cur.description:
+                    # PyMySQL n'a PAS d'autocommit : sans ce commit, une écriture
+                    # annonçait « 1 ligne affectée » puis disparaissait à la
+                    # fermeture de la connexion. Silencieux et faux.
+                    conn.commit()
+                    return True, f"{cur.rowcount} ligne(s) affectée(s), transaction validée."
+                headers = [d[0] for d in cur.description]
+                lines = ["\t".join(headers)]
+                for row in rows[:500]:
+                    lines.append("\t".join("NULL" if v is None else str(v) for v in row))
+                if len(rows) > 500:
+                    lines.append(f"… ({len(rows) - 500} lignes supplémentaires)")
+                return True, "\n".join(lines)
+    except Exception as exc:
+        return False, f"SQL : {exc}"
+
+
+def _sql_cli(ctx, ctype: str, cfg: dict, database: str, password: str, query: str):
+    """Repli historique : client mysql/psql du système."""
+    try:
+        env = os.environ.copy()
+        if ctype == "mysql":
+            argv = ["mysql", "-h", str(cfg.get("host", "127.0.0.1")), "-P", str(int(cfg.get("port") or 3306)),
+                    "-u", str(cfg.get("username", ""))]
+            if database:
+                argv.append(database)
+            argv += ["-e", query]
+            env["MYSQL_PWD"] = password
+        else:
+            argv = ["psql", "-h", str(cfg.get("host", "127.0.0.1")), "-p", str(int(cfg.get("port") or 5432)),
+                    "-U", str(cfg.get("username", "")), "-d", database or "postgres", "-c", query]
+            env["PGPASSWORD"] = password
+        proc = subprocess.run(argv, shell=False, env=env, capture_output=True, text=True, timeout=120)
+        out = ((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")).strip()
+        return proc.returncode == 0, out
+    except FileNotFoundError:
+        return False, "Le client SQL n'est pas installé localement."
+    except Exception as exc:
+        return False, f"SQL: {exc}"
+
+
 def _db_query(ctx: ToolContext) -> ToolResult:
     query = str(ctx.arguments.get("query") or "").strip()
     if not query:
@@ -448,6 +520,14 @@ def _db_query(ctx: ToolContext) -> ToolResult:
             return ToolResult(False, f"Connecteur SSH « {via_ssh} » introuvable pour ce tunnel.")
         ssh_secrets = {f: ctx.core.vault.get(ssh_conn["id"], f, "") for f in ("password", "private_key", "passphrase")}
         ok, out = ssh_exec(ssh_conn["config"], ssh_secrets, inner, timeout=120)
+    elif ctype == "mysql":
+        # Driver Python plutôt que le client en ligne de commande : mysql 9.x a
+        # retiré le plugin `mysql_native_password`, que des serveurs mutualisés
+        # exigent encore. Le CLI échouait donc avec « plugin cannot be loaded »
+        # alors que le serveur était parfaitement joignable.
+        ok, out = _mysql_python(cfg, database, password, query)
+        if ok is None:   # driver absent : on retombe sur le client système
+            ok, out = _sql_cli(ctx, ctype, cfg, database, password, query)
     else:
         try:
             env = os.environ.copy()

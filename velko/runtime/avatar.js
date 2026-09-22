@@ -41,10 +41,40 @@ export class VelkoAvatarController {
     const elbow=start.clone().addScaledVector(direction,x).addScaledVector(bend,height);
     this.aim(A,B,elbow);this.aim(B,C,target);
   }
+  /** Gestes nommés. Chacun n'est joué QUE sur un fait réel du moteur :
+   *  une frappe quand VELKO écrit, la souris quand il clique ou défile,
+   *  la lecture quand un processus travaille seul. Aucun geste décoratif. */
+  static GESTURES={
+    TypingSlow:    {rate:7,  amp:.07, mouse:false},
+    TypingNormal:  {rate:12, amp:.10, mouse:false},
+    TypingFast:    {rate:17, amp:.13, mouse:false},
+    TypingShortcut:{rate:0,  amp:.20, mouse:false, hold:true},
+    PressEnter:    {rate:12, amp:.10, mouse:false, enter:true},
+    PauseTyping:   {rate:0,  amp:.04, mouse:false},
+    ReadScreen:    {rate:0,  amp:.03, mouse:false},
+    MouseReach:    {rate:0,  amp:.03, mouse:true,  reach:1},
+    MouseMove:     {rate:0,  amp:.03, mouse:true,  drift:.05},
+    MouseClick:    {rate:0,  amp:.03, mouse:true,  click:.22},
+    MouseDoubleClick:{rate:0,amp:.03, mouse:true,  click:.22, double:true},
+    MouseScroll:   {rate:0,  amp:.03, mouse:true,  scroll:1},
+    MouseDrag:     {rate:0,  amp:.03, mouse:true,  click:.14, drift:.09},
+    MouseRelease:  {rate:0,  amp:.03, mouse:true},
+  };
+  /** Geste effectif : celui demandé, sinon déduit de l'action réelle. */
+  gesture(context){
+    const G=VelkoAvatarController.GESTURES;
+    if(context.gesture&&G[context.gesture])return G[context.gesture];
+    if(context.typing)return G.TypingNormal;
+    if(context.mouse)return G.MouseMove;
+    return G.ReadScreen;
+  }
   update(dt,time,state,context={}){
     if(!this.loaded)return;
     const T=this.THREE,s=state||this.pose,B=this.bones;
     const walking=context.walking??/walk|moving/i.test(s),seated=context.seated??/sit|typing|working|mouse/i.test(s),typing=context.typing??/typing|working/i.test(s),speaking=context.speaking??/speak|talk|success/i.test(s);
+    const g=this.gesture(context),tap=g.rate>0&&typing;
+    // Un geste souris ne joue que si le moteur a réellement produit une action souris.
+    const mousing=g.mouse&&(context.mouse||context.action==='click'||context.action==='scroll'||context.action==='drag');
     const ease=1-Math.exp(-Math.min(dt,.1)*9);this.seat+=(Number(seated)-this.seat)*ease;
     for(const [bone,r] of this.rest){bone.quaternion.copy(r.q);bone.position.copy(r.p);}
     const seat=this.seat,step=Math.sin(time*7),breath=Math.sin(time*1.6)*.002;
@@ -57,18 +87,29 @@ export class VelkoAvatarController {
       const knee=this.point([sign*.12,.5,seat*.65+.3]);
       this.limb('upperLeg_'+side,'lowerLeg_'+side,'foot_'+side,foot,knee);
       const f=B['foot_'+side],toe=B['toe_'+side];if(f&&toe)this.aim(f,toe,this.point([sign*.105,.07,seat*.44+.18+(walking?step*sign*.22:0)]));
-      const mouse=(context.mouse||context.action==='click'||context.action==='scroll')&&side==='R';
+      const mouse=mousing&&side==='R';
       let handTarget;
       if(seat>.01){
         const rest=[sign*.245,.93,.045];
-        const work=[mouse?-.36:sign*.115,.90+(typing?Math.sin(time*13+sign)*.002:0),mouse?.43:.425];
+        const drift=mouse&&g.drift?Math.sin(time*2.1)*g.drift:0;
+        const wheel=mouse&&g.scroll?Math.sin(time*6)*.012:0;
+        const work=[mouse?-.36+drift:sign*.115,
+                    .90+(tap?Math.sin(time*g.rate+sign)*.002:0)+wheel,
+                    mouse?.43+(g.reach?Math.sin(time*1.4)*.02:0):.425];
         handTarget=this.point(rest.map((v,i)=>v+(work[i]-v)*seat));
       }else handTarget=this.point([sign*(speaking?.28:.245),speaking?1.05:.9,walking?-step*sign*.15:speaking?.20:.065]);
       this.limb('upperArm_'+side,'lowerArm_'+side,'hand_'+side,handTarget,this.point([sign*.46,.8,.02]));
       const hand=B['hand_'+side],finger=B['middle_01_'+side];
       if(hand&&finger&&seat>.1)this.aim(hand,finger,this.point([mouse?-.37:sign*.115,.878,mouse?.535:.545]));
       for(let i=0;i<4;i++)for(let k=1;k<=3;k++){
-        const name=['index','middle','ring','pinky'][i]+'_0'+k+'_'+side, bone=B[name];if(bone)bone.rotateX((typing&&seat>.5?Math.sin(time*12+i*2+sign)*.10:.05)+(mouse&&i===0&&context.action==='click'?.15:0));
+        const name=['index','middle','ring','pinky'][i]+'_0'+k+'_'+side, bone=B[name];if(!bone)continue;
+        // Frappe : amplitude et cadence du geste demandé. Raccourci : doigts maintenus.
+        const strike=tap&&seat>.5?Math.sin(time*g.rate+i*2+sign)*g.amp
+                    :(g.hold&&typing?g.amp:.05);
+        // Validation : l'auriculaire frappe Entrée à la fin de la saisie.
+        const enter=g.enter&&i===3&&side==='R'?Math.max(0,Math.sin(time*4))*.18:0;
+        const clic=mouse&&i===0&&g.click?Math.max(0,Math.sin(time*(g.double?11:5.5)))*g.click:0;
+        bone.rotateX(strike+enter+clic);
       }
     }
     const phase=time%4.6,blink=phase<.15?Math.sin(phase/.15*Math.PI):0;this.morphs.blink=blink;this.morphs.mouth=speaking?Math.max(0,Math.sin(time*14))*.35:0;

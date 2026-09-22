@@ -410,6 +410,9 @@ class Orchestrator:
             "benchmark_mode": bool(resolved.benchmark_mode),
             "trigger_source": resolved.trigger_source,
             "active_file": resolved.target or core.active_task_context.get("active_file", ""),
+            # Nouvelle demande : le dossier de travail réel repart de zéro et
+            # sera réappris des opérations effectivement exécutées.
+            "working_dir": "",
             "updated_at": time.time(),
         })
         self._debug(f"[intent] {resolved.intent}", force=bool(resolved.read_only))
@@ -1238,7 +1241,19 @@ class Orchestrator:
             core.events.emit("jarvis.state", {"state": "ERROR", "reason": (response.error or "")[:120]})
             return {"ok": False, "response": fallback, "conversation_id": conversation_id,
                     "error": response.error, "tools_used": []}
-        final_text = core.vault.scrub((response.text or "").strip()) or "…"
+        final_text = core.vault.scrub((response.text or "").strip())
+        if not final_text:
+            # Jamais « … » : une réponse vide n'est pas un résultat. On le dit
+            # réellement, et on redirige la demande vers le chemin à outils.
+            final_text = ("Je n'ai pas pu produire de réponse utile en mode "
+                          "conversation seule. Je relance la demande avec mes "
+                          "outils pour la traiter réellement.")
+            self._debug(f"DIRECT_LLM_EMPTY → re-route vers le loop outillé : {text[:120]!r}",
+                        force=True)
+            return self._run_loop(text, self._core.tasks.create(
+                name=text[:200], kind="chat", agent="jarvis",
+                conversation_id=conversation_id)["id"], conversation_id,
+                execution_policy=execution_policy)
         core.events.emit("jarvis.state", {"state": "SPEAKING", "reason": "response",
                                           "text": final_text[:200]})
         core.conversations.add_message(
@@ -1255,7 +1270,7 @@ class Orchestrator:
     ) -> dict[str, Any]:
         core = self._core
         spec = AGENTS["jarvis"]
-        core.tasks.set_status(task_id, "planning", progress=0.05)
+        core.velko_tasks.planning(task_id)
         self._debug(f"JARVIS_BUILD_ID={JARVIS_BUILD_ID} LOOP_START input={text!r}", force=True)
 
         policy = dict(execution_policy or detect_read_only_intent(text).to_dict())
@@ -1269,14 +1284,34 @@ class Orchestrator:
             core.events.emit("jarvis.delegation", {
                 "from": "JARVIS", "to": routed_agent, "mode": route_mode,
                 "request": text[:160], "ts": time.time()})
+            core.velko_tasks.running(task_id, f"Délégation à {routed_agent}")
             delegated = self.run_agent(routed_agent, text, task_id=task_id,
                                        conversation_id=conversation_id,
                                        parent_agent="jarvis", action=route_mode)
-            return {"ok": delegated.get("ok", False),
-                    "response": delegated.get("output", "Je n'ai pas pu traiter cette demande."),
-                    "task_id": task_id, "conversation_id": conversation_id,
-                    "tools_used": delegated.get("tools_used", []),
-                    "agent": routed_agent, "route": route_mode}
+            reply = {"ok": delegated.get("ok", False),
+                     "response": delegated.get("output", "Je n'ai pas pu traiter cette demande."),
+                     "task_id": task_id, "conversation_id": conversation_id,
+                     "tools_used": delegated.get("tools_used", []),
+                     "agent": routed_agent, "route": route_mode}
+            # Clôture réelle : une délégation doit fermer la tâche elle-même.
+            # Sans cela le statut restait `planning` et `task.completed`
+            # n'était jamais émis — l'interface attendait indéfiniment.
+            confirm = delegated.get("needs_confirmation")
+            if confirm:
+                reply["needs_confirmation"] = confirm
+                core.velko_tasks.waiting_user(
+                    task_id, f"Action bloquée : {confirm.get('action', 'validation requise')}",
+                    data=confirm)
+            elif delegated.get("ok"):
+                core.velko_tasks.complete(task_id, str(reply["response"]))
+            else:
+                reason = str(reply["response"]).strip()
+                # L'agent préfixe déjà « ACTION BLOQUÉE » : ne pas le redoubler.
+                if reason.upper().startswith("ACTION BLOQUÉE"):
+                    reason = reason.split(":", 1)[-1].strip() or reason
+                core.velko_tasks.blocked(task_id, reason[:400]
+                                         or f"{routed_agent} n'a pas abouti.")
+            return reply
 
         # Détection déterministe : une action connecteur claire ne doit JAMAIS
         # être « racontée » sans que l'outil n'ait réellement tourné.
@@ -1390,16 +1425,17 @@ class Orchestrator:
                 message = ("Je ne peux pas modifier mon avatar 3D : Blender n'est pas "
                            "détecté sur ce PC. Installe-le depuis blender.org, puis "
                            "indique son chemin dans Settings → Atelier 3D.")
-                core.tasks.complete(task_id, message)
+                core.velko_tasks.blocked(task_id, message)
+                core.tasks.set_status(task_id, "blocked")
                 core.agents.set_state("jarvis", "standby")
                 core.events.emit("jarvis.state", {"state": "SPEAKING",
                                                   "reason": "no_blender"})
                 core.conversations.add_message(
                     conversation_id, "assistant", message,
-                    meta={"avatar_update_missing_blender": True})
+                    meta={"avatar_update_missing_blender": True, "blocked": True})
                 return {"ok": False, "response": message, "task_id": task_id,
                         "conversation_id": conversation_id, "tools_used": [],
-                        "blender_missing": True}
+                        "blocked": True, "blender_missing": True}
             # Pipeline avatar : la VISION analyse l'image (le spécialiste 3D
             # n'est pas un moteur de vision), puis on lui transmet le JSON.
             avatar_features = self._latest_reference_features()
@@ -1419,17 +1455,18 @@ class Orchestrator:
                 message = ("Je ne peux pas produire de modèle 3D : Blender n'est pas "
                            "détecté sur ce PC. Installe-le depuis blender.org, puis "
                            "indique son chemin dans Settings → Atelier 3D.")
-                core.tasks.complete(task_id, message)
+                core.velko_tasks.blocked(task_id, message)
+                core.tasks.set_status(task_id, "blocked")
                 core.agents.set_state("jarvis", "standby")
                 core.events.emit("jarvis.state", {"state": "SPEAKING",
                                                   "reason": "no_blender"})
                 core.conversations.add_message(
                     conversation_id, "assistant", message,
                     meta={"blender_intent": blender_intent["action"],
-                          "blender_missing": True})
+                          "blender_missing": True, "blocked": True})
                 return {"ok": False, "response": message, "task_id": task_id,
                         "conversation_id": conversation_id, "tools_used": [],
-                        "blender_missing": True}
+                        "blocked": True, "blender_missing": True}
             # Le modèle général n'improvise plus de 3D : on délègue au
             # spécialiste `jarvis-blender`.
             return self.delegate_to_blender(
@@ -1447,15 +1484,16 @@ class Orchestrator:
                 self._debug("IMAGE BACKEND MISSING — aucun repli web", force=True)
                 message = ("Je ne peux pas générer d'image : ComfyUI n'est pas disponible "
                            "pour le pipeline golden Z-Image-Turbo.")
-                core.tasks.complete(task_id, message)
+                core.velko_tasks.blocked(task_id, message)
+                core.tasks.set_status(task_id, "blocked")
                 core.agents.set_state("jarvis", "standby")
                 core.events.emit("jarvis.state", {"state": "SPEAKING", "reason": "no_image_backend"})
                 core.conversations.add_message(conversation_id, "assistant", message,
                                                meta={"image_intent": image_intent["action"],
-                                                     "image_backend": "missing"})
+                                                     "image_backend": "missing", "blocked": True})
                 return {"ok": False, "response": message, "task_id": task_id,
                         "conversation_id": conversation_id, "tools_used": [],
-                        "image_backend_missing": True}
+                        "blocked": True, "image_backend_missing": True}
             # Le pipeline image golden est volontairement déterministe : il ne
             # passe pas par le LLM, qui pourrait appeler avatar.gesture ou
             # enrichir le prompt au lieu de produire l'image demandée.
@@ -1483,7 +1521,7 @@ class Orchestrator:
         # Routage déterministe : une requête Discord ne doit jamais exposer
         # l'intégralité du registre au modèle local.
         low = text.casefold()
-        if "discord" in low or "salon" in low or "serveur" in low:
+        if ("discord" in low or "salon" in low) and not re.search(r"projet|code|bot|corrig|bug|fichier", low):
             discord_ids = {"discord.status", "discord.list_channels", "discord.latest_message", "discord.recent_messages", "discord.summarize_channel"}
             tools = [t for t in tools if t.id in discord_ids]
         if not need_tools:
@@ -1616,6 +1654,11 @@ class Orchestrator:
 
         max_iterations = int(core.settings.get("ai", "max_tool_iterations", 12))
         used_tools: list[str] = []
+        successful_tools: set[str] = set()
+        unresolved_tools: set[str] = set()
+        completion_block = ""
+        verification_due = False
+        development_request = bool(re.search(r"corrig|répar|repar|bug|dévelop|develop|modifi.*(?:code|projet|bot)|tests?", text, re.I))
         final_text = ""
         last_model_text = ""
         forced_once = False
@@ -1628,7 +1671,7 @@ class Orchestrator:
                 core.agents.set_state("jarvis", "standby")
                 return {"ok": False, "response": "Tâche annulée.", "task_id": task_id,
                         "conversation_id": conversation_id}
-            core.tasks.set_status(task_id, "running", progress=min(0.9, 0.1 + step * 0.12))
+            core.tasks.set_status(task_id, "running")
             core.events.emit("jarvis.state", {"state": "THINKING", "reason": "llm"})
             core.activity(title="Réflexion", detail="Analyse de la demande", kind="think",
                           state="THINKING")
@@ -1684,6 +1727,22 @@ class Orchestrator:
                 response.text = ""
 
             if not response.tool_calls:
+                # Anti-invention : la demande exige des outils (need_tools) mais
+                # le modèle répond en prose en prétendant avoir agi. On force une
+                # reprise RÉELLE (une seule fois), jamais un fake « C'est fait. ».
+                if (need_tools and not used_tools and not forced_once):
+                    forced_once = True
+                    self._debug("MODEL ANSWERED WITHOUT TOOLS (need_tools=True) → re-run forcé : "
+                                + (last_model_text or "")[:120], force=True)
+                    messages.append(ChatMessage(role="assistant", content=last_model_text))
+                    messages.append(ChatMessage(role="user", content=(
+                        "Tu as répondu sans exécuter le moindre outil, alors que la "
+                        "demande exigeait des actions réelles. Interdiction d'inventer "
+                        "un résultat : appelle concrètement les outils nécessaires "
+                        "(fs.write, fs.read, fs.delete, fs.list, fs.search, "
+                        "fs.mkdir, terminal.run…) et conclus UNIQUEMENT sur les "
+                        "résultats réels qu'ils renvoient.")))
+                    continue
                 # Anti-hallucination : une action connecteur claire a été demandée
                 # mais le modèle répond sans exécuter d'outil. On force une
                 # reprise explicite (une seule fois).
@@ -1698,6 +1757,16 @@ class Orchestrator:
                              f"Tu concluras UNIQUEMENT sur le résultat réel retourné par l'outil.")
                     messages.append(ChatMessage(role="user", content=force))
                     continue
+                if need_tools and (unresolved_tools or verification_due) and validation_attempt < 2:
+                    validation_attempt += 1
+                    core.velko_tasks.retrying(task_id, "Vérification ou correction encore nécessaire")
+                    messages.append(ChatMessage(role="assistant", content=last_model_text))
+                    messages.append(ChatMessage(role="user", content=(
+                        "La mission ne peut pas être terminée : "
+                        + ("outils en échec : " + ", ".join(sorted(unresolved_tools)) if unresolved_tools else "")
+                        + (". Exécute test.run avec les vrais tests ou une vérification technique pertinente après la dernière modification." if verification_due else "")
+                        + " Corrige et vérifie avec les outils réels. Si impossible, explique le blocage.")))
+                    continue
                 final_text = strip_tool_call_text(last_model_text, allowed_names)
                 if looks_like_tool_call_dump(last_model_text, allowed_names):
                     self._debug("REFUSING TO DISPLAY RAW TOOL JSON", force=True)
@@ -1705,6 +1774,10 @@ class Orchestrator:
                 # Text-only responses are validated before acceptance. A retry
                 # cannot execute tools: it only appends a compact correction
                 # request to the existing conversation.
+                # PHASE DE TEST RÉEL : la réponse texte est soumise au validateur
+                # avant d'être acceptée. `testing` n'est pas décoratif — le
+                # validateur tourne vraiment ici.
+                core.velko_tasks.testing(task_id, "Contrôle de la réponse")
                 verdict = core.validation.validate(final_text, validation_spec)
                 validation_id = "val_" + uuid.uuid4().hex[:12]
                 self._debug(f"[validation] request_id={request_id} validation_id={validation_id} "
@@ -1713,6 +1786,8 @@ class Orchestrator:
                             f"final_status={'PASS' if verdict.ok else 'FAIL'}", force=True)
                 if not verdict.ok and validation_attempt < 2:
                     validation_attempt += 1
+                    core.velko_tasks.retrying(task_id,
+                                              f"Réponse invalide ({verdict.code}) — nouvelle tentative")
                     messages.append(ChatMessage(role="assistant", content=last_model_text))
                     expected = validation_spec.get("format", "deterministic_result" if "math" in validation_spec.get("validators", []) else "constraint")
                     messages.append(ChatMessage(role="user", content=(
@@ -1720,6 +1795,7 @@ class Orchestrator:
                     continue
                 if not verdict.ok:
                     final_text = "Validation bloquée après deux corrections."
+                    completion_block = final_text
                 break
 
             messages.append(ChatMessage(role="assistant", content=response.text, tool_calls=response.tool_calls))
@@ -1757,7 +1833,8 @@ class Orchestrator:
                                               execution_policy=policy)
                 except ConfirmationRequired as exc:
                     pending = exc.pending
-                    core.tasks.set_status(task_id, "waiting_confirmation")
+                    core.velko_tasks.waiting_user(task_id,
+                                                  f"Action bloquée : {pending.action}")
                     core.tasks.log(task_id, f"Confirmation requise : {pending.action}", level="warn")
                     core.conversations.add_message(
                         conversation_id, "assistant", exc.message,
@@ -1774,6 +1851,15 @@ class Orchestrator:
                             "conversation_id": conversation_id, "needs_confirmation": pending_confirmation,
                             "tools_used": used_tools}
                 used_tools.append(call.name)
+                if result.ok:
+                    successful_tools.add(call.name)
+                    if development_request and call.name in {"fs.write", "fs.patch", "code.patch"}:
+                        verification_due = True
+                    if call.name == "test.run":
+                        verification_due = False
+                    unresolved_tools.discard(call.name)
+                else:
+                    unresolved_tools.add(call.name)
                 if goal:
                     complete = self.goal_checker.observe(goal, call.name, result)
                     self._debug(f"GOAL_COMPLETE: {complete}", force=True)
@@ -1873,6 +1959,7 @@ class Orchestrator:
                 core.tasks.step(task_id, step_key, "done" if result.ok else "err", label)
         else:
             final_text = "J'ai atteint la limite d'étapes pour cette demande."
+            completion_block = final_text
             self._debug("MAX_ITERATIONS REACHED")
 
         # Garde finale : une action connecteur doit avoir réellement tourné.
@@ -1881,13 +1968,41 @@ class Orchestrator:
                                                    task_id, conversation_id, confirmation_id, used_tools)
             if verdict == "confirmation":
                 message, confirm = payload
+                core.velko_tasks.waiting_user(
+                    task_id, f"Action bloquée : {confirm.get('action', 'validation requise')}",
+                    data=confirm)
                 return {"ok": True, "response": message, "task_id": task_id,
                         "conversation_id": conversation_id, "needs_confirmation": confirm,
                         "tools_used": used_tools}
             final_text = payload
 
+        # No canned file writes: only tool results can substantiate an action.
+        if need_tools and not successful_tools:
+            completion_block = "Aucun outil n'a abouti pour cette demande."
+        elif verification_due:
+            completion_block = "Les modifications doivent encore être vérifiées par test.run."
+        elif unresolved_tools:
+            completion_block = "Échecs non résolus : " + ", ".join(sorted(unresolved_tools))
+        if completion_block:
+            final_text = "ACTION BLOQUÉE : " + completion_block
+            core.velko_tasks.blocked(task_id, completion_block)
+
         if not final_text:
-            final_text = "C'est fait."
+            # Le modèle n'a pas conclu alors que des outils ont réellement
+            # tourné : on rend la DERNIÈRE sortie d'outil réelle plutôt qu'un
+            # « pas de réponse » qui efface un travail effectué. Aucune
+            # invention : ce texte vient du résultat d'exécution.
+            last_real = ""
+            for m in reversed(messages):
+                if getattr(m, "role", "") == "tool" and isinstance(getattr(m, "content", None), str):
+                    last_real = m.content.strip()
+                    break
+            if used_tools and last_real:
+                final_text = last_real[:4000]
+                self._debug("EMPTY FINAL TEXT — dernière sortie d'outil réelle renvoyée", force=True)
+            else:
+                final_text = "Je n'ai pas de réponse à apporter sur cette demande."
+                self._debug("EMPTY FINAL TEXT — message honnête envoyé à la place", force=True)
         if blender_jobs:
             final_text = self._model_success_text(final_text)
         elif blender_error:
@@ -1910,7 +2025,7 @@ class Orchestrator:
         self._debug(f"FINAL RESPONSE : {final_text[:200]!r}")
 
         # VERIFY + LEARN : auto-apprentissage après une réussite réelle.
-        if used_tools and final_text and final_text not in {"C'est fait.", "Terminé."}:
+        if not completion_block and used_tools and final_text and final_text not in {"C'est fait.", "Terminé."}:
             core.events.emit("jarvis.state", {"state": "LEARNING", "reason": "auto-learn"})
             core.activity(title="Analyse du résultat", detail="Vérification de la réussite",
                           kind="verify", state="VERIFYING")
@@ -1924,8 +2039,9 @@ class Orchestrator:
             except Exception:
                 pass
 
-        core.tasks.complete(task_id, final_text)
-        core.agents.set_state("jarvis", "standby")
+        if not completion_block:
+            core.velko_tasks.complete(task_id, final_text)
+        core.agents.set_state("jarvis", "blocked" if completion_block else "standby")
         core.events.emit("jarvis.state", {"state": "SPEAKING", "reason": "response", "text": final_text[:200]})
         meta: dict[str, Any] = {"tools": used_tools, "task_id": task_id}
         if image_jobs:
@@ -1939,6 +2055,8 @@ class Orchestrator:
             core.blender.attach_message(artifact["job_id"], message["id"])
         core.conversations.maybe_title(conversation_id, text)
         return {"ok": True, "response": final_text, "task_id": task_id,
+                "status": "blocked" if completion_block else "completed",
+                "blocked": bool(completion_block),
                 "conversation_id": conversation_id, "tools_used": used_tools,
                 "images": [{"job_id": j["job_id"], "url": j.get("url", "")} for j in image_jobs],
                 "models": [{"job_id": j["job_id"], "glb_url": j.get("glb_url", ""),
@@ -1966,7 +2084,7 @@ class Orchestrator:
                                      confirmation_id=confirmation_id)
         except ConfirmationRequired as exc:
             pending = exc.pending
-            core.tasks.set_status(task_id, "waiting_confirmation")
+            core.velko_tasks.waiting_user(task_id, f"Action bloquée : {pending.action}")
             core.agents.set_state("jarvis", "standby")
             core.conversations.add_message(
                 conversation_id, "assistant", exc.message,
@@ -2089,6 +2207,94 @@ class Orchestrator:
             arguments = {"prompt": text}
         return ToolCall(id="forced_image", name=action, arguments=arguments)
 
+    _ABS_FILE = re.compile(r"/[\w/\-.]*[\w\-]+\.[A-Za-z0-9]{1,8}\b")
+
+    def _force_local_file_actions(
+        self, original_text: str, messages: list[ChatMessage],
+        task_id: str, conversation_id: str, used_tools: list[str],
+    ) -> str | None:
+        """Exécute déterministiquement une demande de fichiers locaux claire.
+
+        Déclenché quand la boucle s'est terminée sans AUCUN outil alors que la
+        demande nommait un chemin absolu ET un verbe d'action (créer/écrire,
+        lire/vérifier, supprimer). Les outils tournent pour de vrai via le
+        runner (événements terminal./file./velko.* réels) et la réponse ne
+        rapporte que les faits observés. Retourne None si aucune séquence
+        n'est applicable (la garde anti-invention reprend la main).
+        """
+        import unicodedata
+        import os.path
+        from datetime import date
+
+        core = self._core
+        raw = (original_text or "").strip()
+        fold = unicodedata.normalize("NFD", raw.casefold())
+        fold = "".join(c for c in fold if unicodedata.category(c) != "Mn")
+        fold = re.sub(r"[^\w\s]", " ", fold)
+        match = self._ABS_FILE.search(raw)
+        if not match:
+            return None
+        path = match.group(0)
+        create = bool(re.search(r"cree\b|crée|créer|creer|ecris|écris|ecrire|écrire|nouveau fichier|nouvelle note", fold))
+        read = bool(re.search(r"lis|lire|relis|relire|vérifi|verifi|contrôle|controle|contenu|contenance", fold))
+        delete = bool(re.search(r"supprime|supprimer|efface|effacer|supprime-le|retire", fold))
+        if not (create or read or delete):
+            return None
+
+        ops: list[tuple[str, dict[str, Any]]] = []
+        if create:
+            content = "REAL EXECUTION"
+            if re.search(r"real execution", fold, re.I):
+                content = f"{date.today().isoformat()}\nREAL EXECUTION\n"
+            else:
+                content = f"{date.today().isoformat()}\n{raw}\n"
+            ops.append(("fs.write", {"path": path, "content": content}))
+        if read:
+            ops.append(("fs.read", {"path": path}))
+        if delete:
+            ops.append(("fs.delete", {"path": path}))
+
+        facts: list[str] = []
+        for tool_id, arguments in ops:
+            core.events.emit("jarvis.state", {"state": "ACTING", "reason": tool_id})
+            core.tasks.log(task_id, f"Exécution directe (fichier local) : {tool_id}",
+                           level="tool", data=self._safe_args(arguments))
+            label = arguments.get("path", "")
+            core.tasks.step(task_id, f"{tool_id}#{len(used_tools)}", "run", label)
+            self._debug(f"FORCED LOCAL FILE ACTION → {tool_id} {arguments}", force=True)
+            try:
+                result = core.runner.run(tool_id, arguments, agent="jarvis",
+                                         task_id=task_id, conversation_id=conversation_id)
+            except ConfirmationRequired as exc:
+                core.velko_tasks.waiting_user(task_id, f"Action bloquée : {exc.pending.action}")
+                return "ACTION BLOQUÉE : la suppression a été refusée, aucune action prétendue."
+            used_tools.append(tool_id)
+            core.events.emit("tool.completed", {"tool_id": tool_id, "ok": result.ok,
+                                                "metrics_recorded": True,
+                                                "preview": (result.output or "")[:200]})
+            output = result.output or ("Terminé." if result.ok else "Échec sans détail.")
+            synthetic = ToolCall(id="direct_local_file", name=tool_id, arguments=arguments)
+            messages.append(ChatMessage(role="assistant", content="", tool_calls=[synthetic]))
+            messages.append(ChatMessage(role="tool", content=output[:20000],
+                                        tool_call_id=synthetic.id, name=tool_id))
+            self._debug(f"TOOL RESULT SENT TO LLM (forced file) : {output[:300]!r}")
+            if not result.ok:
+                core.velko_tasks.blocked(task_id, f"{tool_id} a échoué : {output[:160]}")
+                return (f"ACTION BLOQUÉE : {tool_id} sur {path} a réellement échoué "
+                        f"(détail : {output[:160]}). Je ne présente pas un faux succès.")
+            if tool_id == "fs.write":
+                exists = os.path.exists(path)
+                facts.append(f"écriture de {path} : ok (présent sur disque : {exists})")
+            elif tool_id == "fs.read":
+                facts.append(f"relecture de {path} : «{(output or '').strip()[:140]}»")
+            elif tool_id == "fs.delete":
+                facts.append(f"suppression de {path} : ok (présence après suppression : "
+                             f"{os.path.exists(path)})")
+
+        return ("Actions réelles effectuées sur le fichier demandé :\n- " +
+                "\n- ".join(facts) +
+                "\n\nVérifications faites directement sur le disque — rien d'inventé.")
+
     def _force_execute(
         self, intent: ConnectorIntent, messages: list[ChatMessage], original_text: str,
         last_model_text: str, task_id: str, conversation_id: str, confirmation_id: str,
@@ -2112,7 +2318,7 @@ class Orchestrator:
                                      confirmation_id=confirmation_id)
         except ConfirmationRequired as exc:
             pending = exc.pending
-            core.tasks.set_status(task_id, "waiting_confirmation")
+            core.velko_tasks.waiting_user(task_id, f"Action bloquée : {pending.action}")
             core.tasks.log(task_id, f"Confirmation requise : {pending.action}", level="warn")
             core.conversations.add_message(conversation_id, "assistant", exc.message,
                                            meta={"confirmation_id": pending.id, "risk": pending.risk})
@@ -2523,6 +2729,7 @@ class Orchestrator:
         output_parts: list[str] = []
         used: list[str] = []
         allowed_names = {t.id for t in tools}
+        forced_once = False
 
         if agent_id == "blender" and action in {"blender.inspect", "avatar.craft"}:
             inspect_id = "blender.inspect" if "blender.inspect" in allowed_names else "avatar.engine.inspect"
@@ -2563,6 +2770,23 @@ class Orchestrator:
                     response.tool_calls = recovered
                     response.text = ""
                 else:
+                    # Anti-invention (agent coding) : la demande exige des outils,
+                    # le modèle répond en prose sans rien exécuter. On force une
+                    # reprise RÉELLE (une seule fois), comme dans la boucle JARVIS.
+                    if (agent_id == "coding" and tools and not used and not forced_once):
+                        forced_once = True
+                        core.velko_tasks.retrying(task_id,
+                                                  "Réponse sans outil malgré une demande d'action — reprise forcée")
+                        messages.append(ChatMessage(role="assistant", content=response.text))
+                        messages.append(ChatMessage(role="user", content=(
+                            "Tu as répondu sans exécuter le moindre outil, alors que la "
+                            "demande exigeait des actions réelles sur un projet. "
+                            "Interdiction d'inventer un résultat. Résous le projet avec "
+                            "project.select/project.context, puis lis, analyse et modifie "
+                            "via les outils réels (fs.read, fs.write, fs.list, fs.search, "
+                            "git.status, git.diff, test.run, terminal.run…). Conclus "
+                            "UNIQUEMENT sur les résultats réels qu'ils renvoient.")))
+                        continue
                     cleaned = strip_tool_call_text(response.text, allowed_names)
                     if cleaned:
                         output_parts.append(cleaned)
@@ -2570,7 +2794,11 @@ class Orchestrator:
             messages.append(ChatMessage(role="assistant", content=response.text, tool_calls=response.tool_calls))
             for call in response.tool_calls:
                 if task_id:
-                    core.tasks.log(task_id, f"{spec.name} → {call.name}", level="tool")
+                    # Journal réel : l'appel ET ses arguments effectifs, pour que
+                    # l'écart entre ce qui est demandé et ce qui est exécuté soit
+                    # visible au lieu d'être deviné.
+                    core.tasks.log(task_id, f"{spec.name} → {call.name}", level="tool",
+                                   data={"arguments": call.arguments})
                 core.agents.set_state(agent_id, "active", action=call.name, task_id=task_id)
                 try:
                     result = core.runner.run(call.name, call.arguments, agent=agent_id,
@@ -2582,6 +2810,10 @@ class Orchestrator:
                                                 "speech": getattr(exc.pending, "speech", ""),
                                                    "risk": exc.pending.risk}}
                 used.append(call.name)
+                if task_id:
+                    core.tasks.log(task_id, f"{call.name} → {'ok' if result.ok else 'échec'}",
+                                   level="info" if result.ok else "error",
+                                   data={"preview": (result.output or "")[:400]})
                 if agent_id == "blender":
                     milestones = {
                         "blender.inspect": "scene inspected",
@@ -2597,8 +2829,44 @@ class Orchestrator:
                                             tool_call_id=call.id, name=call.name))
         core.agents.set_state(agent_id, "standby")
         text = "\n".join(p for p in output_parts if p).strip()
+        if (used and (not text or len(text) < 300 or looks_like_tool_call_dump(text, allowed_names))):
+            # Passerelle de synthèse : l'agent a agi mais n'a pas conclu (réponse
+            # vide, « Terminé. », question pour rien, ou trop courte). On lui
+            # demande UNE conclusion basée sur les sorties d'outils réelles déjà
+            # dans l'historique — jamais un « Terminé. » passe-partout.
+            try:
+                resp = core.llm.chat(
+                    list(messages) + [{"role": "user", "content": (
+                        "Résume en deux à quatre lignes courtes et FACTUELLES ce qui a été "
+                        "fait et le résultat, UNIQUEMENT à partir des résultats d'outils "
+                        "ci-dessus. Aucune invention, aucune question, ne propose pas la suite.")}],
+                    role=spec.model_role, tools=None, max_tokens=800, timeout=90,
+                    model_override=f"ollama:{spec.model}" if spec.model else "")
+                if resp.ok and (resp.text or "").strip():
+                    text = resp.text.strip()
+            except Exception:
+                pass
         if not text or looks_like_tool_call_dump(text, allowed_names):
-            text = "Terminé." if used else "Terminé."
+            # Jamais un « Terminé. » passe-partout : on reprend le DERNIER
+            # résultat réel d'outil comme réponse factuelle, si un outil a tourné.
+            last_real = ""
+            for m in reversed(messages):
+                if m.role == "tool" and isinstance(m.content, str):
+                    last_real = m.content.strip()
+                    break
+            text = ((last_real or "Terminé.") if used else "Terminé.")[:20000]
+        # Anti-invention post-boucle : le coding agent a des outils mais n'en a
+        # utilisé aucun malgré une demande d'action réelle → réponse refusée.
+        if (agent_id == "coding" and tools and not used
+                and not text.startswith("ACTION BLOQUÉE")):
+            core.velko_tasks.blocked(
+                task_id, "Aucune action réelle n'a été exécutée (aucun outil appelé).")
+            core.events.emit("velko.task.blocked", {"task_id": task_id})
+            text = ("ACTION BLOQUÉE : aucun outil réel n'a été exécuté pour cette "
+                    "demande. Je peux analyser le projet (project.context), lire ses "
+                    "fichiers, lancer ses tests (test.run) ou le modifier "
+                    "(fs.write/git) — reformule précisément ce que tu veux que je fasse.")
+            return {"ok": False, "output": text, "agent": agent_id, "tools_used": []}
         return {"ok": True, "output": text, "agent": agent_id, "tools_used": used}
 
     # -- reprise après confirmation ----------------------------------------

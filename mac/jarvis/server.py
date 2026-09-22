@@ -130,6 +130,27 @@ def api_code_close(req):
     return _ok()
 
 
+# -- Moniteurs de VELKO : contenu RÉEL, en lecture seule ---------------------
+# Le flux d'événements dit quel fichier regarder ; ces routes en fournissent le
+# contenu réel, relu sur disque à chaque appel. Aucun cache, aucune simulation.
+@router.get("/api/workspace/file")
+def api_workspace_file(req):
+    from . import workspace_view
+    return _ok(workspace_view.read_file(CORE, req["query"].get("path", [""])[0]))
+
+
+@router.get("/api/workspace/tree")
+def api_workspace_tree(req):
+    from . import workspace_view
+    return _ok(workspace_view.tree(CORE, req["query"].get("path", [""])[0]))
+
+
+@router.get("/api/workspace/diff")
+def api_workspace_diff(req):
+    from . import workspace_view
+    return _ok(workspace_view.git_diff(CORE, req["query"].get("path", [""])[0]))
+
+
 @router.get("/api/health")
 def api_health(req):
     return _ok({"version": __version__, "uptime_s": int(time.time() - CORE.started_at)})

@@ -41,24 +41,52 @@ def _live_browser(op: str) -> Callable[[ToolContext], ToolResult]:
             return ToolResult(
                 False,
                 "Navigateur intégré indisponible : Playwright n'est pas installé. "
-                "Commande : .venv\\Scripts\\python.exe -m pip install playwright "
-                "et .venv\\Scripts\\python.exe -m playwright install chromium",
+                "Commande : ./.venv/bin/python -m pip install playwright "
+                "puis ./.venv/bin/python -m playwright install chromium (depuis mac/).",
             )
         mgr.start()
         out = mgr.action(op, ctx.arguments, timeout=45)
+        # L'événement suit l'action RÉELLE : il est émis après son exécution,
+        # avec son résultat. (Il était construit avant l'appel et référençait
+        # `out` : NameError avalée par le except, donc jamais diffusé.)
+        event_type = {"navigate": "browser.navigate", "close": "browser.closed",
+                      "wait": "browser.wait", "read_page": "browser.read",
+                      "reload": "browser.navigate"}.get(op, "browser." + op)
+        try:
+            ctx.core.events.emit(event_type, {
+                "op": op, "ok": bool(out.get("ok")),
+                "arguments": {k: v for k, v in ctx.arguments.items()
+                              if k != "private" and k != "value"},
+                "url": out.get("url") or "",
+                "target": out.get("target") or out.get("url") or out.get("title") or "",
+            }, cache=False)
+        except Exception:
+            pass
         if out.get("ok"):
             target = out.get("target") or out.get("url") or out.get("title") or ""
             msg = target or _DONE_MESSAGES.get(op, "OK")
             data = {k: v for k, v in out.items() if k != "ok"}
             return ToolResult(True, msg, data=data)
         if out.get("gate"):
-            return ToolResult(False, str(out.get("message") or "Action requise de ta part sur la page."))
+            # Authentification, captcha, choix manuel : la mission passe en
+            # waiting_user. VELKO reste au poste et n'invente aucune suite.
+            message = str(out.get("gate") or out.get("message")
+                          or "Action requise de ta part sur la page.")
+            try:
+                if ctx.task_id:
+                    ctx.core.velko_tasks.waiting_user(
+                        ctx.task_id, f"Action bloquée : {message}",
+                        data={"source": "browser", "url": out.get("url") or ""})
+            except Exception:
+                pass
+            return ToolResult(False, message)
         return ToolResult(False, str(out.get("error") or "erreur navigateur"))
 
     return handler
 
 
-_NAVIGATE_AGENTS = ("jarvis", "browser")
+# Le développeur teste lui aussi dans le vrai navigateur (cycle bot Discord).
+_NAVIGATE_AGENTS = ("jarvis", "browser", "coding", "discord")
 
 registry.add(
     id="browser.navigate", name="Ouvrir une page (navigateur intégré)", category="Navigateur",
@@ -143,4 +171,136 @@ registry.add(
     description="Ferme la page du navigateur intégré et termine l'aperçu Live Browser.",
     handler=_live_browser("close"), risk=READ_ONLY, agents=_NAVIGATE_AGENTS,
     input_schema={"type": "object", "properties": {}},
+)
+registry.add(
+    id="browser.forward", name="Aller à la page suivante", category="Navigateur",
+    description="Avance dans l'historique du navigateur intégré.",
+    handler=_live_browser("forward"), risk=READ_ONLY, agents=_NAVIGATE_AGENTS,
+    input_schema={"type": "object", "properties": {}},
+)
+
+registry.add(
+    id="browser.reload", name="Recharger la page", category="Navigateur",
+    description="Recharge la page actuellement ouverte dans le navigateur intégré.",
+    handler=_live_browser("reload"), risk=READ_ONLY, agents=_NAVIGATE_AGENTS,
+    input_schema={"type": "object", "properties": {
+        "timeout": {"type": "integer", "description": "Délai max de chargement en ms."}},
+    },
+)
+
+registry.add(
+    id="browser.read_page", name="Lire la page ouverte", category="Navigateur",
+    description=(
+        "Renvoie le TEXTE RÉEL de la page actuellement ouverte dans le navigateur "
+        "intégré. C'est ainsi que l'on vérifie ce qu'affiche vraiment un site : "
+        "aucun contenu n'est deviné."
+    ),
+    handler=_live_browser("read_page"), risk=READ_ONLY, agents=_NAVIGATE_AGENTS,
+    input_schema={"type": "object", "properties": {
+        "max_chars": {"type": "integer", "description": "Longueur maximale renvoyée (défaut 6000)."}},
+    },
+)
+
+registry.add(
+    id="browser.status", name="État de la session navigateur", category="Navigateur",
+    description=(
+        "État RÉEL de la session navigateur de VELKO : ouverte ou non, URL et titre "
+        "courants, attente éventuelle d'une action de l'utilisateur."
+    ),
+    handler=_live_browser("status"), risk=READ_ONLY, agents=_NAVIGATE_AGENTS,
+    input_schema={"type": "object", "properties": {}},
+)
+
+
+DISCORD_APP = "https://discord.com/channels/@me"
+# Repères lus dans la VRAIE page. On exige une preuve POSITIVE d'être connecté :
+# l'absence de formulaire de connexion ne suffit pas, une page encore en cours
+# de chargement est vide et ferait conclure à tort qu'on est authentifié.
+_LOGIN_SIGNS = ("Email or Phone Number", "E-mail ou numéro de téléphone",
+                "Log In", "Connexion", "Need an account", "Besoin d'un compte",
+                "Log in with QR Code", "Se connecter avec un QR Code",
+                "Forgot your password", "Mot de passe oublié")
+_APP_SIGNS = ("Find or start a conversation", "Trouver ou démarrer une conversation",
+              "Direct Messages", "Messages privés", "Friends", "Amis",
+              "Add Friend", "Ajouter un ami", "Online", "En ligne")
+
+
+def _discord_state(mgr) -> tuple[str, dict]:
+    """(état, page) où état vaut « in », « out » ou « unknown ».
+
+    L'état est relu après une courte attente et, si la page est encore vide,
+    une seconde fois : mieux vaut deux lectures qu'une conclusion fausse.
+    """
+    page: dict = {}
+    for attempt in range(2):
+        mgr.action("wait", {"ms": 2500 if attempt == 0 else 4000}, timeout=20)
+        page = mgr.action("read_page", {"max_chars": 6000}, timeout=45)
+        text = str(page.get("text") or "")
+        if any(sign in text for sign in _LOGIN_SIGNS):
+            return "out", page
+        if any(sign in text for sign in _APP_SIGNS):
+            return "in", page
+    return "unknown", page
+
+
+def _discord_web(ctx: ToolContext) -> ToolResult:
+    """Ouvre Discord dans la session persistante de VELKO et dit l'état RÉEL.
+
+    Aucune donnée d'identification n'est demandée ni saisie ici : si la session
+    n'est pas authentifiée, VELKO ouvre la vraie page et attend que
+    l'utilisateur se connecte lui-même, une seule fois. Le profil Chromium
+    étant persistant, la session est ensuite réutilisée.
+    """
+    from ..browser_manager import get_manager
+
+    mgr = get_manager()
+    if mgr is None or not mgr.available():
+        return ToolResult(False, "Navigateur intégré indisponible : Playwright n'est pas installé.")
+    mgr.start()
+    # Une barrière posée lors d'un contrôle précédent bloquerait toutes les
+    # opérations : on la lève, puisque ce contrôle-ci sert justement à
+    # réévaluer l'état réel de la session.
+    mgr.resume()
+    opened = mgr.action("navigate", {"url": str(ctx.arguments.get("url") or DISCORD_APP)}, timeout=60)
+    if not opened.get("ok"):
+        return ToolResult(False, f"Discord web injoignable : {opened.get('error') or 'erreur inconnue'}")
+    state, page = _discord_state(mgr)
+    url = str(page.get("url") or opened.get("url") or "")
+    if state == "in":
+        title = str(page.get("title") or "Discord")
+        return ToolResult(True,
+                          f"Session Discord web active dans le navigateur de VELKO ({title}). "
+                          f"URL : {url}",
+                          data={"authenticated": True, "url": url, "title": title})
+    # Non authentifié — ou état indécidable, ce qui se traite pareil : on ouvre
+    # la barrière et on attend l'utilisateur, sans jamais supposer l'accès.
+    message = ("Connexion Discord nécessaire dans la fenêtre VELKO."
+               if state == "out" else
+               "État de la session Discord indécidable : vérifiez la fenêtre VELKO.")
+    mgr.request_user(message)
+    try:
+        if ctx.task_id:
+            ctx.core.velko_tasks.waiting_user(ctx.task_id, message,
+                                              data={"source": "discord_web", "url": url})
+    except Exception:
+        pass
+    return ToolResult(False, message + " Connectez-vous vous-même sur l'écran de droite : "
+                      "la session restera ensuite enregistrée. Je ne demande ni e-mail, "
+                      "ni mot de passe, ni code 2FA.",
+                      data={"authenticated": False, "state": state, "url": url, "gate": True})
+
+
+registry.add(
+    id="discord.web_session", name="Discord dans le navigateur de VELKO", category="Discord",
+    description=(
+        "Ouvre Discord dans la session navigateur PERSISTANTE de VELKO et renvoie son état "
+        "réel d'authentification. Si la session n'est pas connectée, VELKO affiche la vraie "
+        "page de connexion et passe la tâche en waiting_user : l'utilisateur se connecte "
+        "lui-même une seule fois, puis la session est réutilisée. Aucune donnée "
+        "d'identification n'est jamais demandée ni saisie par VELKO."
+    ),
+    handler=_discord_web, risk=READ_ONLY, agents=_NAVIGATE_AGENTS,
+    input_schema={"type": "object", "properties": {
+        "url": {"type": "string", "description": "URL Discord à ouvrir (défaut : l'application)."}},
+        "required": []},
 )

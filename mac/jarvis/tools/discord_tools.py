@@ -82,6 +82,12 @@ def _bridge(ctx: ToolContext, make_coro: Callable[[Any], Any], *,
     if isinstance(data, dict) and data.get("ok") is False:
         return ToolResult(ok=False, risk=risk, data=data, output=str(data.get("error") or "Échec."))
     output = describe(data) if (describe and isinstance(data, dict)) else "Action Discord effectuée."
+    try:
+        action = str(make_coro.__name__) if hasattr(make_coro, "__name__") else "action"
+        ctx.core.events.emit("discord.action", {"action": action, "risk": risk},
+                             cache=False)
+    except Exception:
+        pass
     return ToolResult(ok=True, output=output, data=data, risk=risk)
 
 

@@ -1,1 +1,33 @@
-<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VELKO · Atelier réel</title><link rel="stylesheet" href="workbench.css"><body><header><strong>VELKO <span>ATELIER LOCAL</span></strong><span id="status">Connexion…</span></header><main><section id="editor-pane"><nav id="files" aria-label="Fichiers réels"></nav><div class="editor"><div class="toolbar"><span id="filename">Sélectionner un fichier</span><button id="save" disabled>Enregistrer</button></div><textarea id="content" spellcheck="false" aria-label="Code du fichier" disabled></textarea><small id="saved">Les modifications enregistrées sont écrites sur disque.</small></div></section><section id="terminal-pane"><h2>Terminal · sorties des processus réels</h2><pre id="terminal"></pre></section><section id="application-pane"><h2>Session applicative VELKO</h2><p id="application-state">Aucune session externe active.</p><p id="application-detail"></p></section></main><footer id="result">En attente d’une mission. Ouvrez cet atelier depuis VELKO.</footer><script type="module" src="workbench.js"></script></body></html>
+<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VELKO · Atelier réel</title><link rel="stylesheet" href="workbench.css"><body>
+<header><strong>VELKO <span>ATELIER LOCAL</span></strong><span id="status">Connexion…</span></header>
+<main>
+
+<section id="editor-pane">
+ <nav id="files" aria-label="Arborescence réelle du projet"><p class="empty" id="tree-empty">Aucun projet ouvert par VELKO.</p></nav>
+ <div class="editor">
+  <div class="toolbar">
+   <span id="filename">Aucun fichier ouvert</span>
+   <span class="toolbar-right"><span id="file-meta"></span><button id="diff-toggle" disabled>Diff</button></span>
+  </div>
+  <div id="code-view" class="code-view"><p class="empty">VELKO n’a encore ouvert aucun fichier. Cet écran suit ses ouvertures et ses écritures réelles.</p></div>
+  <pre id="diff-view" class="diff-view" hidden></pre>
+  <small id="saved">Lecture seule : les fichiers sont écrits par le moteur, jamais depuis cet écran.</small>
+ </div>
+</section>
+
+<section id="terminal-pane">
+ <h2>Terminal · commandes et sorties réelles <span id="terminal-cwd"></span></h2>
+ <pre id="terminal"><span class="empty">Aucune commande exécutée. Cet écran affiche la sortie réelle des processus lancés par VELKO.</span></pre>
+</section>
+
+<section id="application-pane">
+ <h2 id="application-title">Outil actif</h2>
+ <p id="application-state">Aucune source réelle active.</p>
+ <div id="application-body"></div>
+ <p id="application-detail"></p>
+</section>
+
+</main>
+<footer id="result">En attente d’une mission.</footer>
+<script type="module" src="workbench.js"></script>
+</body></html>

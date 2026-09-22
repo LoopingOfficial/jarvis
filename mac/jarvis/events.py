@@ -13,6 +13,12 @@ EVENT_TYPES = {
     "agent.started", "agent.progress", "agent.completed", "agent.failed", "agent.idle",
     "task.created", "task.started", "task.progress", "task.completed", "task.failed",
     "task.cancelled", "task.waiting_confirmation",
+    "task.waiting_tool", "task.waiting_user", "task.testing", "task.retrying", "task.blocked",
+    # Exécution réelle : terminal et fichiers — émis uniquement après coup réel.
+    "terminal.command", "terminal.output", "terminal.completed", "terminal.failed",
+    "file.opened", "file.changed", "file.created", "file.deleted",
+    # VelkoTaskManager — phases du cycle de vie réel de VELKO.
+    "velko.task.phase", "velko.task.desk", "velko.task.blocked", "velko.activity",
     "tool.called", "tool.completed", "tool.failed", "tool.denied",
     "connector.connected", "connector.failed", "connector.updated", "connector.deleted",
     "voice.state", "voice.transcript", "voice.speaking", "voice.error",
@@ -74,6 +80,16 @@ EVENT_TYPES = {
     "ssh.connected",
     "n8n.workflow.created",
     "coding.started", "coding.completed",
+    # Assistant de dev quotidien — projet, code, git, tests, process longue durée.
+    "project.list", "project.selected", "project.ambiguous", "project.scanned",
+    "project.scan_failed", "project.context",
+    "code.file.active", "code.patch.applied",
+    "git.status", "git.diff", "git.log",
+    "test.started", "test.output", "test.passed", "test.failed",
+    "process.started", "process.output", "process.stopped", "process.restarted",
+    "browser.started", "browser.navigate", "browser.action", "browser.wait", "browser.closed",
+    "discord.opened", "discord.action",
+    "ssh.command", "ssh.output",
     "deploy.started", "deploy.completed",
     "verification.started", "verification.completed",
     # Mission Control V1 — contrat temps réel avec spatial_mission_control.js.

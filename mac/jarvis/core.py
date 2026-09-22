@@ -45,8 +45,10 @@ from .mission_control import MissionControl
 from .monitor import SystemMonitor
 from .orchestrator import Orchestrator
 from .permissions import PermissionManager
+from .projects import ProjectResolver
 from .secrets import SecretVault
 from .tasks import TaskManager
+from .velko_tasks import VelkoTaskManager
 from .tools import registry
 from .tools.runner import SecureToolRunner
 from .tts import PiperTTS
@@ -67,7 +69,9 @@ from .tools import (avatar_engine_tools, avatar_tools, avatar_update_tools,  # n
                     jarvis_tools,
                     remote_tools,
                     self_upgrade_tools, site_stats_tools,
-                    system_tools, web_tools)  # noqa: F401,E402
+                    system_tools, web_tools,
+                    dev_tools,
+                    brainrot_tools)  # noqa: F401,E402
 
 
 class JarvisCore:
@@ -83,10 +87,16 @@ class JarvisCore:
         self.audit = AuditLog(self.db, vault=self.vault, settings=self.settings)
         self.connectors = ConnectorManager(self.db, self.vault, self.events, self.audit)
         self.permissions = PermissionManager(self.settings, self.audit)
+        # ProjectResolver : catalogue réel des projets de l'utilisateur
+        # (scan des dossiers autorisés, résolution par nom, contexte).
+        self.projects = ProjectResolver(self)
         self.monitor = SystemMonitor(self.events, started_at=self.started_at)
         self.memory = MemoryManager(self.db, self.events, self.settings)
         self.conversations = ConversationManager(self.db, self.events, self.settings)
         self.tasks = TaskManager(self.db, self.events, self.settings)
+        # VelkoTaskManager : cycle de vie réel des missions VELKO (phases,
+        # journal de mission, blocage justifié). S'abonne aux événements réels.
+        self.velko_tasks = VelkoTaskManager(self)
         # Mission Control : observateur passif du bus d'événements — il ne
         # pilote rien, il agrège l'état réel des missions pour l'écran de
         # supervision (et persiste l'historique consultable après redémarrage).
@@ -112,6 +122,9 @@ class JarvisCore:
         self.avatar_live = AvatarLiveManager(self)
         self.gpu = GpuResourceManager(self)
         self.runner = SecureToolRunner(self)
+        # ProcessManager : processus longue durée suivis en arrière-plan.
+        from .tools.dev_tools import ProcessManager
+        self.process_manager = ProcessManager(self)
         self.validation = ValidationEngine()
         self.orchestrator = Orchestrator(self)
         self.voice = VoiceStateMachine(self.events)

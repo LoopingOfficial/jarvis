@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .brainrot_site import load_profile
 from .sheet_semantics import _as_number, detect_regions, region_columns
 
 BUILD_ID = "JARVIS_BRAINROT_COMPARE_V1"
@@ -271,14 +272,33 @@ def parse_site_php(text: str) -> list[dict[str, Any]]:
 class ServerReader:
     """Lecture seule du site via le connecteur SSH déjà configuré."""
 
-    def __init__(self, core: Any, connector_id: str = "ssh", path: str = SITE_DATA_PATH) -> None:
+    def __init__(self, core: Any, connector_id: str = "", path: str = SITE_DATA_PATH) -> None:
         self.core = core
         self.connector_id = connector_id
         self.path = path
 
+    def _resolve_connector_id(self) -> str:
+        """Connecteur SSH réellement configuré (le défaut muet « ssh » n'existe plus)."""
+        if self.connector_id:
+            return self.connector_id
+        try:
+            active = self.core.connectors.active("ssh")
+            if active:
+                return str(active[0]["id"])
+        except Exception:
+            pass
+        try:
+            profile = load_profile()
+            ssh = (profile.get("production") or {}).get("ssh", {})
+            if ssh.get("connector"):
+                return str(ssh.get("connector") or "")
+        except Exception:
+            pass
+        return "ssh"
+
     def read(self) -> dict[str, Any]:
         result = self.core.runner.run(
-            "ssh.read_file", {"connector_id": self.connector_id, "path": self.path},
+            "ssh.read_file", {"connector_id": self._resolve_connector_id(), "path": self.path},
             agent="jarvis", execution_policy={"read_only": True})
         if not result.ok:
             return {"ok": False, "error": "SITE_READ_FAILED", "detail": result.output[:300],

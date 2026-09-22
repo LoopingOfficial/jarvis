@@ -1,0 +1,167 @@
+{
+  "_comment": [
+    "Profil opérationnel de brainrot-fortnite.com, établi par audit réel et non destructif.",
+    "AUCUN SECRET ICI. Les identifiants restent dans le coffre (core.vault) et les",
+    "connecteurs. Ce fichier ne contient que des références permettant à VELKO de",
+    "retrouver seul le projet, sa base et ses sous-systèmes.",
+    "Revalider quand le schéma ou l'arborescence change (voir audited_at)."
+  ],
+  "id": "brainrot-fortnite",
+  "display_name": "Brainrot Fortnite",
+  "aliases": ["brainrot", "brainrotfortnite", "brainrot-fortnite", "le site", "brainrot fortnite"],
+  "audited_at": "2026-09-21",
+
+  "local": {
+    "path": "/Users/jerome/Desktop/Brainrot",
+    "stack": "PHP",
+    "git": true,
+    "branch_at_audit": "mobile-backend-preparation",
+    "remote": "https://github.com/jeromedu-91-cell/brainrotsfortnite.git",
+    "config_files": [
+      "config/config.php",
+      "config/config.local.php",
+      "config/config.secrets.php",
+      "config/db.php"
+    ],
+    "entrypoints": ["accueil.php", "blog.php", "bootstrap.php"],
+    "directories": {
+      "admin": "admin",
+      "api": "api",
+      "ajax": "ajax",
+      "auth": "auth",
+      "assets": "assets",
+      "includes": "includes"
+    }
+  },
+
+  "production": {
+    "url": "https://brainrot-fortnite.com/",
+    "verified_at_audit": "HTTP 200",
+    "deploy": {
+      "mechanism": "non déterminé par l'audit",
+      "observed": ["deployment-backups/", "deployment-packages/"],
+      "note": "Aucun script de déploiement ni workflow CI trouvé à la racine. À confirmer avec l'utilisateur avant tout déploiement."
+    },
+    "ssh": {
+      "connector": "brainrot-prod",
+      "note": "Connecteur SSH configuré le 2026-09-22 (clé ~/.ssh/brainrot_prod, 31.59.234.85)."
+    }
+  },
+
+  "database": {
+    "connector_id": "mysql-mariadb",
+    "type": "mysql",
+    "schema": "brainrotfortnite_com",
+    "tables_total_at_audit": 355,
+    "tables": {
+      "users": {
+        "role": "comptes membres",
+        "columns_used": ["id", "email", "username", "created_at", "email_verified_at",
+                         "premium_type", "preferred_lang", "is_admin"],
+        "note": "PAS de colonne last_login : le nombre de connexions n'est pas enregistré ici."
+      },
+      "activity_presence": {
+        "role": "dernière présence connue",
+        "columns_used": ["user_id", "last_seen_at", "is_hidden"],
+        "note": "Sert à mesurer les membres ACTIFS (vus), pas les connexions."
+      },
+      "activity_events": {
+        "role": "flux d'activité",
+        "columns_used": ["id", "event_type", "actor_id", "created_at", "visibility", "status"]
+      },
+      "user_email_verifications": {
+        "role": "jetons de confirmation d'adresse",
+        "columns_used": ["user_id", "email", "created_at", "used_at", "expires_at"]
+      },
+      "blog_posts": {
+        "role": "articles du blog",
+        "columns_used": ["id", "category_id", "title", "slug", "status", "cover_image",
+                         "excerpt", "content", "meta_title", "meta_desc", "author_id",
+                         "published_at", "is_featured", "created_at", "updated_at"]
+      },
+      "blog_categories": {"role": "catégories du blog"},
+      "brainrots": {"role": "catalogue des Brainrots", "rows_at_audit": 128},
+      "brainrot_import_batches": {"role": "lots d'import du catalogue"},
+      "brainrot_import_candidates": {"role": "entrées candidates à l'import"},
+      "brainrot_import_conflicts": {"role": "conflits d'import détectés"},
+      "brainrot_import_logs": {"role": "journal des imports"}
+    }
+  },
+
+  "subsystems": {
+    "blog": {
+      "available": true,
+      "storage": "table blog_posts (+ blog_categories)",
+      "admin_page": "admin/blog.php",
+      "public_page": "blog.php",
+      "draft_status": "draft",
+      "published_status": "published"
+    },
+    "brainrots": {
+      "available": true,
+      "catalog_table": "brainrots",
+      "import_pipeline": "tables brainrot_import_* déjà présentes dans le site",
+      "note": "Utiliser le pipeline d'import existant plutôt que d'en créer un second."
+    },
+    "google_sheet": {
+      "available": true,
+      "read_only": true,
+      "connector": null,
+      "sheet_id": "13zEUK0GyLtpD_CyBVpSuxe62LbLN_2K0aIGcjUssjkY",
+      "url": "https://docs.google.com/spreadsheets/d/13zEUK0GyLtpD_CyBVpSuxe62LbLN_2K0aIGcjUssjkY/edit#gid=0",
+      "tab": "ALL BRAINROTS",
+      "tab_gid": "0",
+      "columns": ["Name", "Rarity", "Base Income ($/s)", "Price ($)"],
+      "field_mapping": {
+        "Name": "name",
+        "Rarity": "rarity",
+        "Base Income ($/s)": "income",
+        "Price ($)": "cost"
+      },
+      "discovered_at": "2026-09-22",
+      "note": "Classeur public « STB Hub » (source d'origine des données). Lecture quotidienne possible sans OAuth. Écriture/synchronisation : non autorisée, passer par le pipeline d'import existant du site (confirmation requise)."
+    },
+    "email": {
+      "available": false,
+      "mechanism": "à confirmer",
+      "observed": "usage de mail()/SMTP dispersé dans des pages PHP (marketplace-pay, change-password, discord-callback…)",
+      "note": "Aucun mailer central identifié et aucun connecteur email configuré. Ne pas créer un second système : confirmer le mailer existant avec l'utilisateur."
+    },
+    "discord": {
+      "available": true,
+      "connector_id": "discord",
+      "note": "Bot authentifié, sert aussi le serveur communautaire."
+    }
+  },
+
+  "autonomy_policy": {
+    "_comment": "Politique explicite demandée. VELKO agit seul à gauche, demande à droite.",
+    "autonomous": [
+      "fs.read", "fs.list", "fs.search",
+      "git.status", "git.diff", "git.log",
+      "db.query (SELECT / SHOW / DESCRIBE uniquement)",
+      "brainrot.analytics.*", "brainrot.site.health", "brainrot.site.inspect",
+      "brainrot.blog.list", "brainrot.blog.read", "brainrot.blog.create_draft",
+      "brainrot.brainrots.list", "brainrot.brainrots.diff_sheet",
+      "browser.navigate", "browser.read_page",
+      "web.search", "web.fetch",
+      "test.run", "process.find", "process.logs"
+    ],
+    "requires_confirmation": [
+      "brainrot.blog.publish",
+      "brainrot.email.send_campaign",
+      "brainrot.brainrots.sync_sheet",
+      "brainrot.site.deploy",
+      "db.query (INSERT / UPDATE / DELETE / DROP / ALTER)",
+      "fs.delete",
+      "ssh.service", "deploy.rsync"
+    ]
+  },
+
+  "unavailable_metrics": {
+    "_comment": "Ce que le schéma actuel NE PERMET PAS de calculer. À dire tel quel, jamais à estimer.",
+    "connexions_par_jour": "Aucune colonne de connexion (users.last_login absent, pas de table de sessions historisée).",
+    "parcours_utilisateur": "Pas d'analytics de navigation en base.",
+    "taux_de_retour": "Impossible sans historique de connexions."
+  }
+}

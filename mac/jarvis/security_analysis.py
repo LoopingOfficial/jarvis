@@ -71,9 +71,40 @@ READ_ONLY_ALLOWED_TOOLS = {
     "security.scan_file", "security.scan_project", "security.dependencies", "security.secrets",
     "security.permissions", "security.headers", "security.report",
     "google.sheets.read",
+    # db.query est classé au cas par cas par son risk_resolver : un SELECT est
+    # une lecture, un INSERT/UPDATE reste refusé quelques lignes plus bas. Sans
+    # cette entrée, l'allowlist grossière bloquait aussi les SELECT et toutes
+    # les analytics du site se déclaraient « indisponibles ».
+    "db.query",
     # Mode « lire/appliquer la page » : naviguer et observer reste en LECTURE.
-    "browser.navigate", "browser.wait", "browser.back", "browser.scroll",
-    "browser.pause", "browser.close",
+    # read_page/status/reload/forward n'écrivent rien : sans eux, une demande
+    # « ouvre cette page et dis-moi ce qu'elle affiche » ouvrait la page mais
+    # ne pouvait jamais la lire (WRITE_DENIED_READ_ONLY).
+    "browser.navigate", "browser.wait", "browser.back", "browser.forward",
+    "browser.scroll", "browser.pause", "browser.close", "browser.reload",
+    "browser.read_page", "browser.status",
+    "web.fetch", "web.search", "web.check",
+    # Assistant de dev : résolution de projet, état git et suivi processus
+    # restent de la LECTURE pure. Les écritures réelles (fs.write, test.run,
+    # process.start…) ne sont jamais débloquées par ce mode.
+    "project.list", "project.select", "project.context",
+    "git.status", "git.diff", "git.log",
+    "process.status", "process.logs", "process.find",
+    "project.discord_bot", "project.audit",
+    # brainrot-fortnite.com : toute la couche d'observation est en LECTURE.
+    "brainrot.site.inspect", "brainrot.site.health", "brainrot.site.routes",
+    "brainrot.analytics.summary", "brainrot.analytics.members",
+    "brainrot.analytics.registrations", "brainrot.analytics.activity",
+    "brainrot.analytics.email_status", "brainrot.users.unverified",
+    "brainrot.users.inactive", "brainrot.blog.list", "brainrot.blog.read",
+    "brainrot.brainrots.list", "brainrot.brainrots.diff_sheet",
+    "brainrot.email.prepare_campaign",
+    # Observer l'état réel du système et des connecteurs est de la LECTURE.
+    # Sans eux, un audit « dans quel état est mon bot » se faisait refuser
+    # ses propres constats (WRITE_DENIED_READ_ONLY) et concluait à tort.
+    "system.info", "connector.list", "connector.status", "connector.test",
+    "discord.status", "discord.web_session", "discord.list_channels", "discord.recent_messages",
+    "discord.latest_message", "discord.summarize_channel",
 }
 
 READ_ONLY_DENIED_TOOLS = {

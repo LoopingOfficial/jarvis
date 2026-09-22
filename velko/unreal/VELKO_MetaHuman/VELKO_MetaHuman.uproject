@@ -1,0 +1,32 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "",
+  "Description": "Source MetaHuman pour l'avatar VELKO. Export vers Blender via velko/work/VELKO_MASTER_v2.blend",
+  "Plugins": [
+    {
+      "Name": "MetaHumanCharacter",
+      "Enabled": true
+    },
+    {
+      "Name": "MetaHumanSDK",
+      "Enabled": true
+    },
+    {
+      "Name": "MetaHumanAnimationTools",
+      "Enabled": true
+    },
+    {
+      "Name": "RigLogic",
+      "Enabled": true
+    },
+    {
+      "Name": "AlembicImporter",
+      "Enabled": true
+    },
+    {
+      "Name": "HairStrands",
+      "Enabled": true
+    }
+  ]
+}

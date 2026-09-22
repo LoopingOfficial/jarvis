@@ -9,6 +9,8 @@ const TOOL_KINDS=[
  [/file|code|write|edit|patch|read_file|document/i,'code',0],
 ];
 const ACTIONS={code:'type',terminal:'type',browser:'click',discord:'click',read:'read'};
+/** Geste par défaut pour une action. Le geste suit toujours un fait réel. */
+const GESTURES={type:'TypingNormal',click:'MouseClick',scroll:'MouseScroll',read:'ReadScreen'};
 export function classifyTool(name=''){for(const [re,kind,screen] of TOOL_KINDS)if(re.test(name))return {kind,screen};return {kind:'read',screen:1};}
 
 export class VelkoJarvisClient {
@@ -40,18 +42,93 @@ export class VelkoJarvisClient {
   if(type.startsWith('code.file.')){
    const path=data.absolute_path||data.filename||data.path||'';
    if(type==='code.file.saved'||type==='code.file.error'||type==='code.file.closed')return this.apply(null);
-   return this.apply({kind:'code',screen:0,action:type==='code.file.modified'||type==='code.file.saving'?'type':'read',path,label:path});
+   const writing=type==='code.file.modified'||type==='code.file.saving';
+   return this.apply({kind:'code',screen:0,action:writing?'type':'read',
+    gesture:writing?'TypingNormal':'ReadScreen',path,label:path});
   }
+  // Fichiers réels : une OUVERTURE se lit, une ÉCRITURE se tape. On ne tape
+  // jamais « pour faire joli » : le geste suit l'opération réellement faite.
+  if(type==='file.opened'||type==='code.file.active'){
+   const path=String(data.path||data.absolute_path||'');
+   return this.apply({kind:'code',screen:0,action:'read',gesture:'ReadScreen',path,label:path||'Fichier'});
+  }
+  if(type==='file.changed'||type==='file.created'||type==='code.patch.applied'){
+   const path=String(data.path||data.absolute_path||'');
+   return this.apply({kind:'code',screen:0,action:'type',gesture:'TypingFast',path,label:path||'Fichier'});
+  }
+  if(type==='file.deleted')
+   return this.apply({kind:'code',screen:0,action:'read',gesture:'ReadScreen',
+    path:String(data.path||''),label:String(data.path||'')});
   if(type==='tool.started'||type==='tool.called'){
    const name=String(data.tool||data.name||data.tool_id||'');const {kind,screen}=classifyTool(name);
-   return this.apply({kind,screen,action:ACTIONS[kind],actionId:String(data.call_id||data.id||name),label:name,path:data.path||''});
+   return this.apply({kind,screen,action:ACTIONS[kind],gesture:GESTURES[ACTIONS[kind]]||'ReadScreen',
+    actionId:String(data.call_id||data.id||name),label:name,path:data.path||''});
   }
-  if(type==='tool.completed'||type==='tool.failed'||type==='tool.denied')return this.apply(null);
-  if(type==='agent.progress'||type==='task.progress'){
-   const value=Number(data.progress??data.percent);
-   if(Number.isFinite(value))this.bus.emit('mission.progress',{progress:Math.max(0,Math.min(100,value))});
+  // Terminal : la commande se tape puis se valide ; dès que le processus
+  // produit sa sortie, il travaille SEUL — VELKO retire les mains et lit.
+  if(type==='terminal.command')
+   return this.apply({kind:'terminal',screen:1,action:'type',gesture:'PressEnter',
+    label:String(data.command||'Terminal'),path:String(data.cwd||'')});
+  if(type==='terminal.output')
+   return this.apply({kind:'terminal',screen:1,action:'read',gesture:'ReadScreen',
+    label:'Sortie du processus'});
+  if(type==='terminal.failed'||type==='terminal.completed')
+   return this.apply({kind:'terminal',screen:1,action:'read',gesture:'ReadScreen',
+    label:type==='terminal.completed'?'Fin du processus':'Processus en échec'});
+  if(type.startsWith('process.'))
+   return this.apply({kind:'terminal',screen:1,action:'read',gesture:'ReadScreen',
+    label:'Processus '+type.split('.')[1]});
+  // Navigateur réel : la main droite va sur la souris, et revient au clavier
+  // seulement quand VELKO saisit réellement du texte.
+  if(type.startsWith('browser.')){
+   if(type==='browser.frame')return;                       // flux d'image : aucun geste
+   const what=type.split('.').slice(1).join('.');
+   // La main atteint la souris sur le clic réel, puis appuie sur l'événement
+   // d'action correspondant : deux faits successifs, deux gestes.
+   if(type==='browser.action'){
+    const kind=String(data.kind||'').toUpperCase();
+    const g={CLICK:'MouseClick',SCROLL:'MouseScroll',OPEN:'ReadScreen',
+             BACK:'MouseClick',FORWARD:'MouseClick',TYPE:'TypingNormal'}[kind];
+    if(!g)return;
+    return this.apply({kind:'browser',screen:2,
+     action:g.startsWith('Typing')?'type':g==='MouseScroll'?'scroll':g==='ReadScreen'?'read':'click',
+     gesture:g,label:'Navigateur · '+kind.toLowerCase(),path:String(data.target||'')});
+   }
+   const MAP={
+    started:['read','ReadScreen'], navigate:['click','MouseReach'],
+    loaded:['read','ReadScreen'],  click:['click','MouseReach'],
+    scroll:['scroll','MouseScroll'], type:['type','TypingNormal'],
+    read:['read','ReadScreen'],    wait:['read','ReadScreen'],
+    gate:['read','ReadScreen'],    error:['read','ReadScreen'],
+    closed:['read','ReadScreen'],  download:['read','ReadScreen'],
+   };
+   const [action,gesture]=MAP[what]||['read','ReadScreen'];
+   return this.apply({kind:'browser',screen:2,action,gesture,
+    label:'Navigateur · '+what,path:String(data.url||data.target||'')});
+  }
+  if(type.startsWith('ssh.')){
+   const what=type.split('.')[1];
+   return this.apply({kind:'terminal',screen:1,action:what==='run'?'type':'read',
+    gesture:what==='run'?'PressEnter':'ReadScreen',label:'SSH · '+what,
+    path:String(data.host||'')});
+  }
+  if(type.startsWith('git.'))
+   return this.apply({kind:'terminal',screen:1,action:'read',gesture:'ReadScreen',
+    label:'Git · '+type.split('.')[1]});
+  // Progression : relayée UNIQUEMENT quand le moteur en fournit une réelle.
+  // Aucun pourcentage n'est calculé ni interpolé ici.
+  if(type==='task.progress'||type==='agent.progress'||type==='mission.progress'){
+   const raw=data.progress;
+   if(typeof raw==='number'&&isFinite(raw))
+    this.bus.emit('mission.progress',{progress:raw<=1?raw*100:raw});
+   if(type!=='task.progress')return;
+  }
+  if(type==='velko.task.phase'){
+   const label=String(data.label||data.phase||'');
+   if(label)this.bus.emit('engine.notice',{text:label,phase:data.phase});
    return;
   }
+  if(type==='tool.completed'||type==='tool.failed'||type==='tool.denied')return this.apply(null);
   if(type==='jarvis.activity'||type==='activity.trace'||type==='system.warning')
    this.bus.emit('engine.notice',{text:String(data.detail||data.message||data.text||'')});
  }
@@ -82,14 +159,26 @@ export class VelkoJarvisClient {
    .then(result=>{if(this.id===id)this.settle(result);})
    .catch(error=>{if(this.id===id)this.fail(error.message);});
  }
- settle(result){
+ async settle(result){
+  // Read the persisted task: an HTTP reply alone is never completion.
+  if(result.task_id){
+   try {
+    const response=await fetch(`/api/tasks/${encodeURIComponent(result.task_id)}`);
+    const detail=await response.json();
+    if(!response.ok||!detail.task)throw Error("Statut de la tâche indisponible");
+    result={...result,status:detail.task.status};
+   } catch(error){return this.fail(error.message);}
+  }
   this.conversationId=result.conversation_id||this.conversationId;
   const text=String(result.response||'').trim();
-  if(result.needs_confirmation){
-   this.confirmation=result.needs_confirmation;
-   this.director.receive({taskId:this.id,seq:++this.seq,type:'task.blocked',result:text||'Confirmation requise.'});
-   this.bus.emit('mission.snapshot',{id:this.id,status:'blocked',result:text});
-   this.bus.emit('mission.confirmation',{...this.confirmation,message:text});
+  if(result.blocked||result.needs_confirmation||result.status!=='completed'){
+   // ACTION BLOQUÉE : seul le backend décide du blocage (connecteur absent,
+   // action non exécutable, validation utilisateur). VELKO reste au poste.
+   this.confirmation=result.needs_confirmation||null;
+   this.director.receive({taskId:this.id,seq:++this.seq,type:'task.blocked',
+    result:text||result.error||'Action bloquée — achèvement non confirmé par le moteur.'});
+    this.bus.emit('mission.snapshot',{id:this.id,status:'blocked',result:text});
+   if(this.confirmation)this.bus.emit('mission.confirmation',{...this.confirmation,message:text});
    return;
   }
   this.director.receive({taskId:this.id,seq:++this.seq,type:'task.completed',status:'completed',

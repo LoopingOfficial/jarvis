@@ -48,10 +48,19 @@ _TOOL_HINT = re.compile(
     r"genere|génère|génér|"
     r"\bimages?\b|blender|\b3d\b|avatar|"
     r"audit|deploy|déploie|corrige|modifie|patch|installe|"
+    r"analys|analyse|analysez|lister|liste|recens|inventaire|"
     r"telecharge|télécharge|navigue|scrape|sync|synchronis|"
     r"compare|onglet|\bsheets?\b|classeur|"
+    # Exploitation du site : « fais-moi le point », « comment va le site »,
+    # « combien de membres » exigent des données RÉELLES. Sans ces motifs, la
+    # demande partait en réponse LLM directe, sans aucun outil — et le modèle
+    # inventait des chiffres.
+    r"fais[- ]moi le point|faire le point|comment va|\bsynth[èe]se\b|"
+    r"brainrot|\bmembres?\b|inscription|statistiq|\bm[ée]triques?\b|"
+    r"non confirm|\bblog\b|\barticles?\b|catalogue|"
     r"serveur|\bcrm\b|facture|invoice|\bn8n\b|workflow|"
-    r"\bcode\b|fichier|\bfile\b|dossier|repertoire|répertoire|"
+    r"\bcode\b|fichier|fichiers|\bfile\b|dossier|repertoire|répertoire|"
+    r"\bprojet\b|"
     r"marketplace\.php|index\.php|"
     r"publie|publier|publication|publique|poste|poster|"
     r"discord|canal|\bsalon\b)\b",
