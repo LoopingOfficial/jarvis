@@ -433,6 +433,13 @@ class Orchestrator:
                                             execution_policy=execution_policy,
                                             request_id=request_id)
 
+        # n8n : « liste mes workflows », « lance X »… Chemin déterministe vers
+        # l'API réelle ; un connecteur absent produit un blocage explicite et
+        # résoluble (Paramètres → n8n), jamais « aucun outil n'a abouti ».
+        n8n_request = core.n8n.detect(resolved.segments.executable_instruction or text, conversation_id)
+        if n8n_request and not confirmation_id:
+            return core.n8n.handle(text, conversation_id, n8n_request)
+
         # Mode MODEL_ONLY : aucun outil n'est exposé ni exécuté. Le modèle
         # répond seul — c'est la garantie qu'un benchmark, une citation, une
         # donnée ou une question théorique ne déclenche jamais d'action réelle.
@@ -2899,6 +2906,8 @@ class Orchestrator:
 
     def resume_confirmation(self, confirmation_id: str, approved: bool) -> dict[str, Any]:
         core = self._core
+        if core.n8n.is_pending(confirmation_id):
+            return core.n8n.confirm(confirmation_id, approved)
         existing = core.permissions.get(confirmation_id)
         if (not existing or existing.resolved or time.time() - existing.created_at >
                 float(core.settings.get("security", "confirmation_timeout_s", 600))):

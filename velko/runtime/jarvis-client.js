@@ -2,13 +2,20 @@
  *  Every action shown on the monitors comes from an engine event; nothing here
  *  invents progress, and completion is only ever delivered by the engine reply. */
 import {engineFeed} from './engine-feed.js';
+import {VelkoVisualActivityManager, VisualActionScheduler, VISUAL_STATES} from './visual-activity.js';
 const TOOL_KINDS=[
+ [/^n8n\./i,'terminal',1],            // n8n : exécution/logs au centre
  [/discord/i,'discord',2],
  [/browser|navigat|web|search|http|fetch|site|scrape|url/i,'browser',2],
+ [/google\.|sheet|brainrot\.brainrots\./i,'sheet',2],
+ [/brainrot\.analytics|analytics|registrations|activity|email_status|users_/i,'analytics',1],
+ [/brainrot\.blog\.|blog\./i,'blog',2],
+ [/brainrot\.email\.|email\./i,'email',2],
+ [/^db\./i,'database',1],
  [/shell|command|terminal|bash|process|exec|run\b|install|test/i,'terminal',1],
  [/file|code|write|edit|patch|read_file|document/i,'code',0],
 ];
-const ACTIONS={code:'type',terminal:'type',browser:'click',discord:'click',read:'read'};
+const ACTIONS={code:'type',terminal:'type',browser:'click',discord:'click',sheet:'read',analytics:'read',blog:'type',email:'type',database:'read',read:'read'};
 /** Geste par défaut pour une action. Le geste suit toujours un fait réel. */
 const GESTURES={type:'TypingNormal',click:'MouseClick',scroll:'MouseScroll',read:'ReadScreen'};
 export function classifyTool(name=''){for(const [re,kind,screen] of TOOL_KINDS)if(re.test(name))return {kind,screen};return {kind:'read',screen:1};}
@@ -16,7 +23,11 @@ export function classifyTool(name=''){for(const [re,kind,screen] of TOOL_KINDS)i
 export class VelkoJarvisClient {
  constructor(bus,director,screens){
   Object.assign(this,{bus,director,screens});
+  this.screenRouter=screens?.router||null;
   this.id=null;this.seq=0;this.conversationId='';this.pendingAction=null;this.source=null;this.confirmation=null;
+  // Couche d'activité visuelle : regroupe les rafales techniques en activité humaine.
+  this.visual=new VelkoVisualActivityManager();
+  this.scheduler=new VisualActionScheduler();
   bus.on('workstation.ready',({taskId})=>{if(taskId===this.id&&this.pendingAction!==null){this.director.setAction(this.pendingAction);this.pendingAction=null;}});
  }
  connect(){
@@ -60,9 +71,21 @@ export class VelkoJarvisClient {
    return this.apply({kind:'code',screen:0,action:'read',gesture:'ReadScreen',
     path:String(data.path||''),label:String(data.path||'')});
   if(type==='tool.started'||type==='tool.called'){
-   const name=String(data.tool||data.name||data.tool_id||'');const {kind,screen}=classifyTool(name);
-   return this.apply({kind,screen,action:ACTIONS[kind],gesture:GESTURES[ACTIONS[kind]]||'ReadScreen',
-    actionId:String(data.call_id||data.id||name),label:name,path:data.path||''});
+   const name=String(data.tool||data.tool_id||data.name||'');const {kind,screen}=classifyTool(name);
+   // L'activité visuelle est dictée par le véritable outil appelé : une requête
+   // DB approfondie, une comparaison de Sheet… Aucune étiquette générique.
+   const visual=this.visual.consume(type,{...data,tool:name});
+   const activity=this.scheduler.push(visual||this.visual.current());
+   if(this.screenRouter)this.screenRouter.setActivity({activityFamily:kind,tool:name,resource:data.path||''});
+   if(this.screenRouter)this.screenRouter.ingest(type,data);
+   if(!activity)return;   // rafale identique absorbée : aucun geste répété
+   // L'écran que le routeur a réellement affiché fait autorité pour le regard :
+   // l'avatar regarde le moniteur qui montre le contenu, pas une recopie d'outil.
+   const routed=this.screenRouter?.screenFor(kind) ?? screen;
+   return this.apply({kind:activity.kind||kind,screen:routed>=0?routed:activity.screen,action:
+     (kind==='sheet'||kind==='analytics'||kind==='database')?'read':ACTIONS[kind],
+    gesture:activity.gesture||GESTURES[ACTIONS[kind]]||'ReadScreen',
+    actionId:String(data.call_id||data.id||name),label:activity.label,path:data.path||''});
   }
   // Terminal : la commande se tape puis se valide ; dès que le processus
   // produit sa sortie, il travaille SEUL — VELKO retire les mains et lit.
@@ -115,6 +138,14 @@ export class VelkoJarvisClient {
   if(type.startsWith('git.'))
    return this.apply({kind:'terminal',screen:1,action:'read',gesture:'ReadScreen',
     label:'Git · '+type.split('.')[1]});
+  // Google Sheets / famille métier : la comparaison se lit, l'écriture se tape.
+  if(type.startsWith('google.')||type.startsWith('sheet.')) {
+   const visual=this.visual.consume(type,data);
+   const activity=this.resolvedActivity(visual,'sheet');
+   if(this.screenRouter)this.screenRouter.setActivity({activityFamily:'sheet',tool:'google.sheets',resource:data.spreadsheet_id||''});
+   return this.apply({kind:'sheet',screen:2,action:'read',gesture:activity.gesture||'ReadScreen',
+    label:activity.label||'Google Sheets',path:String(data.spreadsheet_id||data.mode||'')});
+  }
   // Progression : relayée UNIQUEMENT quand le moteur en fournit une réelle.
   // Aucun pourcentage n'est calculé ni interpolé ici.
   if(type==='task.progress'||type==='agent.progress'||type==='mission.progress'){
@@ -125,12 +156,28 @@ export class VelkoJarvisClient {
   }
   if(type==='velko.task.phase'){
    const label=String(data.label||data.phase||'');
-   if(label)this.bus.emit('engine.notice',{text:label,phase:data.phase});
+   if(label){this.bus.emit('engine.notice',{text:label,phase:data.phase});
+    if(this.screenRouter)this.screenRouter.ingest(type,data);}
    return;
   }
-  if(type==='tool.completed'||type==='tool.failed'||type==='tool.denied')return this.apply(null);
+  if(type==='tool.completed'||type==='tool.failed'||type==='tool.denied'){
+   // Le contenu réel (preview, erreur) alimente le panneau d'activité : la fin
+   // d'un outil n'est pas une raison de « claquer » un geste, mais une raison
+   // de montrer le vrai résultat sur l'écran actif.
+   const name=String(data.tool||data.tool_id||data.name||'');
+   const preview=String(data.preview||data.error||'');
+   if(preview&&this.screenRouter)this.screenRouter.setActivity({tool:name});
+   this.bus.emit('tool.real',{type,name,preview,ok:type!=='tool.failed'&&type!=='tool.denied',path:data.path||''});
+   return this.apply(null);
+  }
   if(type==='jarvis.activity'||type==='activity.trace'||type==='system.warning')
    this.bus.emit('engine.notice',{text:String(data.detail||data.message||data.text||'')});
+ }
+ /** Étiquette humaine issue de l'activité visuelle, sinon de l'outil. */
+ resolvedActivity(visual,kind){
+  if(visual&&VISUAL_STATES[visual.state])return {...VISUAL_STATES[visual.state],label:visual.label,gesture:visual.gesture};
+  return {kind,screen:[...new Set([2,1,1,1,2,2,2,1,0])][['discord','browser','sheet','analytics','blog','email','database','terminal','code'].indexOf(kind)]||1,
+   label:(VISUAL_STATES.ANALYSING_DATA&&kind==='analytics'?'Analyse des données':kind),gesture:'ReadScreen'};
  }
  apply(action){
   if(!this.director.active)return;
@@ -143,19 +190,24 @@ export class VelkoJarvisClient {
   if(!r.ok||data.ok===false)throw Error(data.error||data.response||'Le moteur a refusé la demande ('+r.status+').');
   return data;
  }
- async start(task){
+ async start(task,{url='/api/command',body=null}={}){
+  // Une mission bloquée ne fige jamais VELKO : elle est mise de côté (reprenable).
+  if(this.director.active&&['blocked','failed'].includes(this.director.task?.status))this.director.park();
   if(this.director.active)throw Error('Une mission est déjà en cours. Attendez le retour de VELKO.');
   this.id='m'+Date.now().toString(16);this.seq=0;this.pendingAction=null;this.confirmation=null;
   this.screens.routeTask(task);this.director.start(task,{id:this.id});
+  if(this.screenRouter)this.screenRouter.setActivity({activityFamily:'',tool:'',resource:''});
   this.bus.emit('mission.created',{id:this.id,task,status:'running'});
   this.bus.emit('mission.snapshot',{id:this.id,status:'running'});
-  this.dispatch({text:task,conversation_id:this.conversationId,source:'text'});
+  this.dispatch(body||{text:task,conversation_id:this.conversationId,source:'text'},url);
   return {id:this.id};
  }
+ /** REPRENDRE LA MISSION : relance la tâche bloquée d'origine, sans la retaper. */
+ resume(taskId,label){return this.start(label||'Reprise de la mission',{url:`/api/tasks/${encodeURIComponent(taskId)}/resume`,body:{}});}
  /** Fire and forget : the reply closes the mission, the SSE feed animates it. */
- dispatch(payload){
+ dispatch(payload,url='/api/command'){
   const id=this.id;
-  this.request('/api/command',payload)
+  this.request(url,payload)
    .then(result=>{if(this.id===id)this.settle(result);})
    .catch(error=>{if(this.id===id)this.fail(error.message);});
  }
@@ -177,17 +229,23 @@ export class VelkoJarvisClient {
    this.confirmation=result.needs_confirmation||null;
    this.director.receive({taskId:this.id,seq:++this.seq,type:'task.blocked',
     result:text||result.error||'Action bloquée — achèvement non confirmé par le moteur.'});
-    this.bus.emit('mission.snapshot',{id:this.id,status:'blocked',result:text});
+   this.bus.emit('mission.snapshot',{id:this.id,status:'blocked',result:text,
+    recovery:result.recovery||null,taskId:result.task_id||'',task:this.director.task?.text||'',
+    confirmation:!!this.confirmation});
    if(this.confirmation)this.bus.emit('mission.confirmation',{...this.confirmation,message:text});
    return;
   }
   this.director.receive({taskId:this.id,seq:++this.seq,type:'task.completed',status:'completed',
    result:text||'Travail terminé.'});
+  if(result.n8n)this.bus.emit('n8n.result',result.n8n);
   this.bus.emit('mission.snapshot',{id:this.id,status:'completed',result:text});
  }
  fail(reason){
   this.director.receive({taskId:this.id,seq:++this.seq,type:'task.failed',reason});
-  this.bus.emit('mission.snapshot',{id:this.id,status:'failed',result:reason});
+  this.bus.emit('mission.snapshot',{id:this.id,status:'failed',result:reason,
+   recovery:{category:'NETWORK_ERROR',cause:reason,state:'Moteur injoignable ou réponse invalide',
+    solution:'Vérifiez que le moteur VELKO tourne, puis réessayez.',actions:[{id:'retry',label:'Réessayer'},{id:'cancel',label:'Annuler la mission'}]},
+   task:this.director.task?.text||''});
  }
  async answer(approved){
   if(!this.confirmation)return;

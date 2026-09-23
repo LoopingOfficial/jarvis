@@ -290,22 +290,22 @@ def _n8n(ctx: ToolContext) -> ToolResult:
         ok, result = http_json(f"{url}/api/v1/workflows/{wid}/{verb}", method="POST", headers=headers, timeout=20)
         return ToolResult(ok, f"Workflow « {target.get('name')} » {verb}." if ok else str(result)[:400], risk=SAFE_WRITE)
 
-    ok, result = http_json(f"{url}/api/v1/workflows/{wid}/run", method="POST", headers=headers,
-                           body=ctx.arguments.get("data") or {}, timeout=60)
-    if not ok:
-        ok2, result2 = http_json(f"{url}/api/v1/workflows/{wid}/activate", method="POST", headers=headers, timeout=20)
-        if ok2:
-            return ToolResult(True, f"Workflow « {target.get('name')} » activé (exécution directe indisponible "
-                                    f"avec cette clé API).", risk=SAFE_WRITE)
-        return ToolResult(False, f"Exécution impossible : {result}"[:500])
-    return ToolResult(True, f"Workflow « {target.get('name')} » déclenché.", risk=SAFE_WRITE, data=result)
+    # L'API publique n8n n'a pas d'endpoint /run : on déclenche le Webhook réel
+    # du workflow. Jamais d'activation silencieuse en guise de repli.
+    from ..n8n_connector import N8nError
+    try:
+        out = ctx.core.n8n.connector.run(str(target.get("id")), ctx.arguments.get("data") or {})
+    except N8nError as exc:
+        return ToolResult(False, f"Exécution impossible : {exc}"[:500])
+    return ToolResult(True, f"Workflow « {target.get('name')} » déclenché.", risk=SAFE_WRITE,
+                      data=out.get("response"))
 
 
 registry.add(
     id="n8n.workflow", name="n8n", category="Automatisation",
     description="Liste, lance, active ou désactive un workflow n8n.",
     handler=_n8n, connector_type="n8n", risk=READ_ONLY,
-    risk_resolver=lambda a: READ_ONLY if a.get("action") == "list" else SAFE_WRITE,
+    risk_resolver=lambda a: READ_ONLY if a.get("action") == "list" else SENSITIVE,
     permissions=("execute",),
     input_schema={"type": "object", "properties": {
         "connector_id": {"type": "string"},

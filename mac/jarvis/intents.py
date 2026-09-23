@@ -116,7 +116,7 @@ TYPE_PATTERNS: dict[str, re.Pattern] = {
     "ssh": re.compile(r"\b(ssh|sftp|serveurs?|servers?)\b", re.IGNORECASE),
     "ftp": re.compile(r"\bftp\b", re.IGNORECASE),
     "docker": re.compile(r"\b(docker|conteneurs?|containers?)\b", re.IGNORECASE),
-    "n8n": re.compile(r"\b(n8n|workflow)\b", re.IGNORECASE),
+    "n8n": re.compile(r"\b(n8n|workflows?)\b", re.IGNORECASE),
     "github": re.compile(r"\bgithub\b", re.IGNORECASE),
     "cpanel": re.compile(r"\bcpanel\b", re.IGNORECASE),
     "whm": re.compile(r"\bwhm\b", re.IGNORECASE),

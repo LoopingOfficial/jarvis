@@ -1,0 +1,57 @@
+/* VELKO — Paramètres, panneau d'action bloquée, indicateur de mission en attente. */
+.gear{width:34px;height:34px;padding:0;border-radius:50%;display:grid;place-items:center;font-size:16px;background:#0e1a26b3;backdrop-filter:blur(10px);border:1px solid #ffffff1c;color:#cfe0f0}
+.gear:hover{border-color:#5aadee99;transform:rotate(30deg)}.gear{transition:transform .35s,border-color .2s,background .2s}
+.vb-indicator{font-size:10px;letter-spacing:1.3px;padding:7px 11px;border-radius:999px;border-color:#f0b35a66;color:#f5cf93;background:#2a1d0c99;animation:vbPulse 2.4s ease-in-out infinite}
+@keyframes vbPulse{50%{box-shadow:0 0 0 4px #f0b35a1a}}
+.hidden{display:none!important}
+
+/* --- Panneau ACTION BLOQUÉE : non modal, déplaçable ---------------------- */
+.vb-panel{position:fixed;right:28px;bottom:150px;z-index:40;width:min(400px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+ background:linear-gradient(160deg,#171d27f2,#0d131cf2);backdrop-filter:blur(16px);border:1px solid #f0b35a40;border-radius:14px;box-shadow:0 18px 50px #000a;color:#e7edf5;animation:vbIn .25s ease-out}
+@keyframes vbIn{from{opacity:0;transform:translateY(8px)}}
+.vb-panel.dragging{opacity:.92;box-shadow:0 24px 60px #000c;user-select:none}
+.vb-bar{display:flex;align-items:center;gap:9px;padding:10px 10px 10px 14px;cursor:grab;border-bottom:1px solid #ffffff10;font-size:10px;letter-spacing:2px;touch-action:none}
+.vb-panel.dragging .vb-bar{cursor:grabbing}
+.vb-dot{width:7px;height:7px;border-radius:50%;background:#f0b35a;box-shadow:0 0 10px #f0b35a}
+.vb-ctl{margin-left:auto;display:flex;gap:4px}.vb-ctl button{width:26px;height:26px;padding:0;border-radius:7px;font-size:12px}
+.vb-body{padding:14px 16px 4px;overflow:auto}.vb-panel.minimized .vb-body,.vb-panel.minimized .vb-actions{display:none}
+.vb-title{margin:0 0 10px;font-size:14px;line-height:1.45}
+.vb-grid,.vs-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0 0 10px;font-size:12px}
+.vb-grid dt,.vs-grid dt{color:#8ea3b8;font-size:9.5px;letter-spacing:1.4px;padding-top:2px;text-transform:uppercase}.vb-grid dd,.vs-grid dd{margin:0;color:#dfe8f2}
+.vb-details{display:none;font-size:11px;color:#9fb1c3;border-top:1px dashed #ffffff18;padding-top:8px}.vb-panel.expanded .vb-details{display:block}.vb-details p{margin:3px 0;word-break:break-word}
+.vb-ok{color:#8be3c2;font-size:12px;margin:0 0 10px}
+.vb-actions{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px 14px}
+.vb-actions button,.vs-acts button{padding:7px 11px;font-size:11.5px}
+.vb-primary,.vs-primary{background:#1d4f74cc!important;border-color:#5aadee88!important}
+
+/* --- Tiroir PARAMÈTRES ---------------------------------------------------- */
+.vs-drawer{position:fixed;top:0;right:0;bottom:0;z-index:50;width:min(480px,100vw);display:flex;flex-direction:column;background:linear-gradient(180deg,#0f1822f5,#0a1119f7);
+ backdrop-filter:blur(18px);border-left:1px solid #ffffff14;box-shadow:-20px 0 60px #0008;transform:translateX(105%);transition:transform .3s cubic-bezier(.2,.8,.2,1);color:#e7edf5}
+.vs-drawer.open{transform:none}
+.vs-head{display:flex;align-items:baseline;gap:10px;padding:22px 20px 12px;letter-spacing:3px;font-size:12px}.vs-head .eyebrow{font-size:9px;color:#7ea6c7}
+.vs-close{margin-left:auto;width:30px;height:30px;padding:0;border-radius:50%}
+.vs-nav{display:flex;gap:6px;overflow-x:auto;padding:0 20px 12px;border-bottom:1px solid #ffffff10;scrollbar-width:none}.vs-nav::-webkit-scrollbar{display:none}
+.vs-tab{white-space:nowrap;font-size:10.5px;padding:6px 10px;border-radius:999px;letter-spacing:.5px}.vs-tab.active{background:#1d4f74aa;border-color:#5aadee88}
+.vs-content{flex:1;overflow-y:auto;padding:16px 20px 40px;outline:none}
+.vs-h{margin:0 0 4px;font-size:15px;letter-spacing:1.5px;font-weight:600;text-transform:uppercase}.vs-h4{margin:22px 0 8px;font-size:11px;letter-spacing:2px;color:#9fb6cc;text-transform:uppercase}
+.vs-muted{color:#8ea3b8;font-size:12px;margin:0 0 12px;line-height:1.5}.vs-err,.vs-errt{color:#ff9d8f;font-size:12px}.vs-okt{color:#8be3c2}
+.vs-row,.vs-card,.vs-wf{border:1px solid #ffffff12;background:#ffffff06;border-radius:11px;padding:11px 12px;margin:10px 0}
+.vs-row-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.vs-name small{display:block;color:#7f93a8;font-size:10.5px;margin-top:2px}
+.vs-pill{font-size:10.5px;padding:3px 8px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
+.vs-ok{color:#8be3c2;background:#12382c88;border-color:#3dbb8c44}.vs-warn{color:#f5cf93;background:#3a2a1188;border-color:#f0b35a44}
+.vs-wait{color:#9fd0ff;background:#12304a88;border-color:#5aadee55}.vs-off{color:#a9b4c0;background:#ffffff0a;border-color:#ffffff1a}
+.vs-err{color:#ffb1a6;background:#40171388;border-color:#ff7a6a44}.vs-none{color:#8a97a5;background:transparent;border-color:#ffffff1a;border-style:dashed}
+.vs-meta{margin:6px 0 0;font-size:11px;color:#8ea3b8}.vs-detail{margin:6px 0 0;font-size:11.5px;color:#b8c7d6;word-break:break-word}.vs-detail p{margin:4px 0}
+.vs-result{margin:6px 0 0;font-size:11.5px}
+.vs-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.vs-acts button{white-space:nowrap}
+.vs-form{display:grid;gap:10px;margin-top:10px}.vs-form label{display:grid;gap:5px;font-size:10.5px;letter-spacing:1px;color:#9fb1c3;text-transform:uppercase}
+.vs-form input:not([type=checkbox]):not([type=range]),.vs-form select,.vs-search{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #ffffff1c;background:#070d14;color:#e7edf5;font-size:13px;text-transform:none;letter-spacing:0}
+.vs-form input[type=checkbox]{width:18px;height:18px;accent-color:#5aadee}.vs-form input[type=range]{accent-color:#5aadee}
+.vs-mask{font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;color:#cfe0f0;text-transform:none}
+.vs-form label .vs-mask+button{justify-self:start;padding:4px 10px;font-size:11px;text-transform:none;letter-spacing:0}
+.vs-search{margin:12px 0 8px}.vs-filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.vs-filters button{font-size:11px;padding:5px 10px;border-radius:999px}.vs-filters button.active{background:#1d4f74aa;border-color:#5aadee88}
+.vs-confirm{margin-top:10px;padding:10px;border-radius:9px;border:1px solid #f0b35a55;background:#2a1d0c55;font-size:12px}.vs-confirm p{margin:4px 0}
+.vs-list{margin:0;padding-left:18px;font-size:12px;line-height:1.7;color:#cbd8e5}
+@media (max-width:640px){.vb-panel{right:16px;left:16px;width:auto;bottom:120px}.vs-content{padding:14px 16px 40px}.vs-head,.vs-nav{padding-left:16px;padding-right:16px}}
+@media (prefers-reduced-motion:reduce){.vs-drawer,.vb-panel,.gear,.vb-indicator{transition:none;animation:none}}

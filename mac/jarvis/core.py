@@ -97,6 +97,13 @@ class JarvisCore:
         # VelkoTaskManager : cycle de vie réel des missions VELKO (phases,
         # journal de mission, blocage justifié). S'abonne aux événements réels.
         self.velko_tasks = VelkoTaskManager(self)
+        # Connecteurs : n8n réel, reprise des missions bloquées, santé périodique.
+        from .n8n_service import N8nService
+        from .recovery import VelkoRecoveryManager
+        from .connector_health import ConnectorHealthManager
+        self.n8n = N8nService(self)
+        self.recovery = VelkoRecoveryManager(self)
+        self.connector_health = ConnectorHealthManager(self)
         # Mission Control : observateur passif du bus d'événements — il ne
         # pilote rien, il agrège l'état réel des missions pour l'écran de
         # supervision (et persiste l'historique consultable après redémarrage).
@@ -245,6 +252,7 @@ class JarvisCore:
             except Exception as exc:
                 self._clap_status_changed(f"erreur: {exc}", "")
         self.monitor.start_broadcast(interval=5.0, stop_event=self._stop)
+        self.connector_health.start(self._stop)
         self.idle_learning.start()
         self.automations.start_scheduler()
         self.discord_scheduler.start()

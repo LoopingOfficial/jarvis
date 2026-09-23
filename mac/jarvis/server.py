@@ -305,6 +305,11 @@ def api_command(req):
         attachments=[str(a) for a in (req["body"].get("attachments") or [])],
     )
     print('[CHAT-TRACE] response ready conversation_id=' + str(result.get('conversation_id') or ''), flush=True)
+    if (result.get("blocked") or result.get("status") == "blocked") and not result.get("recovery"):
+        try:
+            result["recovery"] = CORE.recovery.for_result(text, result)
+        except Exception as exc:  # pragma: no cover - la réponse d'origine reste valide
+            print(f"[recovery] {exc!r}", flush=True)
     return _ok(result)
 
 
@@ -766,6 +771,116 @@ def api_connector_test(req, cid):
     ok, detail = CORE.connectors.test(cid)
     CORE.llm.invalidate()
     return _ok({"connected": ok, "detail": detail, "connector": CORE.connectors.get(cid)})
+
+
+# ---------------------------------------------------------------------------
+# Centre de paramètres VELKO : santé des connecteurs, n8n, reprise de mission
+# ---------------------------------------------------------------------------
+@router.get("/api/settings/center")
+def api_settings_center(req):
+    ai = CORE.settings.all().get("ai", {})
+    voice = CORE.settings.all().get("voice", {})
+    llm = next((c for c in CORE.connectors.by_type("ollama")), None)
+    try:
+        browser = CORE.browser.status()
+    except Exception as exc:
+        browser = {"available": False, "detail": str(exc)[:120]}
+    health = CORE.connector_health.snapshot()
+    by_type = {}
+    for row in health:
+        by_type.setdefault(row["type"], row)
+    diag = [{"name": "Backend", "state": "CONNECTED", "detail": "Moteur VELKO en ligne"},
+            {"name": "Ollama", "state": "CONNECTED" if llm and llm.get("status") == "connected" else "ERROR",
+             "detail": (llm or {}).get("status_detail", "Aucun connecteur Ollama")},
+            {"name": "Browser", "state": "CONNECTED" if browser.get("available") else "DISCONNECTED",
+             "detail": f"Navigateur {browser.get('state', 'indisponible')}"}]
+    for t, label in (("n8n", "n8n"), ("mysql", "DB"), ("ssh", "SSH"), ("discord", "Discord")):
+        r = by_type.get(t)
+        if r:
+            diag.append({"name": label, "state": r["state"], "detail": r.get("detail", "")})
+    return _ok({"connectors": health, "diagnostics": diag, "browser": browser,
+                "ai": {k: ai.get(k, "") for k in ("default_model", "coding_model", "fast_model",
+                                                    "reasoning_model", "fallback_model", "auto_fallback")},
+                "models": CORE.llm.model_options(),
+                "voice": {k: voice.get(k) for k in ("tts_provider", "voice", "speech_rate", "volume",
+                                                     "stt_provider", "mode")}})
+
+
+@router.post("/api/connectors/health/check")
+def api_connectors_health_check(req):
+    cid = str(req["body"].get("id") or "")
+    rows = [CORE.connector_health.check(cid)] if cid else CORE.connector_health.check_all()
+    return _ok({"results": rows})
+
+
+@router.get("/api/n8n/status")
+def api_n8n_status(req):
+    return _ok({"n8n": CORE.n8n.connector.status()})
+
+
+@router.post("/api/n8n/configure")
+def api_n8n_configure(req):
+    b = req["body"]
+    try:
+        CORE.n8n.connector.configure(str(b.get("url") or ""), str(b.get("api_key") or ""),
+                                     int(b.get("timeout") or 20), bool(b.get("verify_ssl", True)),
+                                     str(b.get("webhook_base") or ""))
+    except ValueError as exc:
+        return _err(str(exc))
+    status = CORE.n8n.connector.status()
+    if status.get("connector_id"):
+        CORE.connector_health.check(status["connector_id"])
+    CORE.llm.invalidate()
+    return _ok({"n8n": status})
+
+
+@router.get("/api/n8n/workflows")
+def api_n8n_workflows(req):
+    from .n8n_connector import N8nError
+    q = req["query"].get("q", [""])[0]
+    try:
+        rows = CORE.n8n.connector.list_workflows()
+    except N8nError as exc:
+        return _ok({"workflows": [], "error": str(exc), "category": exc.category})
+    if q:
+        rows = CORE.n8n.connector.search(q, rows)
+    return _ok({"workflows": rows})
+
+
+@router.get("/api/n8n/executions")
+def api_n8n_executions(req):
+    from .n8n_connector import N8nError
+    try:
+        rows = CORE.n8n.connector.executions(limit=int(req["query"].get("limit", ["20"])[0]),
+                                             status=req["query"].get("status", [""])[0])
+    except N8nError as exc:
+        return _err(str(exc), 502)
+    return _ok({"executions": rows})
+
+
+@router.get("/api/n8n/workflows/<wid>")
+def api_n8n_workflow(req, wid):
+    from .n8n_connector import N8nError
+    try:
+        w = CORE.n8n.connector.get_workflow(wid)
+        runs = CORE.n8n.connector.executions(wid, limit=5)
+    except N8nError as exc:
+        return _err(str(exc), 502 if exc.category != "INVALID_CONFIGURATION" else 404)
+    url = str((CORE.n8n.connector.connector() or {}).get("config", {}).get("url", "")).rstrip("/")
+    return _ok({"workflow": w, "executions": runs, "open_url": f"{url}/workflow/{w['workflow_id']}"})
+
+
+@router.post("/api/n8n/workflows/<wid>/action")
+def api_n8n_workflow_action(req, wid):
+    try:
+        return _ok(CORE.n8n.request_action(wid, str(req["body"].get("action") or "")))
+    except ValueError as exc:
+        return _err(str(exc))
+
+
+@router.post("/api/tasks/<tid>/resume")
+def api_task_resume(req, tid):
+    return _ok(CORE.recovery.resume_blocked_task(tid))
 
 
 @router.post("/api/connectors/<cid>/toggle")

@@ -181,7 +181,10 @@ _register(ConnectorType(
     default_permissions=("read", "execute"),
     fields=(
         _f("url", "URL", required=True, default="http://127.0.0.1:5678"),
-        _f("api_key", "Clé API", kind="password", secret=True),
+        _f("api_key", "Clé API", kind="password", secret=True, required=True),
+        _f("webhook_base", "Base webhook (optionnel)", placeholder="https://n8n.exemple.com/webhook"),
+        _f("timeout", "Timeout (s)", kind="number", default=20),
+        _f("verify_ssl", "Vérifier le certificat", kind="bool", default=True),
     ),
 ))
 
@@ -672,7 +675,8 @@ class ConnectorManager:
         return d
 
     # -- test de connexion --------------------------------------------------
-    def test(self, connector_id: str) -> tuple[bool, str]:
+    def test(self, connector_id: str, quiet: bool = False) -> tuple[bool, str]:
+        """``quiet`` : vérification périodique (santé) — ni audit ni flux à chaque tour."""
         c = self.raw(connector_id)
         if not c:
             return False, "Connecteur introuvable."
@@ -688,6 +692,8 @@ class ConnectorManager:
             "UPDATE connectors SET status=?, status_detail=?, last_test_at=?, last_connected_at=? WHERE id=?",
             (status, detail[:500], now, now if ok else c.get("last_connected_at"), connector_id),
         )
+        if quiet:
+            return ok, detail
         self._audit.record(
             action=f"Test connexion {c['name']}", tool="connectors", connector_id=connector_id,
             status="ok" if ok else "error", duration_ms=duration, detail=detail[:500],
@@ -775,16 +781,18 @@ class ConnectorManager:
             return False, str(payload)[:400]
 
         if ctype == "n8n":
+            # CONNECTED exige un appel API authentifié réussi : /healthz seul ne
+            # prouve pas que la clé est valide.
             url = str(cfg.get("url") or "").rstrip("/")
             if not url:
                 return False, "URL n8n manquante."
-            ok, _ = http_json(f"{url}/healthz", timeout=5)
-            if ok:
-                return True, "n8n en ligne"
             key = sec("api_key")
-            ok2, payload = http_json(f"{url}/api/v1/workflows?limit=1",
-                                     headers={"X-N8N-API-KEY": key} if key else {}, timeout=6)
-            return (True, "API n8n joignable") if ok2 else (False, str(payload)[:300])
+            if not key:
+                return False, "Clé API n8n manquante."
+            ok, payload = http_json(f"{url}/api/v1/workflows?limit=1", headers={"X-N8N-API-KEY": key},
+                                    verify_ssl=bool(cfg.get("verify_ssl", True)),
+                                    timeout=float(cfg.get("timeout") or 10))
+            return (True, "API n8n authentifiée") if ok else (False, str(payload)[:300])
 
         if ctype in {"mysql", "postgres"}:
             host, port = str(cfg.get("host") or "127.0.0.1"), int(cfg.get("port") or (3306 if ctype == "mysql" else 5432))
