@@ -50,3 +50,31 @@ velko/assets/avatar/_originals/
 
 # Rendus de diagnostic jetables (les ctrl_* sont conserves)
 velko/work/renders/diag_*.png
+
+# Ruflo local secrets and runtime data
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+
+# Codex local configuration
+.codex/
+# Claude Flow runtime data
+# Environment variables
+
+# Unreal Engine generated data
+velko/unreal/**/DerivedDataCache/
+velko/unreal/**/Intermediate/
+velko/unreal/**/Saved/
+
+# Local orchestration databases and state
+.swarm/*.db
+.swarm/*.db-*
+ruvector.db
+
+# Blender autosave backups
+*.blend1
+
+# Generated preview renders
+velko/work/renders/*.png

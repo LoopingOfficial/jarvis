@@ -279,7 +279,7 @@ class ServerReader:
 
     def _resolve_connector_id(self) -> str:
         """Connecteur SSH réellement configuré (le défaut muet « ssh » n'existe plus)."""
-        if self.connector_id:
+        if self.connector_id and self.connector_id != "ssh":
             return self.connector_id
         try:
             active = self.core.connectors.active("ssh")
@@ -294,7 +294,7 @@ class ServerReader:
                 return str(ssh.get("connector") or "")
         except Exception:
             pass
-        return "ssh"
+        return ""
 
     def read(self) -> dict[str, Any]:
         result = self.core.runner.run(

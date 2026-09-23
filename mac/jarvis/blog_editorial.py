@@ -120,7 +120,7 @@ def parse_command(text: str) -> dict[str, Any]:
 class EditorialAgent:
     """Pipeline éditorial complet, du sujet à la notification."""
 
-    def __init__(self, core: Any, *, connector_id: str = "ssh") -> None:
+    def __init__(self, core: Any, *, connector_id: str = "") -> None:
         self._core = core
         self.site = BlogSite(core, connector_id=connector_id, agent=AGENT_ID)
         self.publisher = BlogPublisherService(core, site=self.site)

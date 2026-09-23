@@ -198,6 +198,29 @@ function term(text, cls = '') {
 // ---------------------------------------------------------------------------
 // Écran droit — outil actif réel (navigateur, SSH, git, Discord…)
 // ---------------------------------------------------------------------------
+/** Données réelles d'une famille Brainrot (analytics, Sheets, blog…) : le
+ *  panneau affiche le contenu réellement renvoyé par le moteur, rien d'autre. */
+function setData(kind, payload = {}) {
+ const token = rightToken++;
+ rightPanel = kind;
+ $('application-title').textContent = PANEL_LABELS[kind] || kind;
+ const pre = document.createElement('pre');
+ const text = payload.preview || payload.output || payload.error || payload.result || '';
+ if (text) {
+  pre.textContent = String(text);
+  pre.classList.toggle('err', Boolean(payload.error));
+  $('application-state').replaceChildren(document.createTextNode(
+   payload.ok===false ? 'VRAIE RÉPONSE DU MOTEUR — ÉCHEC' : 'VRAIE RÉPONSE DU MOTEUR'));
+ } else {
+  $('application-state').replaceChildren(document.createTextNode('Outil exécuté par le moteur.'));
+  pre.textContent = 'Le moteur a répondu sans contenu affichable.';
+ }
+ $('application-detail').textContent = payload.name || payload.tool || payload.tool_id || '';
+ rightBody(pre);
+ browserFrame = null; keepStreamAlive(false);
+ void token;
+}
+
 function setRight(kind, state, detail = '', {badge = ''} = {}) {
  if (kind !== rightPanel) rightToken++;
  rightPanel = kind;
@@ -416,15 +439,24 @@ engineFeed().subscribe(frame => {
   return;
  }
 
- // Un appel d'outil nomme lui aussi une source réelle : `tool.started
- // discord.list_channels` doit amener l'écran droit sur Discord, même si
- // l'outil n'émet pas d'événement `discord.*` de son côté.
- if (type === 'tool.started' || type === 'tool.completed') {
-  const kind = sourceOf(type, data);
-  if (kind === 'discord') { refreshDiscord('', data); return; }
-  if (kind === 'browser') { refreshBrowser(); return; }
-  if (kind === 'git') { refreshGit(); return; }
- }
+// Un appel d'outil nomme lui aussi une source réelle : `tool.started
+  // discord.list_channels` doit amener l'écran droit sur Discord, même si
+  // l'outil n'émet pas d'événement `discord.*` de son côté.
+  if (type === 'tool.started' || type === 'tool.completed' || type === 'tool.failed') {
+   const kind = sourceOf(type, data);
+   if (kind === 'discord') { refreshDiscord('', data); return; }
+   if (kind === 'browser') { refreshBrowser(); return; }
+   if (kind === 'git') { refreshGit(); return; }
+   // Familles Brainrot réelles : on montre la VRAIE réponse du moteur (analytics,
+   // Sheets, blog, email, base de données) sur l'écran droit.
+   if (['sheet','analytics','blog','email','database'].includes(kind)) {
+    const payload = type==='tool.completed'||type==='tool.failed'
+     ? {preview: data.preview, error: data.error, ok: data.ok, name: data.name}
+     : {preview: '', name: data.name || data.tool, tool: data.tool};
+    setData(kind, payload);
+    return;
+   }
+  }
 
  // --- fil de mission -------------------------------------------------------
  if (type === 'velko.task.phase') { $('result').textContent = data.label || data.phase || ''; return; }

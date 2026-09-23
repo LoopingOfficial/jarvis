@@ -260,7 +260,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "auto_drafts": True,
         "auto_publish": False,
         "auto_discord": False,
-        "ssh_connector_id": "ssh",
+        "ssh_connector_id": "brainrot-prod",
         "default_category": "actualites",
     },
     # Appel vocal matinal Discord (cf. jarvis/discord_call.py). Désactivé par

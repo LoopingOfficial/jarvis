@@ -321,12 +321,33 @@ class StoreWriter:
     par ``serialize_store``.
     """
 
-    def __init__(self, core: Any, *, connector_id: str = "ssh",
+    def __init__(self, core: Any, *, connector_id: str = "",
                  path: str = SITE_DATA_PATH, backup_dir: str | Path = "data/backups/brainrot_sync"):
         self.core = core
-        self.connector_id = connector_id
+        self.connector_id = self._resolve_connector_id(core, connector_id) or connector_id
         self.path = path
         self.backup_dir = Path(backup_dir)
+
+    @staticmethod
+    def _resolve_connector_id(core: Any, connector_id: str) -> str:
+        """Connecteur SSH réellement configuré (le défaut muet « ssh » n'existe plus)."""
+        if connector_id and connector_id != "ssh":
+            return connector_id
+        try:
+            active = core.connectors.active("ssh")
+            if active:
+                return str(active[0]["id"])
+        except Exception:
+            pass
+        try:
+            from .brainrot_site import load_profile
+            profile = load_profile()
+            ssh = (profile.get("production") or {}).get("ssh", {})
+            if ssh.get("connector"):
+                return str(ssh.get("connector") or "")
+        except Exception:
+            pass
+        return ""
 
     def read(self) -> dict[str, Any]:
         result = self.core.runner.run(

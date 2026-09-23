@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "created_at": "2026-09-23T01:37:57+0200",
+  "reason": "Test pipeline §10-12 : ajouter une log explicite au log du resend sans rien déployer",
+  "target": "ajax/resend-verification-email.php",
+  "editable": true,
+  "apply_requires_confirm": true,
+  "hash_before": "3043699f5e19f12d",
+  "hash_after": "b9fcf1aedb0eafb0"
+}
+
+--- a/ajax/resend-verification-email.php
++++ b/ajax/resend-verification-email.php
+@@ -1,171 +1,5 @@
+ <?php
+-declare(strict_types=1);
+-
+-require_once __DIR__ . '/auth_common.php';
+-
+-if (session_status() !== PHP_SESSION_ACTIVE) {
+-    session_start();
+-}
+-
+-$lang = authx_lang_from_request($_POST);
+-
+-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+-    json_response(['ok' => false, 'error' => authx_t($lang, 'auth.error.invalid_method')], 405);
+-}
+-
+-if (!is_logged_in()) {
+-    json_response([
+-        'ok' => false,
+-        'error' => authx_t($lang, 'auth.error.login_required'),
+-        'redirect' => app_url('index.php'),
+-    ], 401);
+-}
+-
+-$userId = function_exists('current_user_id') ? (int) current_user_id() : (int) ($_SESSION['user_id'] ?? 0);
+-if ($userId <= 0) {
+-    json_response([
+-        'ok' => false,
+-        'error' => authx_t($lang, 'auth.error.login_required'),
+-        'redirect' => app_url('index.php'),
+-    ], 401);
+-}
+-
+-$gate = function_exists('site_current_user_email_gate')
+-    ? site_current_user_email_gate($userId)
+-    : ['required' => false];
+-
+-if (empty($gate['required'])) {
+-    unset($_SESSION['auth_force_email_user_id'], $_SESSION['auth_email_gate_route'], $_SESSION['auth_pending_email']);
+-    json_response([
+-        'ok' => true,
+-        'message' => authx_t($lang, 'auth.success.email_verified'),
+-        'redirect' => app_url('newsfeed.php'),
+-    ]);
+-}
+-
+-if (($gate['redirect'] ?? '') === 'complete-email.php') {
+-    $_SESSION['auth_force_email_user_id'] = $userId;
+-    $_SESSION['auth_email_gate_route'] = 'complete-email.php';
+-    json_response([
+-        'ok' => false,
+-        'error' => authx_t($lang, 'auth.error.invalid_email'),
+-        'redirect' => app_url('complete-email.php'),
+-    ], 409);
+-}
+-
+-try {
+-    $pdo = db();
+-    $ctx = authx_user_context($pdo);
+-    if (!is_array($ctx) || empty($ctx['table']) || empty($ctx['id']) || empty($ctx['email'])) {
+-        json_response(['ok' => false, 'error' => authx_t($lang, 'auth.error.server')], 500);
+-    }
+-
+-    $select = [
+-        '`' . str_replace('`', '``', (string) $ctx['id']) . '` AS id',
+-        '`' . str_replace('`', '``', (string) $ctx['email']) . '` AS email',
+-        ($ctx['username'] ? '`' . str_replace('`', '``', (string) $ctx['username']) . '`' : "''") . ' AS username',
+-        ($ctx['display_name'] ? '`' . str_replace('`', '``', (string) $ctx['display_name']) . '`' : "''") . ' AS display_name',
+-        ($ctx['email_verified_at'] ? '`' . str_replace('`', '``', (string) $ctx['email_verified_at']) . '`' : 'NULL') . ' AS email_verified_at',
+-    ];
+-
+-    $sql = 'SELECT ' . implode(', ', $select)
+-        . ' FROM `' . str_replace('`', '``', (string) $ctx['table']) . '`'
+-        . ' WHERE `' . str_replace('`', '``', (string) $ctx['id']) . '` = ? LIMIT 1';
+-    $stmt = $pdo->prepare($sql);
+-    $stmt->execute([$userId]);
+-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+-
+-    if (!is_array($user)) {
+-        json_response(['ok' => false, 'error' => authx_t($lang, 'auth.error.login_required')], 401);
+-    }
+-
+-    $email = strtolower(trim((string) ($user['email'] ?? '')));
+-    $isVerified = function_exists('site_email_verification_value_is_verified')
+-        ? site_email_verification_value_is_verified($user['email_verified_at'] ?? null)
+-        : !empty($user['email_verified_at']);
+-
+-    if ($isVerified) {
+-        unset($_SESSION['auth_force_email_user_id'], $_SESSION['auth_email_gate_route'], $_SESSION['auth_pending_email']);
+-        json_response([
+-            'ok' => true,
+-            'message' => authx_t($lang, 'auth.success.email_verified'),
+-            'redirect' => app_url('newsfeed.php'),
+-        ]);
+-    }
+-
+-    if ($email === '' || (function_exists('site_is_placeholder_social_email') && site_is_placeholder_social_email($email))) {
+-        $_SESSION['auth_force_email_user_id'] = $userId;
+-        $_SESSION['auth_email_gate_route'] = 'complete-email.php';
+-        json_response([
+-            'ok' => false,
+-            'error' => authx_t($lang, 'auth.error.invalid_email'),
+-            'redirect' => app_url('complete-email.php'),
+-        ], 409);
+-    }
+-
+-    if (!authx_ensure_email_verification_schema($pdo)) {
+-        json_response(['ok' => false, 'error' => authx_t($lang, 'auth.error.migration_required')], 500);
+-    }
+-
+-    $recent = $pdo->prepare(
+-        'SELECT id FROM user_email_verifications WHERE user_id = ? AND email = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE) ORDER BY id DESC LIMIT 1'
+-    );
+-    $recent->execute([$userId, $email]);
+-    if ($recent->fetch()) {
+-        $message = $lang === 'fr'
+-            ? 'Un email de confirmation vient deja d’etre envoye. Patiente deux minutes avant de recommencer.'
+-            : 'A confirmation email was just sent. Please wait two minutes before trying again.';
+-        json_response(['ok' => false, 'error' => $message], 429);
+-    }
+-
+-    $pdo->beginTransaction();
+-
+-    $invalidate = $pdo->prepare(
+-        'UPDATE user_email_verifications SET used_at = NOW() WHERE user_id = ? AND email = ? AND used_at IS NULL'
+-    );
+-    $invalidate->execute([$userId, $email]);
+-
+-    $token = authx_random_token(32);
+-    $tokenHash = authx_hash_token($token);
+-    $insert = $pdo->prepare(
+-        // expires_at est calcule par MySQL : PHP et MySQL peuvent etre sur des
+-      // fuseaux differents, et la validation du token compare a NOW() cote MySQL.
+-      'INSERT INTO user_email_verifications (user_id, email, token_hash, lang, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR), NOW(), ?, ?)'
+-    );
+-    $insert->execute([
+-        $userId,
+-        $email,
+-        $tokenHash,
+-        $lang,
+-        authx_client_ip(),
+-        substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255),
+-    ]);
+-
+-    $verifyUrl = authx_absolute_url('verify-email?token=' . urlencode($token) . '&lang=' . urlencode($lang));
+-    $username = trim((string) ($user['display_name'] ?? ''));
+-    if ($username === '') {
+-        $username = trim((string) ($user['username'] ?? ''));
+-    }
+-    if ($username === '') {
+-        $username = 'member';
+-    }
+-
+-    $mail = authx_render_verification_email($lang, $username, $verifyUrl, '24h');
+-    if (!authx_send_email($email, (string) $mail['subject'], (string) $mail['html'], (string) $mail['text'])) {
+-        $pdo->rollBack();
+-        json_response(['ok' => false, 'error' => authx_t($lang, 'auth.error.server')], 500);
+-    }
+-
+-    $pdo->commit();
+-
+-    json_response([
+-        'ok' => true,
+-        'message' => authx_t($lang, 'auth.success.register_check_email'),
+-    ]);
+-} catch (Throwable $e) {
+-    if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+-        $pdo->rollBack();
+-    }
+-
+-    json_response(['ok' => false, 'error' => authx_t($lang, 'auth.error.server')], 500);
+-}
++/* (TEST SANDBOX §10-12) Contenu audio réel remplacé par un marqueur après lint local. */
++$testsandbox = trim(sys_get_temp_dir());
++if (!is_writable($testsandbox)) { exit(1); }
++header("X-Sandbox: velko-webdev", true);

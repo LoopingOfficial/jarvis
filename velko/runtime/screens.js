@@ -25,9 +25,13 @@ export class VelkoScreenManager {
    this.native.connect(i,PANES[i]);
   });
   this.applyRoles();
-  // Le rôle du troisième écran suit les faits du moteur, pas un choix humain.
-  bus.on('engine.event',({type,data})=>{const before=this.router.panels[2];
-   this.router.ingest(type,data);if(this.router.panels[2]!==before)this.applyRoles();});
+  // Le rôle des écrans suit les faits du moteur, pas un choix humain.
+  bus.on('engine.event',({type,data})=>{
+   const before=this.router.state().labels;
+   this.router.ingest(type,data);
+   const after=this.router.state().labels;
+   if(before.join('|')!==after.join('|'))this.applyRoles();
+  });
   bus.on('action.focus',a=>{this.focus=a.screen??1;
    this.preview.querySelectorAll('.live-monitor').forEach((node,i)=>node.classList.toggle('focused',i===this.focus));});
  }

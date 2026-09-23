@@ -128,7 +128,7 @@ class BlogPublisherService:
     """Seul chemin d'écriture du blog. Rien ne publie en dehors d'ici."""
 
     def __init__(self, core: Any, *, site: BlogSite | None = None,
-                 connector_id: str = "ssh") -> None:
+                 connector_id: str = "") -> None:
         self._core = core
         self.site = site or BlogSite(core, connector_id=connector_id)
         self._resolver: InternalLinkResolver | None = None

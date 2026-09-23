@@ -1,4 +1,0 @@
-fastapi>=0.110,<1
-uvicorn[standard]>=0.27,<1
-edge-tts>=6.1,<8
-pydantic>=2.5,<3

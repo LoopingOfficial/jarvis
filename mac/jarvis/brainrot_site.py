@@ -216,6 +216,22 @@ class AnalyticsRepository:
                 "SELECT COUNT(*) AS n FROM users WHERE email_verified_at IS NULL", "n")
             metrics.append(Metric("emails_confirmes", "Emails confirmés", confirmed, ok))
             metrics.append(Metric("emails_non_confirmes", "Emails non confirmés", pending, ok2))
+            # Garde-fou §16 : la colocation de confirmation date de la migration
+            # 2026-09-01_044_auth_runtime_schema_foundation. Les comptes créés AVANT
+            # n'ont jamais reçu d'email de vérification : les « relancer » serait une
+            # fausse action (ils ignorent même le mécanisme). La vraie file d'attente
+            # n'est donc que les non-confirmés créés depuis — 2 comptes au 2026-09-23.
+            ok3, awaiting, _ = self.scalar(
+                "SELECT COUNT(*) AS n FROM users "
+                "WHERE email_verified_at IS NULL AND created_at >= '2026-09-01 00:00:00'", "n")
+            ok4, legacy, _ = self.scalar(
+                "SELECT COUNT(*) AS n FROM users "
+                "WHERE email_verified_at IS NULL AND created_at < '2026-09-01 00:00:00'", "n")
+            metrics.append(Metric("emails_attente_reelle", "Emails réellement en attente",
+                                  awaiting, ok3))
+            metrics.append(Metric("emails_heritage_preintroduction",
+                                  "Emails non confirmés pré-vérification (jamais invités)",
+                                  legacy, ok4))
         else:
             metrics.append(Metric("emails_non_confirmes", "Emails non confirmés", available=False,
                                   reason=self.missing_reason(
@@ -306,7 +322,7 @@ class VelkoOpportunityEngine:
         by_key = {m["key"]: m for m in snap["metrics"]}
         out: list[Opportunity] = []
 
-        pending = by_key.get("emails_non_confirmes") or {}
+        pending = by_key.get("emails_attente_reelle") or {}
         members = by_key.get("membres") or {}
         if pending.get("available") and isinstance(pending.get("value"), int) and pending["value"] > 0:
             share = ""
@@ -314,13 +330,31 @@ class VelkoOpportunityEngine:
                 share = f" soit {round(pending['value'] / members['value'] * 100)} % des comptes,"
             out.append(Opportunity(
                 key="relance_emails",
-                observation=f"{pending['value']} membres n'ont pas confirmé leur adresse email,{share}"
-                            " d'après la base.",
-                why="Un compte non confirmé ne reçoit rien et ne revient presque jamais.",
+                observation=f"{pending['value']} membres créés depuis l'introduction de la "
+                            "vérification n'ont toujours pas confirmé leur adresse email,"
+                            f"{share} d'après la base.",
+                why="Un compte créé après la vérification et non confirmé ne reçoit rien "
+                    "et ne revient presque jamais.",
                 action_label="Préparer l'email de relance",
                 tool="brainrot.email.prepare_campaign",
                 arguments={"audience": "unverified"}, confirm=True,
                 count=pending["value"]))
+        else:
+            legacy = by_key.get("emails_heritage_preintroduction") or {}
+            if (pending.get("available") and pending.get("value") == 0
+                    and legacy.get("available") and int(legacy.get("value") or 0) > 0):
+                out.append(Opportunity(
+                    key="pas_de_relance_legacy",
+                    observation=f"{legacy['value']} comptes non confirmés datent d'avant "
+                                "l'introduction de la vérification : ils n'ont jamais reçu "
+                                "d'email et ne font pas partie d'une liste de relance.",
+                    why="Compiler l'ensemble des comptes non confirmés (y compris pré-vérification) "
+                        "gonflerait une campagne de 307 à un seul chiffre : aucune relance massive "
+                        "ne doit viser ces comptes qui ignorent le mécanisme.",
+                    action_label="Ne préparer aucune campagne vers les comptes pré-vérification",
+                    tool="brainrot.email.prepare_campaign",
+                    arguments={"audience": "unverified"}, confirm=False,
+                    count=int(legacy["value"])))
 
         signups = by_key.get("inscriptions_7j") or {}
         if signups.get("available") and signups.get("change_pct") is not None:

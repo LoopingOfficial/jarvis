@@ -99,6 +99,7 @@ READ_ONLY_ALLOWED_TOOLS = {
     "brainrot.users.inactive", "brainrot.blog.list", "brainrot.blog.read",
     "brainrot.brainrots.list", "brainrot.brainrots.diff_sheet",
     "brainrot.email.prepare_campaign",
+    "brainrot.webdev.pipeline", "brainrot.webdev.deploy_plan",
     # Observer l'état réel du système et des connecteurs est de la LECTURE.
     # Sans eux, un audit « dans quel état est mon bot » se faisait refuser
     # ses propres constats (WRITE_DENIED_READ_ONLY) et concluait à tort.

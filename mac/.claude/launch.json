@@ -20,22 +20,6 @@
         "jarvis.py"
       ],
       "port": 8765
-    },
-    {
-      "name": "jarvis-demo-web",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": [
-        "demo_web/app.py"
-      ],
-      "port": 8100
-    },
-    {
-      "name": "demo-web",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": [
-        "demo_web/app.py"
-      ],
-      "port": 8100
     }
   ]
 }

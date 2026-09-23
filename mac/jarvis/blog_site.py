@@ -69,11 +69,30 @@ def slugify(value: str) -> str:
 class BlogSite:
     """Lecture / écriture du blog réel, via le pont PHP CLI sur le serveur."""
 
-    def __init__(self, core: Any, *, connector_id: str = "ssh", agent: str = "blog") -> None:
+    def __init__(self, core: Any, *, connector_id: str = "", agent: str = "blog") -> None:
         self._core = core
-        self.connector_id = connector_id
+        self.connector_id = self._resolve_connector_id(connector_id) or connector_id
         self.agent = agent
         self._bridge_ready = False
+
+    @staticmethod
+    def _resolve_connector_id(connector_id: str) -> str:
+        """Connecteur SSH réellement configuré (le défaut muet « ssh » n'existe plus).
+
+        Ordre : argument explicite → connecteur actif de type ssh → connecteur
+        renseigné dans le profil brainrot-fortnite (production.ssh.connector).
+        """
+        if connector_id and connector_id != "ssh":
+            return connector_id
+        try:
+            from .brainrot_site import load_profile
+            profile = load_profile()
+            ssh = (profile.get("production") or {}).get("ssh", {})
+            if ssh.get("connector"):
+                return str(ssh.get("connector") or "")
+        except Exception:
+            pass
+        return ""
 
     # --- Transport ----------------------------------------------------------
     def _ssh(self, tool: str, arguments: dict[str, Any]) -> Any:

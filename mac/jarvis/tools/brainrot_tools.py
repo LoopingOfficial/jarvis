@@ -10,8 +10,12 @@ résultat inventé.
 """
 from __future__ import annotations
 
+import difflib
+import hashlib
 import json
 import re
+import time
+from pathlib import Path
 from typing import Any
 
 from ..permissions import READ_ONLY, SAFE_WRITE, SENSITIVE
@@ -435,15 +439,39 @@ def _email_prepare(ctx: ToolContext) -> ToolResult:
             return ToolResult(False, "Audience incalculable : colonne de confirmation absente.")
         ok, count, err = repo.scalar(
             "SELECT COUNT(*) AS n FROM users WHERE email_verified_at IS NULL", "n")
+        # Garde-fou §16 : les comptes créés AVANT l'introduction de la vérification
+        # (migration 2026-09-01_044) n'ont jamais reçu d'email et ne sont pas des
+        # destinataires légitimes. Seuls les non-confirmés post-introduction attendent
+        # réellement une relance.
+        if ok:
+            ok2, awaiting, err2 = repo.scalar(
+                "SELECT COUNT(*) AS n FROM users "
+                "WHERE email_verified_at IS NULL AND created_at >= '2026-09-01 00:00:00'", "n")
+            if ok2:
+                count = awaiting
     else:
         return ToolResult(False, f"Audience « {audience} » non définie pour ce site.")
     if not ok:
         return ToolResult(False, f"Audience incalculable : {err}")
     profile = _profile()
     mailer = (profile.get("subsystems") or {}).get("email") or {}
-    note = ("\n\nATTENTION : aucun mailer central n'a été identifié sur le site et aucun "
-            "connecteur email n'est configuré dans VELKO. L'envoi est donc impossible en "
-            "l'état — dites-moi quel système d'envoi le site utilise réellement.")
+    # Garde-fou §16 : les comptes créés AVANT l'introduction de la vérification
+    # (migration 2026-09-01_044) n'ont jamais reçu d'email, ils sont exclus de
+    # l'audience. Le chiffre « réellement relançable » est déjà dans `count`.
+    legacy = None
+    repo = _repo(ctx)
+    ok_l, legacy, err_l = repo.scalar(
+        "SELECT COUNT(*) AS n FROM users "
+        "WHERE email_verified_at IS NULL AND created_at < '2026-09-01 00:00:00'", "n")
+    note = ("\n\n[cadre §16] L'audience ne compte que les comptes créés depuis l'introduction "
+            "de la vérification (migration 2026-09-01_044). "
+            + (f"{count} relançable(s), {legacy} comptes antérieurs exclus (jamais invités "
+               "à confirmer)." if ok_l and legacy is not None else
+               "Chiffre réellement relançable affiché ci-dessus."))
+    if not mailer.get("available"):
+        note += ("\n\nATTENTION : aucun mailer central n'a été identifié sur le site et aucun "
+                 "connecteur email n'est configuré dans VELKO. L'envoi est donc impossible en "
+                 "l'état — dites-moi quel système d'envoi le site utilise réellement.")
     body = ("Objet : Confirme ton adresse pour débloquer ton compte Brainrot Fortnite\n\n"
             "Salut {username},\n\n"
             "Ton compte est créé mais ton adresse email n'est pas encore confirmée. "
@@ -455,7 +483,7 @@ def _email_prepare(ctx: ToolContext) -> ToolResult:
                       f"Campagne préparée pour {count} membres sans email confirmé.\n\n"
                       f"--- contenu proposé ---\n{body}\n---\n"
                       "Rien n'a été envoyé."
-                      + ("" if mailer.get("available") else note),
+                      + note,
                       data={"audience": audience, "recipients": count, "body": body,
                             "mailer_available": bool(mailer.get("available")), "sent": False})
 
@@ -468,7 +496,278 @@ def _email_send(ctx: ToolContext) -> ToolResult:
                           "Envoi impossible : aucun système d'envoi identifié pour "
                           "brainrot-fortnite.com. Je ne crée pas un second mailer sans votre "
                           "accord — indiquez celui que le site utilise.")
-    return ToolResult(False, "Envoi massif : confirmation utilisateur requise à chaque campagne.")
+    return ToolResult(False,
+                      "Envoi massif : confirmation utilisateur requise à chaque campagne. "
+                      "Notez que l'audience « unverified » ne compte que les comptes créés "
+                      "depuis l'introduction de la vérification (migration 2026-09-01_044) — "
+                      "les comptes antérieurs n'ayant jamais reçu d'email sont exclus.")
+
+
+# ---------------------------------------------------------------------------
+# Web Development Pipeline (lecture seule + patch local)
+# ---------------------------------------------------------------------------
+# Le pipeline ne touche JAMAIS la production. Il compare la version LIVE du
+# site au parc local (/Users/jerome/Desktop/Brainrot) et aux snapshots de
+# déploiement (deployment-backups/), puis — si on le demande — écrit un patch
+# uni-diff DANS LE SANDBOX LOCAL uniquement. L'application en prod n'est jamais
+# faite ici : elle passe par la confirmation humaine.
+_SITE_SNAPSHOT_RE = re.compile(r"^(.+)-(\d{8})-(\d{6})$")
+
+
+def _webdev_local_root(ctx: ToolContext) -> Path:
+    profile = _profile() or {}
+    path = (profile.get("local") or {}).get("path") or ""
+    if not path:
+        return Path.home() / "Desktop" / "Brainrot"
+    return Path(path)
+
+
+def _webdev_deployment_backups(ctx: ToolContext) -> Path:
+    return _webdev_local_root(ctx) / "deployment-backups"
+
+
+def _webdev_read_prod(ctx: ToolContext, path: str) -> ToolResult:
+    """Lit un fichier LIVE via le connecteur SSH audité (lecture seule)."""
+    profile = _profile() or {}
+    ssh_id = ((profile.get("production") or {}).get("ssh") or {}).get("connector") or ""
+    if not ssh_id:
+        return ToolResult(False, "Connecteur SSH du site non renseigné dans le profil.")
+    return ctx.core.runner.run("ssh.read_file",
+                                {"connector_id": ssh_id, "path": path},
+                                agent=ctx.agent, task_id=ctx.task_id)
+
+
+def _webdev_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+
+def _webdev_find_snapshots(ctx: ToolContext, rel_path: str) -> list[dict[str, Any]]:
+    """Cherche <rel_path> dans les archives deployment-backups/*/."""
+    backups = _webdev_deployment_backups(ctx)
+    matches: list[dict[str, Any]] = []
+    if not backups.is_dir():
+        return matches
+    for backup in sorted(backups.iterdir()):
+        if not backup.is_dir():
+            continue
+        candidate = backup / rel_path
+        if candidate.is_file():
+            try:
+                content = candidate.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            m = _SITE_SNAPSHOT_RE.match(backup.name)
+            matches.append({"backup": backup.name, "stamp": m.group(2) + m.group(3) if m else "",
+                            "path": str(candidate), "hash": _webdev_hash(content),
+                            "mtime": backup.stat().st_mtime})
+    matches.sort(key=lambda s: s["stamp"])
+    return matches
+
+
+def _webdev_to_backup_name(rel_path: str) -> str:
+    return rel_path.replace("/", "__").strip("_") or "root"
+
+
+def _webdev_apply_patch(ctx: ToolContext, rel_path: str, new_content: str,
+                        reason: str) -> dict[str, Any]:
+    """Écrit dans le sandbox local uniquement : jamais un fichier distant."""
+    sandbox = Path(__file__).resolve().parents[3] / "velko" / "dev" / "workspace" / "webdev"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = sandbox / stamp / f"{_webdev_to_backup_name(rel_path)}.patch"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    old = ""
+    local_file = _webdev_local_root(ctx) / rel_path
+    if local_file.is_file():
+        old = local_file.read_text(encoding="utf-8", errors="replace")
+    unified = "".join(difflib.unified_diff(
+        old.splitlines(keepends=True), new_content.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}"))
+    meta = {
+        "version": 1, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "reason": reason, "target": rel_path,
+        "editable": True, "apply_requires_confirm": True,
+        "hash_before": _webdev_hash(old), "hash_after": _webdev_hash(new_content),
+    }
+    payload = (json.dumps(meta, ensure_ascii=False, indent=2) + "\n\n"
+               + (unified or "(aucune différence avec le parc local)\n"))
+    target.write_text(payload, encoding="utf-8")
+    return {"path": str(target), "meta": meta, "diff": unified,
+            "sandbox": str(target.parent)}
+
+
+def _webdev_lint(ctx: ToolContext, rel_path: str, content: str) -> list[str]:
+    """Lint local (php -l / node --check) sans exécution distante ni déploiement."""
+    issues: list[str] = []
+    suffix = Path(rel_path).suffix.lower()
+    tmp = Path(__file__).resolve().parents[3] / "velko" / "dev" / "workspace" / "webdev" / (
+        f"lint_{_webdev_to_backup_name(rel_path)}_{hashlib.sha256(content.encode()).hexdigest()[:8]}{suffix}")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        if suffix == ".php":
+            code, out = _webdev_cli(["php", "-l", str(tmp)])
+            if code != 0:
+                issues.append(out.strip() or "php -l a échoué.")
+        elif suffix in (".js", ".mjs", ".cjs"):
+            code, out = _webdev_cli(["node", "--check", str(tmp)])
+            if code != 0:
+                issues.append(out.strip() or "node --check a échoué.")
+    finally:
+        tmp.unlink(missing_ok=True)
+    return issues
+
+
+def _webdev_cli(cmd: list[str]) -> tuple[int, str]:
+    import subprocess
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except FileNotFoundError:
+        return 127, f"{cmd[0]} introuvable localement."
+    except subprocess.TimeoutExpired:
+        return 124, f"{cmd[0]} a dépassé 90 s."
+
+
+def _webdev_pipeline(ctx: ToolContext) -> ToolResult:
+    """Pipeline dev (lecture seule) : état LIVE vs parc local vs archives."""
+    rel_path = str(ctx.arguments.get("path") or "").strip().lstrip("/")
+    if not rel_path:
+        return ToolResult(False, "Chemin relatif requis (ex : includes_app/functions.php).")
+    site = _webdev_read_prod(ctx, rel_path)
+    remote = (site.data or {}).get("path") if site.ok else None
+    prod_content = (site.data or {}).get("content", "") if site.ok else ""
+    prod_hash = _webdev_hash(prod_content) if site.ok else None
+
+    local_file = _webdev_local_root(ctx) / rel_path
+    local_content = local_file.read_text(encoding="utf-8", errors="replace") if local_file.is_file() else None
+    local_hash = _webdev_hash(local_content) if local_content is not None else None
+
+    snapshots = _webdev_find_snapshots(ctx, rel_path)
+    newest = snapshots[-1] if snapshots else None
+
+    if site.ok and local_content is not None:
+        state = "equal" if prod_hash == local_hash else "different"
+    elif site.ok:
+        state = "prod_only"
+    elif local_content is not None:
+        state = "local_only"
+    else:
+        state = "absent"
+    rollback = bool(newest)
+
+    lines = [
+        f"WebDevPipeline — {rel_path}",
+        f"État : {state}" + ("  (LIVE == parc local)" if state == "equal"
+                             else ("  (LIVE diffère du parc local)" if state == "different" else "")),
+        f"  → LIVE  : {'lue' if site.ok else 'ABSENTE/echec'} ({remote or '—'})",
+        f"  → Local : {'présent' if local_content is not None else 'absent'}",
+        f"  hash LIVE  : {prod_hash or '—'}",
+        f"  hash Local : {local_hash or '—'}",
+        f"Reversibilité (deployment-backups/) : {'OUI — snapshot ' + newest['backup'] if newest else 'NON — aucune archive de ce fichier'}",
+        f"  → {len(snapshots)} snapshot(s) trouvé(s) dans les archives de déploiement.",
+    ]
+    if state == "different" and site.ok and local_content is not None:
+        diff = list(difflib.unified_diff(
+            local_content.splitlines(keepends=True), prod_content.splitlines(keepends=True),
+            fromfile=f"local/{rel_path}", tofile=f"live/{rel_path}"))[:40]
+        if diff:
+            lines.append("Différences (local → LIVE) :")
+            lines.append("".join(diff).rstrip())
+    if site.ok and state != "absent" and prod_hash and local_content is not None:
+        lines.append("Note : le parc local n'est PAS synchronisé avec la production."
+                     if state == "different" else "Parc local synchronisé avec la production.")
+    lines.append("Aucune écriture effectuée (pipeline en lecture seule).")
+    data = {"path": rel_path, "state": state,
+            "copies": {"live": {"ok": site.ok, "path": remote, "hash": prod_hash},
+                       "local": {"path": str(local_file), "hash": local_hash}},
+            "snapshots": snapshots, "reversible": rollback}
+    return ToolResult(True, "\n".join(lines), data=data)
+
+
+def _webdev_propose_patch(ctx: ToolContext) -> ToolResult:
+    """Crée un patch LOCAL (sandbox) à partir du contenu proposé.
+
+    Ne touche jamais la production : le fichier est écrit dans
+    velko/dev/workspace/webdev/ et doit être revalidé avant tout déploiement.
+    """
+    rel_path = str(ctx.arguments.get("path") or "").strip().lstrip("/")
+    content = str(ctx.arguments.get("content") or "")
+    reason = str(ctx.arguments.get("reason") or "proposition de modification")
+    if not rel_path or not content:
+        return ToolResult(False, "Il faut « path » (relatif) et « content » (nouveau contenu).")
+    result = _webdev_apply_patch(ctx, rel_path, content, reason)
+    issues = _webdev_lint(ctx, rel_path, content)
+    lines = [
+        f"Patch créé dans le sandbox local : {result['path']}",
+        f"Action demandée : {reason}",
+        f"Diff appliqué ({len(result['diff'].splitlines()) - 1} lignes) — LOCAL UNIQUEMENT.",
+    ]
+    if issues:
+        lines.append("⚠ Vérification locale : " + "; ".join(issues))
+    else:
+        lines.append("Vérification locale OK (pas de section en lecture seule).")
+    lines.append("RIEN n'a été envoyé vers brainrot-fortnite.com.")
+    return ToolResult(True, "\n".join(lines),
+                      data={"patch": result["path"], "diff": result["diff"],
+                            "issues": issues, "deployed": False,
+                            "meta": result["meta"]})
+
+
+def _webdev_deploy_plan(ctx: ToolContext) -> ToolResult:
+    """Plan de déploiement (lecture seule) : manifeste + commandes FTP, rien d'exécuté.
+
+    Génère un snapshot manifeste pour les fichiers indiqués : état de chaque fichier
+    (présent/absent en local, hash, snapshot de reversibilité existant ?) puis les
+    commandes curl --netrc d'upload / de restauration. AUCUN upload n'est lancé.
+    """
+    raw = ctx.arguments.get("files") or ctx.arguments.get("path") or ""
+    if isinstance(raw, str):
+        files = [p.strip().lstrip("/") for p in raw.split(",") if p.strip()]
+    else:
+        files = [str(p).strip().lstrip("/") for p in (raw or []) if str(p).strip()]
+    if not files:
+        return ToolResult(False, "Indiquez « files » : liste de chemins relatifs (séparés par des virgules).")
+    ftp = "ftp.vpcloud.fr"
+    local_root = _webdev_local_root(ctx)
+    rows, recommended = [], []
+    for rel in files:
+        local_file = local_root / rel
+        exists = local_file.is_file()
+        snapshots = _webdev_find_snapshots(ctx, rel)
+        newest = snapshots[-1] if snapshots else None
+        rows.append({
+            "file": rel,
+            "local_exists": exists,
+            "hash_local": _webdev_hash(local_file.read_text(encoding="utf-8", errors="replace")) if exists else None,
+            "snapshot": (newest or {}).get("backup"),
+            "rollback_available": bool(newest),
+        })
+        if not exists:
+            recommended.append(f"- {rel} : ABSENT du parc local — vérifier avant tout envoi.")
+            continue
+        if not newest:
+            recommended.append(f"- {rel} : AUCUN snapshot deployment-backups — créer le backup préalable.")
+    plan = [
+        "Plan de déploiement (généré, NON exécuté) — " + ftp,
+    ]
+    for r in rows:
+        plan.append(
+            f"  {r['file']}  local={'ok' if r['local_exists'] else 'ABSENT'} "
+            f"hash={r['hash_local'] or '—'}  "
+            f"rollback={'oui (' + str(r['snapshot']) + ')' if r['rollback_available'] else 'NON'}",
+        )
+    if recommended:
+        plan.append("À contrôler AVANT tout envoi :")
+        plan += recommended
+    uploads = [r["file"] for r in rows if r["local_exists"]]
+    if uploads:
+        plan.append("Commandes d'envoi (préparées, À CONFIRMER) :")
+        for rel in uploads:
+            plan.append(f'  curl --netrc -T "{local_root / rel}" "ftp://{ftp}/{rel}"')
+    plan.append("Aucun fichier n'a été envoyé.")
+    return ToolResult(True, "\n".join(plan),
+                      data={"ftp_host": ftp, "files": rows, "uploads": uploads,
+                            "deployed": False})
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +804,12 @@ _TOOLS = [
      "Compare le Google Sheet au catalogue en base. Aucune écriture."),
     ("brainrot.email.prepare_campaign", "Préparer une campagne", _email_prepare, READ_ONLY,
      "Calcule l'audience réelle et prépare le contenu. N'envoie rien."),
+    ("brainrot.webdev.pipeline", "Pipeline dev (lecture seule)", _webdev_pipeline, READ_ONLY,
+     "Compare un fichier site : état production vs parc local vs archives de déploiement, "
+     "avec reversibilité. Aucune écriture."),
+    ("brainrot.webdev.deploy_plan", "Plan de déploiement", _webdev_deploy_plan, READ_ONLY,
+     "Génère le manifeste + commandes FTP curl --netrc pour les fichiers indiqués "
+     "(reversibilité vérifiée). RIEN n'est exécuté."),
 ]
 
 for tool_id, name, handler, risk, description in _TOOLS:
@@ -514,7 +819,9 @@ for tool_id, name, handler, risk, description in _TOOLS:
                      "days": {"type": "integer"}, "limit": {"type": "integer"},
                      "status": {"type": "string"}, "id": {"type": "integer"},
                      "slug": {"type": "string"}, "audience": {"type": "string"},
-                     "url": {"type": "string"}},
+                     "url": {"type": "string"}, "path": {"type": "string"},
+                     "content": {"type": "string"}, "reason": {"type": "string"},
+                     "files": {"type": "string"}},
                      "required": []})
 
 # Actions qui touchent la production : confirmation obligatoire.
@@ -556,4 +863,18 @@ registry.add(
     handler=_email_send, risk=SENSITIVE, agents=AGENTS, permissions=("write",),
     dangerous_hint="Envoi d'emails en masse aux membres du site.",
     input_schema={"type": "object", "properties": {"audience": {"type": "string"}}, "required": []},
+)
+
+# Patch local uniquement : écrit dans velko/dev/workspace/webdev/, jamais en prod.
+registry.add(
+    id="brainrot.webdev.propose_patch", name="Proposer un patch local",
+    category="Brainrot Fortnite",
+    description=("Écrit un patch uni-diff dans le sandbox local "
+                 "velko/dev/workspace/webdev/ (jamais envoyé vers la production)."),
+    handler=_webdev_propose_patch, risk=SAFE_WRITE, agents=AGENTS, permissions=("write",),
+    dangerous_hint="Écrit sur disque local uniquement ; ne touche pas brainrot-fortnite.com.",
+    input_schema={"type": "object", "properties": {
+        "path": {"type": "string"}, "content": {"type": "string"},
+        "reason": {"type": "string"}},
+        "required": ["path", "content"]},
 )

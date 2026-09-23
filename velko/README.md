@@ -226,7 +226,7 @@ Exécuter ces commandes depuis `/Users/jerome/Desktop/jarvis-mac`. Blender 4.2 a
 
 Tests automatisés : routage des écrans, mise en attente d'une action avant l'installation au poste, progression relayée uniquement si le moteur en fournit une, correspondance geste ↔ fait réel (dont l'absence de frappe pendant qu'un processus travaille), routage automatique du troisième écran, et vue lecture seule des moniteurs (contenu réel, refus hors racines, vrai git diff, masquage d'affichage des secrets).
 
-`velko/dev/demo/tests/test_demo.mjs` teste l'ancien prototype archivé ; son chemin `vendor/` a été rompu par le déplacement dans `dev/demo/` et il n'est plus exécutable en l'état. Il ne couvre aucun code de production. Vérification visuelle du rendu et de la séquence dans le navigateur intégré. Le compteur FPS mesure la session courante ; 60 FPS n'est pas garanti sur tous les appareils.
+Vérification visuelle du rendu et de la séquence dans le navigateur intégré. Le compteur FPS mesure la session courante ; 60 FPS n'est pas garanti sur tous les appareils.
 
 ## Dépendances / licences
 

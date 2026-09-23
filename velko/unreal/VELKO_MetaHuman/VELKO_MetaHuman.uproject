@@ -27,6 +27,22 @@
     {
       "Name": "HairStrands",
       "Enabled": true
+    },
+    {
+      "Name": "PythonScriptPlugin",
+      "Enabled": true
+    },
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": true
+    },
+    {
+      "Name": "ChaosClothAsset",
+      "Enabled": true
+    },
+    {
+      "Name": "ChaosOutfitAsset",
+      "Enabled": true
     }
   ]
 }

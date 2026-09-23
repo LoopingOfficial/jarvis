@@ -38,9 +38,11 @@
     "url": "https://brainrot-fortnite.com/",
     "verified_at_audit": "HTTP 200",
     "deploy": {
-      "mechanism": "non déterminé par l'audit",
+      "mechanism": "FTP direct par curl --netrc → ftp.vpcloud.fr (hôte brainrot-fortnite.com) ; identifiants dans ~/.netrc (0600) — pas de CI ni de script central de déploiement",
       "observed": ["deployment-backups/", "deployment-packages/"],
-      "note": "Aucun script de déploiement ni workflow CI trouvé à la racine. À confirmer avec l'utilisateur avant tout déploiement."
+      "workflow": "Avant chaque déploiement : récupérer les versions LIVE des fichiers touchés dans deployment-backups/<nom>-<AAAAMMJJ>-<HHMMSS>/ (git-ignoré) + FICHIERS-DEPLOYES.txt / FICHIERS-EXCLUS.txt, puis envoi via `curl --netrc -T <fichier> ftp://ftp.vpcloud.fr/<chemin>`. Restauration : `while read f; do [ -f \"$f\" ] && curl --netrc -T \"$f\" \"ftp://ftp.vpcloud.fr/$f\"; done < FICHIERS-DEPLOYES.txt`. .htaccess envoyé en dernier. Exemple vérifié : brainrot-catalog-20260920-225927 (39 fichiers envoyés), newsfeed-popup-20260922-174529 (16 fichiers).",
+      "rollback": "OUI — chaque backup contient les versions de production AVANT écrasement ; les fichiers créés (absents de la sauvegarde) sont listés explicitement.",
+      "note": "Ne JAMAIS déployer sans snapshot préalable : créer le backup deployment-backups avant tout upload FTP. VELKO ne déploie pas seul — confirmation humaine requise."
     },
     "ssh": {
       "connector": "brainrot-prod",
@@ -122,10 +124,10 @@
       "note": "Classeur public « STB Hub » (source d'origine des données). Lecture quotidienne possible sans OAuth. Écriture/synchronisation : non autorisée, passer par le pipeline d'import existant du site (confirmation requise)."
     },
     "email": {
-      "available": false,
-      "mechanism": "à confirmer",
-      "observed": "usage de mail()/SMTP dispersé dans des pages PHP (marketplace-pay, change-password, discord-callback…)",
-      "note": "Aucun mailer central identifié et aucun connecteur email configuré. Ne pas créer un second système : confirmer le mailer existant avec l'utilisateur."
+      "available": true,
+      "mechanism": "mailer central PHP : authx_send_email() (ajax/auth_common.php) — SMTP direct via fsockopen vers 127.0.0.1:25 (secure=none, no auth), AUTH_MAIL_SMTP_ONLY=true, FROM no-reply@brainrot-fortnite.com ; log détaillé dans logs/auth-mail.log",
+      "observed": "authx_send_email() est le seul mailer : register, verify/complete-email, resend-verification, forgot-password, change-password, epic/discord callback, marketplace (pay/outbox support/abandoned cart), recruitment, support_notifications. marketplace_email_outbox vidé par cron */5 (tools/marketplace-email-queue.php). Aucun PHPMailer ni API tierce. Vérifié live le 2026-09-23 : auth-mail.log confirme des envois ok=true (127.0.0.1:25), dont pour les derniers comptes en attente (ionny, Mkln).",
+      "note": "VELKO n'a pas de connecteur SMTP : les envois passent par le mailer du site, jamais en doublon. Inspecter auth-mail.log et marketplace_email_outbox avant tout envoi. Garde-fou §16 : l'audience « unverified » = comptes créés depuis l'introduction de la vérification (migration 2026-09-01_044) uniquement — 2 relançables (ionny, Mkln) vs 304 comptes antérieurs exclus (jamais invités à confirmer)."
     },
     "discord": {
       "available": true,
