@@ -86,11 +86,15 @@ export class VelkoResultPanel {
   if (doc.observations.length || doc.sections.length) {
    const h = document.createElement('h4'); h.textContent = 'POINTS À RETENIR'; panel.append(h);
    const list = document.createElement('ul'); list.className = 'rp-list';
-   const items = doc.observations.length
-    ? doc.observations
-    : doc.sections.flatMap(s => (s.items || []).filter(i => i.type === 'list').map(i => i.item));
-   for (const item of (items || []).slice(0, 6)) {
-    const li = document.createElement('li'); li.textContent = item.replace(/^•\s*/, ''); list.append(li);
+   // Hors section, parseMarkdown range des objets {type, item|text} : on
+   // n'en garde que le texte.
+   const asText = i => typeof i === 'string' ? i : (i && (i.item ?? i.text)) || '';
+   const items = (doc.observations.length
+    ? doc.observations.map(asText)
+    : doc.sections.flatMap(s => (s.items || []).filter(i => i.type === 'list').map(i => i.item))
+   ).filter(Boolean);
+   for (const item of items.slice(0, 6)) {
+    const li = document.createElement('li'); li.textContent = item.replace(/^•\s*/, '').replace(/\*\*(.+?)\*\*/g, '$1'); list.append(li);
    }
    if (list.children.length) panel.append(list);
   }
