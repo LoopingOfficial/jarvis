@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "http.server", "8791", "--directory", "ui"],
       "port": 8791
+    },
+    {
+      "name": "velko-static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8792", "--directory", "velko"],
+      "port": 8792
     }
   ]
 }

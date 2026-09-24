@@ -54,6 +54,7 @@ from .tools.runner import SecureToolRunner
 from .tts import PiperTTS
 from .stt import SpeechRecognizer
 from .tts_edge import EdgeTTS
+from .tts_xtts import XttsTTS
 from .voice import VoiceSessionManager, VoiceStateMachine
 from .project_status import ProjectStatusService
 from .validation import ValidationEngine
@@ -137,6 +138,10 @@ class JarvisCore:
         self.voice = VoiceStateMachine(self.events)
         self.sessions = VoiceSessionManager(self.db, self.settings, self.events)
         self.tts = PiperTTS()
+        # Meilleure qualité disponible : voix neuronale GPU (XTTS-v2). Utilisé
+        # en priorité par la cascade serveur si un GPU NVIDIA avec assez de
+        # VRAM libre est présent ET que le modèle a été installé explicitement.
+        self.tts_xtts = XttsTTS()
         # Repli quand aucune voix Piper n'est installée : sans lui, JARVIS
         # reste muet tant que l'utilisateur n'a pas téléchargé un modèle.
         self.tts_fallback = EdgeTTS()
@@ -457,6 +462,10 @@ class JarvisCore:
 
     def focus_ui(self, port: int) -> None:
         url = f"http://127.0.0.1:{int(port)}/"
+        if platform.system() == "Windows":
+            from .windows import launch_ui
+            launch_ui(url)
+            return
         if platform.system() == "Darwin" and self._app_exists("Google Chrome"):
             import subprocess
             script = (f'tell application "Google Chrome"\n activate\n'

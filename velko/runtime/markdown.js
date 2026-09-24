@@ -99,17 +99,29 @@ export function renderMarkdown(text = '') {
   const doc = parseMarkdown(text);
   const out = [];
   if (doc.title) out.push(`<h2 class="rp-title">${inline(doc.title)}</h2>`);
+  if (doc.summary) out.push(`<p class="rp-summary">${doc.summary.split('\n').map(inline).join('<br>')}</p>`);
+  // Les éléments hors section (doc.observations) sont rendus aussi : sans
+  // cela, une liste sous le titre disparaît du rapport complet.
+  renderItems(doc.observations, out);
   for (const s of doc.sections) {
     if (s.heading) out.push(`<h3 class="rp-heading">${inline(s.heading)}</h3>`);
-    for (const item of s.items || []) {
-      if (item.type === 'list') out.push(`<ul class="rp-list"><li>${inline(item.item)}</li></ul>`);
-      else if (item.type === 'line') out.push(`<p class="rp-line">${inline(item.text)}</p>`);
-      else if (item.type === 'code') out.push(`<pre class="rp-code">${esc(item.code)}</pre>`);
-      else if (item.type === 'table') out.push(renderTable(item.rows));
-    }
+    renderItems(s.items || [], out);
   }
-  if (doc.summary) out.unshift(`<p class="rp-summary">${inline(doc.summary.replace(/\n/g, '<br>'))}</p>`);
   return out.join('');
+}
+
+/** Les puces consécutives forment UNE liste, pas une liste par ligne. */
+function renderItems(items, out) {
+  let list = null;
+  const close = () => { if (list) { out.push(`<ul class="rp-list">${list.join('')}</ul>`); list = null; } };
+  for (const item of items) {
+    if (item.type === 'list') { (list ||= []).push(`<li>${inline(item.item.replace(/^[•●○▪◦·]\s*/, ''))}</li>`); continue; }
+    close();
+    if (item.type === 'line') out.push(`<p class="rp-line">${inline(item.text)}</p>`);
+    else if (item.type === 'code') out.push(`<pre class="rp-code">${esc(item.code)}</pre>`);
+    else if (item.type === 'table') out.push(renderTable(item.rows));
+  }
+  close();
 }
 
 function renderTable(rows) {

@@ -58,7 +58,52 @@ def open_app(name: str) -> None:
     subprocess.Popen(args, shell=False)
 
 
+UI_WINDOW_MARKERS = ('JARVIS', 'VELKO', '127.0.0.1')
+
+
+def _find_ui_hwnd() -> int | None:
+    """Recherche une fenêtre déjà ouverte pour l'interface (titre JARVIS/VELKO,
+    ou fenêtre --app encore sans titre de page qui affiche l'URL 127.0.0.1)."""
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _enum(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if any(marker in buf.value for marker in UI_WINDOW_MARKERS):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(_enum, 0)
+    return found[0] if found else None
+
+
+def focus_existing_ui() -> bool:
+    """Ramène au premier plan la fenêtre VELKO/JARVIS déjà ouverte, si elle existe."""
+    hwnd = _find_ui_hwnd()
+    if not hwnd:
+        return False
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    SW_RESTORE = 9
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.SetForegroundWindow(hwnd)
+    return True
+
+
 def launch_ui(url: str) -> bool:
+    if focus_existing_ui():
+        return True
     exe = find_app('chrome') or find_app('edge')
     if not exe:
         return False

@@ -114,9 +114,23 @@ def interface_url() -> str:
 
 
 def open_interface(url: str | None = None) -> bool:
-    """Ouvre l'interface via le mécanisme existant (WebUI, sinon navigateur)."""
+    """Ouvre l'interface via le mécanisme existant (WebUI, sinon navigateur).
+
+    Ne doit jamais empiler des onglets : si une fenêtre JARVIS est déjà
+    ouverte, on la ramène au premier plan au lieu d'en ouvrir une nouvelle
+    (un démarrage relancé plusieurs fois — supervision, double-clic — ne
+    doit pas spammer le navigateur).
+    """
     target = url or interface_url()
     try:
+        import sys as _sys
+
+        if _sys.platform.startswith("win"):
+            from .windows import focus_existing_ui, launch_ui
+
+            if focus_existing_ui():
+                return True
+            return launch_ui(target)
         import webbrowser
 
         return bool(webbrowser.open(target))

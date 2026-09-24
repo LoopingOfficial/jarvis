@@ -19,16 +19,24 @@ class TestWindows(unittest.TestCase):
             with patch.dict(os.environ, {'LOCALAPPDATA': root}), patch('jarvis.windows.shutil.which', return_value=None):
                 self.assertEqual(windows.find_app('chrome'), str(path))
 
+    @patch('jarvis.windows.focus_existing_ui', return_value=False)
     @patch('jarvis.windows.subprocess.Popen')
     @patch('jarvis.windows.find_app', return_value='C:/Program Files/Chrome/chrome.exe')
-    def test_launch_without_shell(self, find, popen):
+    def test_launch_without_shell(self, find, popen, focus):
         self.assertTrue(windows.launch_ui('http://127.0.0.1:8765/'))
         self.assertFalse(popen.call_args.kwargs['shell'])
         self.assertEqual(popen.call_args.args[0][1], '--app=http://127.0.0.1:8765/')
 
+    @patch('jarvis.windows.focus_existing_ui', return_value=False)
     @patch('jarvis.windows.find_app', return_value=None)
-    def test_missing_browser_fallback(self, find):
+    def test_missing_browser_fallback(self, find, focus):
         self.assertFalse(windows.launch_ui('http://127.0.0.1:8765/'))
+
+    @patch('jarvis.windows.focus_existing_ui', return_value=True)
+    @patch('jarvis.windows.subprocess.Popen')
+    def test_launch_reuses_existing_window(self, popen, focus):
+        self.assertTrue(windows.launch_ui('http://127.0.0.1:8765/'))
+        popen.assert_not_called()
         with self.assertRaises(FileNotFoundError):
             windows.open_app('missing')
 

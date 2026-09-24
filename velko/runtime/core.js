@@ -32,6 +32,8 @@ export class VelkoCameraDirector {
   work_hands:[[2.75,1.72,-.65],[1.42,.87,-2.16]],         // 600 ms : clavier/souris
   // Plan « par-dessus l'épaule » : VELKO reste visible, jamais relégué loin.
   work_over_shoulder:[[2.6,1.95,0],[1.4,.9,-2.2]],        // 800 ms
+  // Présentation d'un rapport : moniteur central en grand, VELKO au poste.
+  report_screen:[[2.3,1.62,-.95],[1.5,1.2,-2.77]],
   room:[[6.1,3.5,6.8],[0,.95,-.6]],
   transition:[[3.8,2.4,4.8],[.65,.95,.25]]};
   const v=views[mode]||views.conversation;this.position.set(...v[0]);this.target=new this.T.Vector3(...v[1]);this.shotDuration={work_wide:1200,work_left_screen:700,work_center_screen:700,work_right_screen:700,work_hands:600,work_over_shoulder:800}[mode]??800;this.shotStartAt=performance.now();this.permutation=0;return true;}
@@ -73,8 +75,15 @@ export class VelkoSceneDirector {
  // Une mission bloquée est MISE DE CÔTÉ (reprenable) : VELKO redevient libre
  // pour une nouvelle demande au lieu de rester figé au poste.
  park(){if(!this.active||!['blocked','failed'].includes(this.task?.status))return false;this.active=false;this.marks=[];this.next=0;this.ready=false;this.currentAction=null;this.machine.atWorkstation=false;this.machine.set('IDLE_CONVERSATION');this.camera.workLocked=false;this.camera.set('conversation');this.avatar.root.position.set(0,0,2.3);this.avatar.root.rotation.y=0;this.context.seated=true;this.context.walking=false;this.bus.emit('mission.parked',{taskId:this.task.id,status:this.task.status});return true;}
+ /** Présentation d'un rapport : hors mission, VELKO s'assied au poste et le
+  *  rapport complet s'affiche sur le moniteur central. */
+ presentReport(){if(this.active)return false;this.presenting=true;const a=this.avatar.root;a.position.set(1.4,0,-1.6);a.rotation.y=Math.PI;
+  this.context={...this.context,seated:true,walking:false,typing:false,mouse:false,look:0,speaking:false,action:'read',inputMode:'READING'};
+  this.machine.set('READING_OUTPUT');this.camera.set('report_screen');return true;}
+ endPresentation(){if(!this.presenting)return false;this.presenting=false;if(this.active)return true;const a=this.avatar.root;a.position.set(0,0,2.3);a.rotation.y=0;
+  this.context.seated=true;this.context.look=0;this.machine.set('IDLE_CONVERSATION');this.camera.set('conversation');return true;}
  resume(){if(!this.active||!['blocked','failed'].includes(this.task?.status))return false;this.task.status='running';this.machine.setTaskStatus('running');this.completionTime=undefined;this.machine.set('READING_OUTPUT');return true;}
- start(task,options={}){if(this.active)return false;this.active=true;this.time=0;this.next=0;this.marks=[];this.ready=false;this.returnStart=null;this.lastSequence=0;this.currentAction=null;this.task={id:options.id||'local',text:task,status:'queued'};this.machine.atWorkstation=false;this.machine.setTaskStatus('queued');this.camera.workLocked=false;this.context={seated:true,typing:false,mouse:false,action:'read',look:0,speaking:false};this.bus.emit('TASK_STARTED',{task,taskId:this.task.id});this.machine.set('LISTENING');this.camera.set('conversation');
+ start(task,options={}){if(this.active)return false;if(this.presenting){this.presenting=false;this.avatar.root.position.set(0,0,2.3);this.avatar.root.rotation.y=0;this.bus.emit('report.dismissed');}this.active=true;this.time=0;this.next=0;this.marks=[];this.ready=false;this.returnStart=null;this.lastSequence=0;this.currentAction=null;this.task={id:options.id||'local',text:task,status:'queued'};this.machine.atWorkstation=false;this.machine.setTaskStatus('queued');this.camera.workLocked=false;this.context={seated:true,typing:false,mouse:false,action:'read',look:0,speaking:false};this.bus.emit('TASK_STARTED',{task,taskId:this.task.id});this.machine.set('LISTENING');this.camera.set('conversation');
  this.schedule(.8,()=>this.machine.set('THINKING'));
  this.schedule(1.8,()=>{this.machine.set('SPEAKING');this.context.speaking=true;this.speak('Bien reçu. Je rejoins mon poste. Vous pourrez suivre les opérations réelles sur les écrans.');});
  this.schedule(3.5,()=>{this.context.look=1;this.context.speaking=false;});

@@ -43,6 +43,36 @@ export class VelkoResultPanel {
   // Les outils réellement appelés sont retenus pour le rapport technique.
   bus.on('tool.real', ({name}) => { if (name) this.lastTools.add(name); });
   bus.on('task.result', ev => this.show(ev));
+  // Données n8n structurées (émises juste avant l'affichage du rapport).
+  this.n8n = null;
+  bus.on('n8n.result', data => { this.n8n = data; });
+  bus.on('TASK_STARTED', () => { this.n8n = null; });
+ }
+
+ /** Tableau n8n détaillé : nom, statut, déclencheur, nœuds, mise à jour. */
+ n8nTable(data) {
+  const flows = (data?.workflows || []).slice().sort((a, b) => a.name.localeCompare(b.name, 'fr', {numeric: true}));
+  if (!flows.length) return null;
+  const TRIG = {executeWorkflowTrigger: 'Sous-workflow', webhook: 'Webhook', errorTrigger: 'Erreurs', scheduleTrigger: 'Planifié', manualTrigger: 'Manuel', cron: 'Planifié'};
+  const date = iso => { const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleDateString('fr-FR', {day: '2-digit', month: '2-digit'}); };
+  const wrap = document.createElement('div'); wrap.className = 'rp-n8n';
+  const table = document.createElement('table');
+  const head = table.createTHead().insertRow();
+  for (const h of ['Workflow', 'Déclencheur', 'Nœuds', 'Modifié']) { const th = document.createElement('th'); th.textContent = h; head.append(th); }
+  const tb = table.createTBody();
+  for (const w of flows) {
+   const r = tb.insertRow();
+   const name = r.insertCell(); name.className = 'rp-n8n-name';
+   const dot = document.createElement('i'); dot.className = w.active ? 'on' : 'off'; dot.title = w.active ? 'Actif' : 'Inactif';
+   name.append(dot, document.createTextNode(w.name));
+   const t = (w.triggers || []).map(x => x.kind === 'webhook' && x.path ? `Webhook ${x.method || ''} /${x.path}` : (TRIG[x.kind] || x.kind));
+   r.insertCell().textContent = t.join(', ') || '—';
+   const n = r.insertCell(); n.textContent = String((w.nodes || []).filter(k => k !== 'stickyNote').length); n.title = (w.nodes || []).join(', ');
+   r.insertCell().textContent = date(w.updated_at);
+  }
+  wrap.append(table);
+  if (data.total) { const p = document.createElement('p'); p.className = 'rp-n8n-foot'; p.textContent = `${flows.length} affichés sur ${data.total} workflows au total.`; wrap.append(p); }
+  return wrap;
  }
 
  /** Prévisualise pendant la mission : l'avancement réel, pas un bloc brut. */
@@ -94,7 +124,7 @@ export class VelkoResultPanel {
     : doc.sections.flatMap(s => (s.items || []).filter(i => i.type === 'list').map(i => i.item))
    ).filter(Boolean);
    for (const item of items.slice(0, 6)) {
-    const li = document.createElement('li'); li.textContent = item.replace(/^•\s*/, '').replace(/\*\*(.+?)\*\*/g, '$1'); list.append(li);
+    const li = document.createElement('li'); li.textContent = item.replace(/^[•●○▪◦·]\s*/, '').replace(/\*\*(.+?)\*\*/g, '$1'); list.append(li);
    }
    if (list.children.length) panel.append(list);
   }
@@ -114,14 +144,26 @@ export class VelkoResultPanel {
   // Rapport technique : secondaire, plié jusqu'à la demande explicite.
   const toggle = document.createElement('button'); toggle.className = 'rp-toggle'; toggle.textContent = 'Voir le rapport complet';
   const full = document.createElement('div'); full.className = 'rp-full'; full.hidden = true;
-  full.innerHTML = renderMarkdown(result || '');
+  // Données structurées du moteur en priorité ; sinon le Markdown du rapport.
+  const n8nTable = this.n8nTable(this.n8n);
+  if (n8nTable) full.append(n8nTable); else full.innerHTML = renderMarkdown(result || '');
   const tech = document.createElement('div'); tech.className = 'rp-tech';
   if (this.currentTaskId) {
    const p = document.createElement('p'); p.textContent = 'Identifiant de tâche : ' + this.currentTaskId; tech.append(p);
   }
   const sources = this.trackedSources();
   if (sources) { const p = document.createElement('p'); p.textContent = 'Sources réelles : ' + sources; tech.append(p); }
-  toggle.onclick = () => { const v = full.hidden = !full.hidden; toggle.textContent = v ? 'Voir le rapport complet' : 'Réduire le rapport'; if (v) tech.hidden = true; else tech.hidden = false; };
+  // Rapport complet : VELKO le présente sur le moniteur central s'il est
+  // libre ; sinon (mission en cours) il se déplie dans le panneau.
+  let onScreen = false;
+  const collapse = () => { full.hidden = true; onScreen = false; toggle.textContent = 'Voir le rapport complet'; panel.classList.remove('expanded', 'on-screen'); };
+  toggle.onclick = () => {
+   if (onScreen || !full.hidden) { collapse(); this.presenter?.dismiss(); return; }
+   onScreen = !!this.presenter?.present(full.innerHTML, doc.title || '');
+   if (onScreen) { toggle.textContent = 'Réduire le rapport'; panel.classList.add('on-screen'); return; }
+   full.hidden = false; toggle.textContent = 'Réduire le rapport'; panel.classList.add('expanded');
+  };
+  this.collapseReport = collapse;
   panel.append(toggle, tech, full);
 
   body.append(panel);
@@ -306,7 +348,7 @@ export class VelkoResultPanel {
  }
 
  trackedSources() { return this.lastTools.size ? [...this.lastTools].join(', ') : null; }
- hide() { if (this.node) { this.node.classList.remove('visible', 'live'); this.open = false; this.awaiting = false; } }
+ hide() { if (this.node) { this.node.classList.remove('visible', 'live'); this.open = false; this.awaiting = false; this.collapseReport?.(); this.presenter?.dismiss(); } }
  body() {
   let b = this.node.querySelector('.rp-body');
   if (!b) { b = document.createElement('div'); b.className = 'rp-body'; this.node.append(b); }

@@ -518,6 +518,8 @@ def api_tts_voices(req):
         "voices": voices,
         "selected": str(CORE.settings.get("voice", "voice", "") or "") or CORE.tts.default_voice(),
         "provider": CORE.settings.get("voice", "tts_provider", "browser"),
+        "xtts": CORE.tts_xtts.engine_status(),
+        "xtts_voices": CORE.tts_xtts.voices(),
         "fallback": CORE.tts_fallback.engine_status(),
         "fallback_voices": CORE.tts_fallback.voices(),
     })
@@ -528,6 +530,8 @@ def api_tts_status(req):
     return _ok({
         "engine": CORE.tts.engine_status(),
         "summary": CORE.tts.summary(),
+        "xtts": CORE.tts_xtts.engine_status(),
+        "xtts_summary": CORE.tts_xtts.summary(),
         "fallback": CORE.tts_fallback.engine_status(),
         "fallback_summary": CORE.tts_fallback.summary(),
     })
@@ -558,6 +562,14 @@ def api_tts_synthesize(req):
         text = spoken
     if len(text) > 4000:
         text = text[:4000]
+    # Cascade qualité : XTTS-v2 (GPU, le plus naturel) > Piper (local CPU) >
+    # Edge TTS (réseau). Chaque étage ne répond que s'il est réellement prêt ;
+    # aucune étape ne bloque si la précédente échoue.
+    if CORE.tts_xtts.available():
+        xtts_speaker = str(CORE.settings.get("voice", "xtts_speaker", "") or "")
+        xtts_wav = CORE.tts_xtts.synthesize(text, speaker=xtts_speaker, rate=rate)
+        if xtts_wav is not None:
+            return RawResponse(xtts_wav, "audio/wav")
     wav = CORE.tts.synthesize(text, voice_id=voice, rate=rate, speaker=speaker,
                               expressivity=float(expressivity or 0.0))
     if wav is not None:
@@ -585,6 +597,21 @@ def api_tts_install(req):
     except Exception as exc:
         return _err(f"Téléchargement impossible : {exc}", 502)
     return _ok({"installed": result})
+
+
+@router.post("/api/tts/xtts/install")
+def api_tts_xtts_install(req):
+    """Télécharge (~1,8 Go) et charge le modèle XTTS-v2. Appel explicite requis :
+
+    aucun téléchargement ne se déclenche tout seul, même avec un GPU présent.
+    """
+    try:
+        result = CORE.tts_xtts.install()
+    except RuntimeError as exc:
+        return _err(str(exc))
+    except Exception as exc:
+        return _err(f"Installation XTTS impossible : {exc}", 502)
+    return _ok(result)
 
 
 # ---------------------------------------------------------------------------

@@ -5,24 +5,38 @@ import {VelkoEventBus,VelkoStateMachine,VelkoSceneDirector,VelkoCameraDirector} 
 import {VelkoScreenManager} from './screens.js';
 import {VelkoJarvisClient} from './jarvis-client.js';
 import {VelkoResultPanel} from './result-panel.js';
-import {stripMarkdown} from './markdown.js';
+import {stripMarkdown,parseMarkdown} from './markdown.js';
+/** Sous-titre : une phrase courte, jamais le rapport entier (il est dans le panneau). */
+function briefOf(md){const d=parseMarkdown(md||'');const head=stripMarkdown(d.title||'').replace(/\s*[—-]\s*/,' : ');const sum=stripMarkdown((d.summary||'').split(/\n/)[0]);const s=[head,sum].filter(Boolean).join('. ');if(!s)return '';const one=s.length>160?s.slice(0,157).replace(/\s+\S*$/,'')+'…':s;return one+(d.observations.length||d.sections.length?' Le détail est dans le rapport.':'');}
 import {engineFeed} from './engine-feed.js';
 import {VelkoBlockedActionPanel} from './blocked-panel.js';
 import {VelkoSettingsCenter} from './settings-center.js';
 const $=s=>document.querySelector(s);
 try {
 engineFeed();   // ouvert avant les écrans : ils s'y raccrochent au lieu d'ouvrir le leur.
-const renderer=new THREE.WebGLRenderer({canvas:$('#world'),antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+const renderer=new THREE.WebGLRenderer({canvas:$('#world'),antialias:true,alpha:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
 const scene=new THREE.Scene();scene.background=new THREE.Color('#142331');scene.fog=new THREE.Fog('#142331',16,38);const camera=new THREE.PerspectiveCamera(43,innerWidth/innerHeight,.05,70);
 const fill=new THREE.HemisphereLight('#cedbea','#30251b',.35);scene.add(fill);
 const environment=new VelkoEnvironmentController(THREE,scene),avatar=new VelkoAvatarController(THREE);scene.add(avatar.root);
 await avatar.ready;
 const bus=new VelkoEventBus(),machine=new VelkoStateMachine(bus),cameras=new VelkoCameraDirector(THREE,camera);cameras.set('conversation');const screens=new VelkoScreenManager(THREE,environment.screens,bus,{camera});
 let voicePrefs={};try{voicePrefs=JSON.parse(localStorage.getItem('velko.voice')||'{}');}catch{}
-let sound=voicePrefs.enabled!==false,recognition=null;function speak(text){$('#subtitle').textContent=text;if(sound&&'speechSynthesis'in window){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='fr-FR';u.rate=voicePrefs.rate??1.04;u.volume=voicePrefs.volume??1;const voices=speechSynthesis.getVoices();u.voice=(voicePrefs.voice&&voices.find(v=>v.name===voicePrefs.voice))||voices.find(v=>v.lang.startsWith('fr')&&/Thomas|Daniel|Henri/.test(v.name))||voices.find(v=>v.lang.startsWith('fr'))||null;speechSynthesis.speak(u);}}
+let sound=voicePrefs.enabled!==false,recognition=null;
+// Le visage suit les MOTS RÉELLEMENT prononcés : chaque mot du texte programme
+// ses propres visèmes, cadencés sur le débit réel de la voix (rate inclus).
+function speak(text){$('#subtitle').textContent=text;avatar.speakEnd();if(sound&&'speechSynthesis'in window){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='fr-FR';u.rate=voicePrefs.rate??1.04;u.volume=voicePrefs.volume??1;const voices=speechSynthesis.getVoices();u.voice=(voicePrefs.voice&&voices.find(v=>v.name===voicePrefs.voice))||voices.find(v=>v.lang.startsWith('fr')&&/Thomas|Daniel|Henri/.test(v.name))||voices.find(v=>v.lang.startsWith('fr'))||null;
+ avatar.speakStart();const words=String(text).match(/\S+/g)||[],charMs=1000/(13*(u.rate||1));let t=0;const timers=[];
+ for(const w of words){const dur=Math.max(120,Math.min(900,w.length*charMs));timers.push(setTimeout(()=>avatar.speakWord(w,dur),t));t+=dur*.92;}
+ const stop=()=>{timers.forEach(clearTimeout);avatar.speakEnd();};u.onend=stop;u.onerror=stop;
+ speechSynthesis.speak(u);}}
 const director=new VelkoSceneDirector(bus,machine,avatar,cameras,speak,environment);
 const missionClient=new VelkoJarvisClient(bus,director,screens);missionClient.connect();
 const resultPanel=new VelkoResultPanel(bus,missionClient);
+// Rapport complet : VELKO retourne à son poste et l'affiche sur l'écran central.
+resultPanel.presenter={
+ present:(html,title)=>{if(director.active||!screens.showReport(html,title))return false;if(!director.presentReport()){screens.clearReport();return false;}document.body.classList.add('presenting-report');speak('Je vous affiche le rapport complet sur mon écran.');return true;},
+ dismiss:()=>{document.body.classList.remove('presenting-report');screens.clearReport();director.endPresentation();}};
+bus.on('report.dismissed',()=>{document.body.classList.remove('presenting-report');screens.clearReport();resultPanel.collapseReport?.();});
 // --- Paramètres & récupération : une action bloquée n'immobilise jamais VELKO.
 const settingsCenter=new VelkoSettingsCenter(bus,{voice:{
  get:()=>({...voicePrefs,enabled:sound}),
@@ -47,7 +61,7 @@ const log=(title,text)=>{const el=document.createElement('div');el.className='ev
 // Mode ACTIVITÉ : USER = langage humain (défaut), DEV = libellé technique réel.
 const humanActivity=k=>({code:'Lectures et écritures dans les fichiers',terminal:'Terminal en activité',browser:'Navigation en cours',discord:'Discord en activité',sheet:'Google Sheets · données réelles',analytics:'Analyse des données Brainrot',blog:'Blog · contenu réel',email:'Email · campagne réelle',database:'Base de données · requêtes réelles',read:'Lecture / attente du processus'}[k]||'Activité en cours');
 $('#activity-mode').onclick=()=>{activityMode=activityMode==='USER'?'DEV':'USER';$('#activity-mode').textContent=activityMode;$('#activity-mode').classList.toggle('on',activityMode==='DEV');$('#events').replaceChildren();log(activityMode==='USER'?'ACTIVITÉ':'MOTEUR',activityMode==='USER'?'L’activité s’affiche en langage humain. VELKO exécute les opérations réelles sur les écrans.':'Détails techniques des opérations réelles.');};
-bus.on('TASK_STARTED',e=>{stopDecisionListening();$('#confirm-bar').classList.add('hidden');$('#mission').textContent=e.task;$('#percent').textContent='EN COURS';$('#progress').style.width='0';$('#progress').parentElement.classList.add('indeterminate');resultPanel.hide();});
+bus.on('TASK_STARTED',e=>{stopDecisionListening();avatar.pulse('surprise');$('#confirm-bar').classList.add('hidden');$('#mission').textContent=e.task;$('#percent').textContent='EN COURS';$('#progress').style.width='0';$('#progress').parentElement.classList.add('indeterminate');resultPanel.hide();});
 bus.on('action.focus',a=>log(activityMode==='USER'?(humanActivity(a.kind).split('·')[0].trim().toUpperCase()):(a.kind||'mission').toUpperCase(),
  activityMode==='USER'?(a.label&&!a.label.includes('/')?a.label:(humanActivity(a.kind))):(a.label||a.path||'Opération en cours')));
 bus.on('engine.notice',e=>{if(e.text)log(activityMode==='USER'?'TRAVAIL EN COURS':'MOTEUR',e.text);});
@@ -66,13 +80,13 @@ bus.on('mission.confirmation',c=>{
 // Le rapport final : VELKO résume à voix haute en une phrase, puis le panneau
 // premium affiche le détail structuré. Le Markdown brut ne touche plus la scène.
 const shortSummary=text=>{const clean=String(text).replace(/[#*_`>`]/g,'').replace(/\s+/g,' ').trim();const first=clean.split('\n').find(Boolean)||clean;return first.length>160?first.slice(0,157)+'…':first;};
-bus.on('TASK_COMPLETED',e=>{resultPanel.currentTaskId=e.taskId;resultPanel.progress('Terminé — préparation du rapport…');setTimeout(()=>{resultPanel.show({result:e.result,status:'completed'});speak(stripMarkdown(e.result)||'Mission terminée. Le rapport détaillé est à droite, et les actions sont disponibles.');},350);});
+bus.on('TASK_COMPLETED',e=>{avatar.pulse('laugh');resultPanel.currentTaskId=e.taskId;resultPanel.progress('Terminé — préparation du rapport…');setTimeout(()=>{resultPanel.show({result:e.result,status:'completed'});speak(briefOf(e.result)||'Mission terminée. Le rapport détaillé est à droite, et les actions sont disponibles.');},350);});
 $('#rp-close').onclick=()=>resultPanel.hide();
 const answer=approved=>{$('#confirm-bar').classList.add('hidden');$('#demo').disabled=true;$('#send').disabled=true;
  $('#subtitle').textContent=approved?'Autorisation accordée. Je poursuis.':'Autorisation refusée. J’arrête cette action.';
  missionClient.answer(approved);};
 $('#confirm-yes').onclick=()=>answer(true);$('#confirm-no').onclick=()=>answer(false);
-bus.on('mission.blocked',e=>{if(!missionClient.confirmation)speak(e.reason||'Je ne peux pas aller plus loin sans vous.');});
+bus.on('mission.blocked',e=>{avatar.pulse('doubt');if(!missionClient.confirmation)speak(e.reason||'Je ne peux pas aller plus loin sans vous.');});
 const release=()=>{$('#demo').disabled=false;$('#send').disabled=false;};bus.on('mission.finished',()=>{release();if(resultPanel.pendingContext())startDecisionListening();});$('#demo').onclick=()=>start($('#task-input').value.trim()||'Fais le point sur l’état du système et de tes connecteurs.');$('#task-form').onsubmit=e=>{e.preventDefault();start($('#task-input').value);};
 $('#open-editor').onclick=()=>window.open('workbench.html?pane=editor','velko-editor','popup,width=1100,height=750');
 $('#open-terminal').onclick=()=>window.open('workbench.html?pane=terminal','velko-terminal','popup,width=1050,height=700');
@@ -111,7 +125,7 @@ function stopDecisionListening(){
  recognition=null;setMicIndicator(false);
 }
 bus.on('action.pending',ctx=>{
- if(!director.active&&ctx){startDecisionListening();$('#demo').disabled=true;
+ if(!director.active&&ctx){avatar.pulse('decision');startDecisionListening();$('#demo').disabled=true;
   setTimeout(()=>{if(decisionListening)speak(`Voici quelques actions proposées. ${ctx.message}`);},900);}
 });
 // Une décision prise ou une confirmation donnée libère l'écoute.

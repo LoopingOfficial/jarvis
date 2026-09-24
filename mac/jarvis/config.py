@@ -141,6 +141,9 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         # Locuteur d'une voix multi-locuteurs (ex. « pierre » pour upmc).
         # Vide = locuteur par défaut du modèle.
         "speaker": "",
+        # Locuteur XTTS-v2 (ex. "Damien Black"). Vide = premier locuteur du
+        # modèle chargé (voir GET /api/tts/voices -> xtts_voices).
+        "xtts_speaker": "",
         "speech_rate": 1.0,
         "pitch": 0.9,
         "volume": 1.0,

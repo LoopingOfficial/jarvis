@@ -1,4 +1,51 @@
 import {GLTFLoader} from '../vendor/GLTFLoader.js';
+/** Découpage grossier d'un mot français en visèmes (formes de bouche), pour un
+ *  lip-sync qui suit les VRAIS mots prononcés par la synthèse vocale (voir
+ *  speakWord ci-dessous) — jamais un métronome. Approximation phonétique
+ *  simple : suffisante pour des formes de bouche crédibles en temps réel. */
+const VISEME_VOWELS={a:'A',à:'A',â:'A',ä:'A',e:'E',é:'E',è:'E',ê:'E',ë:'E',i:'I',î:'I',ï:'I',y:'I',o:'O',ô:'O',u:'U',û:'U',ù:'U',ü:'U'};
+function wordVisemes(word){
+  const w=String(word||'').toLowerCase().normalize('NFC');const out=[];let i=0;
+  while(i<w.length){
+    const two=w.slice(i,i+2);
+    if(two==='ou'||two==='oi'||two==='oy'){out.push('WQ');i+=2;continue;}
+    if(two==='an'||two==='en'||two==='on'){out.push('O');i+=2;continue;}
+    if(two==='in'||two==='un'){out.push('I');i+=2;continue;}
+    if(two==='ch'){out.push('CH');i+=2;continue;}
+    const c=w[i];
+    if(VISEME_VOWELS[c]){out.push(VISEME_VOWELS[c]);i++;continue;}
+    if('bmp'.includes(c)){out.push('MBP');i++;continue;}
+    if('fv'.includes(c)){out.push('FV');i++;continue;}
+    if(c==='l'){out.push('L');i++;continue;}
+    if(/[a-z]/.test(c))out.push('REST');
+    i++;
+  }
+  return out.length?out:['REST'];
+}
+/** Ouverture de mâchoire par visème (0 = fermé, 1 = grand ouvert). */
+const VISEME_JAW={viseme_A:.55,viseme_E:.32,viseme_I:.18,viseme_O:.4,viseme_U:.22,viseme_WQ:.16,viseme_MBP:0,viseme_FV:.14,viseme_L:.28,viseme_CH:.18,viseme_TH:.2,viseme_REST:0};
+/** Expressions faciales par état réel — calquées sur les planches de la
+ *  maquette (neutre, concentration, réflexion, surprise, sourire, rire,
+ *  doute, décision). Poids DE BASE, toujours mélangés à la couche humaine
+ *  procédurale (micro-mouvements) : jamais une pose figée. */
+const EXPRESSION_RULES=[
+  [/think/,                  {browDown:.30,squintLeft:.10,squintRight:.16,mouthLeft:.10}],
+  [/working|reading_output/, {browDown:.16,squintLeft:.08,squintRight:.08,mouthPress:.05}],
+  [/success/,                {browUp:.10,smile:.55,eyeWideLeft:.05,eyeWideRight:.05}],
+  [/error/,                  {browUpLeft:.22,browDown:.10,mouthLeft:.14,squintLeft:.10,frown:.08}],
+  [/awaiting_user_decision/, {browUp:.14,mouthPress:.06}],
+  [/listen/,                 {browUp:.03,smile:.08}],
+];
+function expressionFor(state){for(const [re,vals] of EXPRESSION_RULES)if(re.test(state))return vals;return {smile:.05};}
+/** Impulsion ponctuelle sur un fait réel (nouvelle mission, réussite,
+ *  blocage, décision demandée) : monte vite, redescend en décroissance
+ *  naturelle — jamais une boucle. Voir VelkoAvatarController#pulse. */
+const PULSES={
+  surprise:{browUp:.35,eyeWideLeft:.30,eyeWideRight:.30,jawOpen:.06,decay:2.6},
+  laugh:{smile:.5,jawOpen:.16,browUp:.06,decay:1.3,osc:9},
+  doubt:{browUpLeft:.3,browDown:.12,mouthLeft:.18,squintLeft:.12,decay:1.6},
+  decision:{browUp:.22,mouthPress:.08,decay:1.8},
+};
 /** Continuous, skinned MPFB human with anatomical limb solving. +Z is forward.
  *
  *  Couche humaine : aucune immobilité complète, aucune mécanique. Respiration
@@ -9,7 +56,7 @@ import {GLTFLoader} from '../vendor/GLTFLoader.js';
  *  follow-through, expressions faciales et lip-sync. 100 % procédural, léger. */
 export class VelkoAvatarController {
   constructor(THREE){
-    this.THREE=THREE;this.root=new THREE.Group();this.root.name='VELKO anatomical human';this.joints={};this.bones={};this.rest=new Map();this.pose='idle';this.seat=0;this.loaded=false;this.morphs={blink:0,mouth:0,smile:0,innerBrow:0,outerBrow:0};
+    this.THREE=THREE;this.root=new THREE.Group();this.root.name='VELKO anatomical human';this.joints={};this.bones={};this.rest=new Map();this.pose='idle';this.seat=0;this.loaded=false;this.morphs={blink:0};
     this.human={
       // Respiration irrégulière : deux composantes déphasées + soupir occasionnel.
       breath:0,breathT:Math.random()*7,breathVar:0,nextSigh:3+Math.random()*9,sigh:0,
@@ -29,6 +76,11 @@ export class VelkoAvatarController {
       follow:0,
       // Expression faciale soutenue selon l'état (micro).
       expression:{smile:0,mouthOffset:0,brow:0},look:0,
+      // Parole : file de visèmes RÉELS (issus des mots effectivement
+      // prononcés, voir speakWord), jamais un métronome sinusoïdal.
+      speechActive:false,visemeQueue:[],visemeCur:'viseme_REST',visemeWeight:0,
+      // Impulsion ponctuelle sur un fait réel (voir pulse()).
+      pulseType:null,pulseT:0,
     };
     this.lastAction='';this.ready=this.load();
   }
@@ -48,6 +100,22 @@ export class VelkoAvatarController {
     this.loaded=true;this.update(1,0,'IDLE');return this;
   }
   setPose(name){this.pose=name;}
+  /** Début réel d'une prise de parole (onstart de la synthèse vocale). */
+  speakStart(){this.human.speechActive=true;this.human.visemeQueue.length=0;}
+  /** Un mot vient d'être prononcé (onboundary) : ses visèmes sont répartis
+   *  sur sa durée estimée — le mouvement de bouche suit le texte réel, pas
+   *  une horloge arbitraire. */
+  speakWord(word,durationMs){
+    const h=this.human,seq=wordVisemes(word),now=performance.now();
+    const step=Math.max(45,(durationMs||seq.length*90)/seq.length);
+    h.visemeQueue.push(...seq.map((v,k)=>({viseme:'viseme_'+v,t:now+k*step,dur:step})));
+    h.speechActive=true;
+  }
+  /** Fin réelle de la prise de parole (onend/onerror de la synthèse vocale). */
+  speakEnd(){const h=this.human;h.speechActive=false;h.visemeQueue.length=0;h.visemeCur='viseme_REST';}
+  /** Impulsion ponctuelle liée à un fait réel : surprise (nouvelle mission),
+   *  rire (réussite), doute (blocage), décision (confirmation attendue). */
+  pulse(kind){if(PULSES[kind]){this.human.pulseType=kind;this.human.pulseT=0;}}
   point(local){return this.root.localToWorld(new this.THREE.Vector3(...local));}
   position(b){return b.getWorldPosition(new this.THREE.Vector3());}
   aim(b,child,target){
@@ -146,11 +214,20 @@ export class VelkoAvatarController {
     const browTarget=/error|think/.test(state)?.05:0;
     e.brow+=(browTarget-e.brow)*Math.min(1,dt*3);
     e.mouthOffset=(/think/.test(state)?.012:0)+(/listen/.test(state)?.008:0);
-    // --- Lip-sync : chaque mot est une ouverture, jamais un métronome --------
-    if(context.speaking||/speak|success/.test(state)){
-      const word=Math.max(0,Math.sin(time*13.3+Math.floor(time*13.3)*1.7)*.9+Math.sin(time*23.7)*.25+.7);
-      h.mouth=Math.min(.5,word*.22+Math.random()*.06*(h.sigh+1));
-    } else h.mouth=0;
+    // --- Lip-sync réel : avance la file de visèmes issus des mots RÉELLEMENT
+    //     prononcés (speakWord). Enveloppe triangulaire par visème : jamais figé,
+    //     jamais un métronome. ------------------------------------------------
+    while(h.visemeQueue.length>1&&now>=h.visemeQueue[1].t)h.visemeQueue.shift();
+    if(h.visemeQueue.length&&now>=h.visemeQueue[0].t){
+      const cur=h.visemeQueue[0],nextT=h.visemeQueue[1]?h.visemeQueue[1].t:cur.t+cur.dur;
+      const span=Math.max(30,nextT-cur.t),age=now-cur.t;
+      h.visemeCur=cur.viseme;
+      h.visemeWeight=Math.sin(Math.min(1,age/span)*Math.PI)*.85+.05;
+      if(age>span&&h.visemeQueue.length===1)h.visemeQueue.shift();
+    } else {
+      h.visemeWeight=Math.max(0,h.visemeWeight-dt*8);
+      if(h.visemeWeight<=0)h.visemeCur='viseme_REST';
+    }
     // --- Hochements de tête pendant l'écoute / acquiescement ----------------
     if(/listen/i.test(state)){
       if(now>h.nodNext){h.nod=1;h.nodNext=now+(800+Math.random()*2200);}
@@ -235,13 +312,46 @@ export class VelkoAvatarController {
         bone.rotateX(burst+hold+enter+clic+follow);
       }
     }
-    // Blink irrégulier + micro smiles/mouth/brows, lip-sync réelle.
+    // --- Visage humain complet : expression de base (état réel) + micro-couche
+    //     procédurale + visèmes de parole réels + impulsion ponctuelle sur un
+    //     fait réel. Rien n'est jamais figé : tout est somme de couches vivantes.
     const e=h.expression;
+    if(h.pulseType){h.pulseT+=dt;if(Math.exp(-h.pulseT*(PULSES[h.pulseType].decay||2))<.02)h.pulseType=null;}
+    const pulse=h.pulseType&&PULSES[h.pulseType];
+    const pulseLife=pulse?Math.exp(-h.pulseT*(pulse.decay||2))*(pulse.osc?Math.max(0,Math.sin(h.pulseT*pulse.osc)):1):0;
+    const target={};const add=(k,v)=>{target[k]=(target[k]||0)+v;};
+    for(const [k,v] of Object.entries(expressionFor(s)))add(k,v);
+    if(pulse)for(const [k,v] of Object.entries(pulse)){if(k!=='decay'&&k!=='osc')add(k,v*pulseLife);}
+    add('smile',e.smile*8);add('browDown',e.brow*.6);
     this.morphs.blink=h.blink;
-    this.morphs.mouth=speaking?h.mouth:(e.mouthOffset+e.smile*.4);
-    this.morphs.smile=Math.max(0,(/success/.test(s)?.4:0))+e.smile*12;
-    const mouth=this.morphs.mouth,smile=this.morphs.smile;
-    this.model.traverse(o=>{if(o.morphTargetDictionary&&o.morphTargetInfluences)for(const [name,index]of Object.entries(o.morphTargetDictionary)){if(/blink/i.test(name))o.morphTargetInfluences[index]=this.morphs.blink;else if(/jaw.?open|mouth.?open/i.test(name))o.morphTargetInfluences[index]=mouth;else if(/smile/i.test(name))o.morphTargetInfluences[index]=smile;}});
+    this.model.traverse(o=>{
+      if(!o.morphTargetDictionary||!o.morphTargetInfluences)return;
+      for(const [name,index] of Object.entries(o.morphTargetDictionary)){
+        let v=0;
+        if(/^blink/i.test(name))v=h.blink;
+        else if(name==='jawOpen')v=Math.min(1,(target.jawOpen||0)+h.visemeWeight*(VISEME_JAW[h.visemeCur]||0));
+        else if(name===h.visemeCur)v=h.visemeWeight;
+        else if(/^viseme_/.test(name))v=0;
+        else if(name==='smile'||name==='mouthSmile')v=target.smile||0;
+        else if(name==='smileLeft')v=(target.smile||0)*.94;
+        else if(name==='smileRight')v=(target.smile||0)*1.05;
+        else if(name==='frown'||name==='mouthFrown')v=target.frown||0;
+        else if(name==='browUp')v=target.browUp||0;
+        else if(name==='browDown')v=target.browDown||0;
+        else if(name==='browUpLeft')v=(target.browUp||0)+(target.browUpLeft||0);
+        else if(name==='browUpRight')v=(target.browUp||0)+(target.browUpRight||0)*.4;
+        else if(name==='eyeWideLeft')v=target.eyeWideLeft||0;
+        else if(name==='eyeWideRight')v=target.eyeWideRight||0;
+        else if(name==='squintLeft')v=target.squintLeft||0;
+        else if(name==='squintRight')v=target.squintRight||0;
+        else if(name==='mouthLeft')v=target.mouthLeft||0;
+        else if(name==='mouthRight')v=target.mouthRight||0;
+        else if(name==='mouthPress')v=target.mouthPress||0;
+        else if(name==='mouthPucker')v=/viseme_WQ|viseme_U/.test(h.visemeCur)?h.visemeWeight*.3:0;
+        else if(name==='mouthFunnel')v=h.visemeCur==='viseme_WQ'?h.visemeWeight*.4:0;
+        o.morphTargetInfluences[index]=Math.max(0,Math.min(1,v));
+      }
+    });
     this.root.updateMatrixWorld(true);
   }
   /** Point MONDIAL visé par une main assise : le vrai clavier ou la vraie souris.

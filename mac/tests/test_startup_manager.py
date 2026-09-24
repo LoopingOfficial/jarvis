@@ -434,6 +434,14 @@ class DetachAndEventTests(unittest.TestCase):
     def test_open_interface_utilise_le_navigateur(self):
         called = {}
 
+        if sys.platform.startswith("win"):
+            # Windows : une fenêtre déjà ouverte est réutilisée, jamais un
+            # nouvel onglet (voir jarvis.windows.focus_existing_ui).
+            with mock.patch("jarvis.windows.focus_existing_ui", return_value=True):
+                result = startup.open_interface("http://127.0.0.1:8765/")
+            self.assertTrue(result)
+            return
+
         with mock.patch("webbrowser.open",
                         lambda url: called.setdefault("url", url) or True):
             result = startup.open_interface("http://127.0.0.1:8765/")

@@ -7,6 +7,28 @@ sounddevice>=0.4.6,<0.6
 # data/stt on first use.
 faster-whisper>=1.0,<2
 
+# Optional: lets faster-whisper's CTranslate2 backend find cuBLAS/cuDNN on a
+# machine with an NVIDIA GPU but no full CUDA toolkit install (common on
+# Windows). stt.py already prefers device="cuda" automatically when
+# gpu_manager reports >=1.5 GB free VRAM on an NVIDIA card (see
+# SpeechRecognizer._devices in jarvis/stt.py) -- these two wheels are what
+# make that path actually usable instead of silently falling back to CPU.
+nvidia-cublas-cu12; sys_platform == "linux" or sys_platform == "win32"
+nvidia-cudnn-cu12; sys_platform == "linux" or sys_platform == "win32"
+
+# Optional: GPU text-to-speech, far more natural than Piper. Needs an NVIDIA
+# GPU with >=3 GB free VRAM (see jarvis/tts_xtts.py). Pulls PyTorch as a
+# dependency -- install a CUDA-enabled torch build FIRST (see
+# https://pytorch.org/get-started/locally/), otherwise TTS will pull the
+# CPU-only wheel and jarvis/tts_xtts.py will refuse to load it (GPU-only by
+# design: CPU inference is too slow to be usable). The model itself (~1.8 GB)
+# is downloaded only via POST /api/tts/xtts/install, never automatically.
+#
+# `TTS` (the original Coqui package on PyPI) is unmaintained since 2023 and
+# is capped at Python <3.12. `coqui-tts` is the actively maintained fork
+# (same import name, `TTS.api.TTS`) that supports 3.12+ -- use it instead.
+coqui-tts>=0.24,<1
+
 # Optional: cloud-free TTS fallback used when no local Piper voice is
 # installed. Microsoft Edge voices, no API key and no subscription.
 edge-tts>=6.1,<8
