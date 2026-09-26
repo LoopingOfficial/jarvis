@@ -27,6 +27,34 @@ class ClusterState:
     def __init__(self):
         self.lock = threading.RLock()
         self.workers: Dict[str, Dict[str, Any]] = {}
+        self.test_commands: Dict[str, list] = {}
+
+    def queue_test_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        worker_id = payload.get("worker_id")
+        task_id = payload.get("task_id")
+        action = payload.get("action")
+        if not worker_id or not task_id or action not in {"drop_lease", "release"}:
+            raise ValueError("worker_id, task_id and supported test action are required")
+        task = TASKS.get(task_id)
+        if not task or task.get("metadata", {}).get("test_control_required") is not True:
+            raise ValueError("task is not opted in to remote test control")
+        if task.get("assigned_worker") != worker_id:
+            raise ValueError("worker does not own the opted-in test task")
+        if not TASKS.arm_test_fault(task_id, worker_id, action):
+            raise ValueError("test fault could not be armed")
+        command = {
+            "command_id": str(int(time.time() * 1000000)),
+            "action": action,
+            "task_id": task_id,
+        }
+        with self.lock:
+            self.test_commands.setdefault(worker_id, []).append(command)
+        EVENTS.append("WORKER_TEST_COMMAND", worker_id=worker_id, task_id=task_id, details={"action": action})
+        return command
+
+    def pop_test_commands(self, worker_id: str) -> list:
+        with self.lock:
+            return self.test_commands.pop(worker_id, [])
 
     def register(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         worker_id = payload["worker_id"]
@@ -83,6 +111,7 @@ class ClusterState:
             return {
                 "ok": True,
                 "worker_id": worker_id,
+                "commands": self.pop_test_commands(worker_id),
             }
 
     def get_worker(self, worker_id: str) -> Dict[str, Any]:
@@ -221,6 +250,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             payload = self._read_json()
+
+            if self.path == "/test/control":
+                if self.client_address[0] not in {"127.0.0.1", "::1"}:
+                    self._send(403, {"ok": False, "error": "test_control_is_local_only"})
+                    return
+                if not payload.get("test_mode"):
+                    self._send(403, {"ok": False, "error": "test_mode_required"})
+                    return
+                try:
+                    command = STATE.queue_test_command(payload)
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                    return
+                self._send(202, {"ok": True, "command": command})
+                return
 
             if self.path == "/register":
                 required = {

@@ -31,6 +31,22 @@ class TaskStore:
         self.max_attempts = max_attempts
         self.event_sink = event_sink
         self.retry_backoff = retry_backoff or [2.0, 5.0, 10.0]
+        self._test_faults: Dict[str, str] = {}
+
+    def arm_test_fault(self, task_id: str, worker_id: str, action: str) -> bool:
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task or task.get("assigned_worker") != worker_id:
+                return False
+            if task.get("metadata", {}).get("test_control_required") is not True:
+                return False
+            if action not in {"drop_lease", "release"}:
+                return False
+            if action == "release":
+                self._test_faults.pop(task_id, None)
+            else:
+                self._test_faults[task_id] = action
+            return True
 
     def _event(self, event: str, task: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         if self.event_sink is None:
@@ -143,6 +159,8 @@ class TaskStore:
                 )
                 task["error"] = None
                 task["retry_after"] = None
+                if task.get("metadata", {}).get("test_control_required") is True:
+                    self._test_faults[task["task_id"]] = "hold"
 
                 self._event("TASK_CLAIMED", task, worker_id=worker_id)
                 self._event("TASK_STARTED", task, worker_id=worker_id)
@@ -168,6 +186,10 @@ class TaskStore:
                 return False
 
             if task["assigned_worker"] != worker_id:
+                return False
+
+            if self._test_faults.get(task_id) == "drop_lease":
+                self._event("WORKER_ERROR", task, worker_id=worker_id, details={"error": "test_lease_drop"})
                 return False
 
             task["lease_expires_at"] = (
@@ -220,11 +242,16 @@ class TaskStore:
             ):
                 return False
 
+            if self._test_faults.get(task_id) in {"hold", "drop_lease"}:
+                self._event("WORKER_ERROR", task, worker_id=worker_id, details={"error": "test_completion_rejected"})
+                return False
+
             task["status"] = "done"
             task["result"] = result
             task["completed_at"] = time.time()
             task["lease_expires_at"] = None
             task["progress"] = 100
+            self._test_faults.pop(task_id, None)
 
             self._refresh_locked()
             self._event("TASK_COMPLETED", task, worker_id=worker_id)
@@ -245,6 +272,9 @@ class TaskStore:
                 task,
                 worker_id,
             ):
+                return False
+
+            if self._test_faults.get(task_id) in {"hold", "drop_lease"}:
                 return False
 
             task["error"] = error
@@ -295,6 +325,7 @@ class TaskStore:
                 continue
 
             previous_worker = task["assigned_worker"]
+            self._test_faults.pop(task["task_id"], None)
 
             task["assigned_worker"] = None
             task["lease_expires_at"] = None

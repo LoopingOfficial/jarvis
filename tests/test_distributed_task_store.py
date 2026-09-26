@@ -48,6 +48,14 @@ class TaskStoreTests(unittest.TestCase):
         self.assertTrue(self.store.complete(second["task_id"], "w", "b"))
         self.assertEqual("ready", self.store.get(final["task_id"])["status"])
 
+    def test_remote_fault_is_opt_in_and_blocks_renewal_and_completion(self):
+        task = self.store.create("probe", metadata={"test_control_required": True})
+        self.assertIsNotNone(self.store.claim("w", []))
+        self.assertTrue(self.store.arm_test_fault(task["task_id"], "w", "drop_lease"))
+        self.assertFalse(self.store.renew(task["task_id"], "w"))
+        self.assertFalse(self.store.complete(task["task_id"], "w", "forbidden"))
+        self.assertFalse(self.store.arm_test_fault(task["task_id"], "w", "arbitrary_command"))
+
 
 if __name__ == "__main__":
     unittest.main()

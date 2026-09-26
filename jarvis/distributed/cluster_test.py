@@ -34,6 +34,23 @@ class ClusterClient:
             time.sleep(0.25)
         raise TimeoutError("task_timeout:" + task_id)
 
+    def wait_claim(self, task_id: str, worker_id: str, timeout: float) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            events = self.request("GET", "/events?limit=500").get("events", [])
+            if any(event.get("event") == "TASK_CLAIMED" and event.get("task_id") == task_id and event.get("worker_id") == worker_id for event in events):
+                return
+            time.sleep(0.25)
+        raise TimeoutError("claim_timeout:{}:{}".format(task_id, worker_id))
+
+    def control(self, worker_id: str, task_id: str, action: str) -> Dict[str, Any]:
+        return self.request("POST", "/test/control", {
+            "test_mode": True,
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "action": action,
+        })
+
 
 class Campaign:
     def __init__(self, client: ClusterClient, timeout: float, fault_injection: bool = False):
@@ -68,6 +85,8 @@ class Campaign:
             self.check("Worker registration", bool(online), "no registered worker")
             self.check("Worker heartbeat", all(worker.get("heartbeat_age", 999) < 35 for worker in online), "stale heartbeat")
             self.check("Capability discovery", all(worker.get("capabilities") for worker in online), "missing capabilities")
+            protocol_ready = all(worker.get("worker_version", "0") >= "1.1" for worker in online)
+            self.check("Worker protocol", protocol_ready, "legacy workers supported by coordinator-side control")
             if not online:
                 self.check("Distributed campaign", False, "no workers; real multi-machine tests are PENDING")
                 return self.finish()
@@ -113,10 +132,12 @@ class Campaign:
     def run_failover(self, source: str, target: str) -> None:
         task = self.task("Failover probe from {} to {}".format(source, target), metadata={
             "test_mode": True,
-            "test_fault": "drop_lease",
+            "test_control_required": True,
             "test_fault_seconds": 35,
             "test_preferred_worker": source,
         })
+        self.client.wait_claim(task["task_id"], source, self.timeout)
+        self.client.control(source, task["task_id"], "drop_lease")
         self.client.wait_task(task["task_id"], self.timeout)
         events = self.client.request("GET", "/events?since={}".format(self.started_at)).get("events", [])
         task_events = [event for event in events if event.get("task_id") == task["task_id"]]
@@ -142,9 +163,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run the VELKO distributed cluster validation campaign")
     parser.add_argument("--coordinator", default="http://127.0.0.1:8765")
     parser.add_argument("--timeout", type=float, default=180.0)
-    parser.add_argument("--fault-injection", action="store_true", help="Run explicit lease-drop failover probes; requires test-mode workers.")
+    parser.add_argument("--no-fault-injection", action="store_true", help="Skip the explicit remote failover probes.")
     args = parser.parse_args(argv)
-    return Campaign(ClusterClient(args.coordinator, min(args.timeout, 30.0)), args.timeout, args.fault_injection).run()
+    return Campaign(ClusterClient(args.coordinator, min(args.timeout, 30.0)), args.timeout, not args.no_fault_injection).run()
 
 
 if __name__ == "__main__":

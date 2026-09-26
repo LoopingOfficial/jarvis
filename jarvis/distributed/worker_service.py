@@ -17,6 +17,7 @@ DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 DEFAULT_HEARTBEAT_INTERVAL = 5.0
 DEFAULT_CLAIM_INTERVAL = 2.0
 DEFAULT_RENEW_INTERVAL = 10.0
+WORKER_PROTOCOL_VERSION = "1.1"
 TRANSIENT_ERROR_MARKERS = (
     "timed out", "timeout", "connection refused", "temporarily",
     "502", "503", "500", "model loading", "urlopen error",
@@ -53,6 +54,8 @@ class VelkoWorker:
         self.busy = False
         self.current_task_id = None
         self.current_task_started_at = None
+        self._fault_lock = threading.RLock()
+        self._test_faults = {}
 
     def _post(
         self,
@@ -87,6 +90,7 @@ class VelkoWorker:
             "python": platform.python_version(),
             "pid": os.getpid(),
             "current_task_id": self.current_task_id,
+            "worker_version": WORKER_PROTOCOL_VERSION,
         }
 
         result = self._post("/register", payload)
@@ -121,6 +125,9 @@ class VelkoWorker:
                 "current_task_started_at": self.current_task_started_at,
             },
         )
+
+        for command in result.get("commands", []):
+            self._apply_test_command(command)
 
         if not result.get("ok"):
             raise RuntimeError(
@@ -205,6 +212,20 @@ class VelkoWorker:
 
         return bool(result.get("ok"))
 
+    def _apply_test_command(self, command: Dict[str, Any]) -> None:
+        if command.get("action") not in {"drop_lease", "release"}:
+            return
+        task_id = command.get("task_id")
+        if not task_id:
+            return
+        with self._fault_lock:
+            self._test_faults[task_id] = command["action"]
+        print("[TEST CONTROL] {} task={}".format(command["action"], task_id), flush=True)
+
+    def _test_fault_for(self, task_id: str) -> Optional[str]:
+        with self._fault_lock:
+            return self._test_faults.get(task_id)
+
     def renew_loop(
         self,
         task_id: str,
@@ -217,6 +238,9 @@ class VelkoWorker:
             )
         ):
             try:
+                if self._test_fault_for(task_id) == "drop_lease":
+                    print("[TEST CONTROL] lease renewal intentionally stopped {}".format(task_id), flush=True)
+                    return
                 renewed = self.renew_task(
                     task_id
                 )
@@ -412,14 +436,17 @@ class VelkoWorker:
         self.busy = True
         self.current_task_id = task_id
         self.current_task_started_at = task.get("started_at")
-        fault = task.get("metadata", {}).get("test_fault")
-        if fault == "drop_lease" and self.test_mode:
-            print(f"[TEST FAULT] dropping lease for {task_id}", flush=True)
-            time.sleep(float(task.get("metadata", {}).get("test_fault_seconds", 35.0)))
-            self.busy = False
-            self.current_task_id = None
-            self.current_task_started_at = None
-            return
+        metadata = task.get("metadata", {})
+        if metadata.get("test_control_required"):
+            deadline = time.time() + float(metadata.get("test_control_timeout", 60.0))
+            while self.running and time.time() < deadline and self._test_fault_for(task_id) is None:
+                time.sleep(0.25)
+            if self._test_fault_for(task_id) == "drop_lease":
+                time.sleep(float(metadata.get("test_fault_seconds", 35.0)))
+                self.busy = False
+                self.current_task_id = None
+                self.current_task_started_at = None
+                return
         renew_thread.start()
 
         try:
