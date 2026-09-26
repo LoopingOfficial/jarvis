@@ -5,13 +5,14 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 from .protocol import WorkerState, WorkerStatus
 
 
 class WorkerRegistry:
 
-    def __init__(self, config_path: str | Path | None = None):
+    def __init__(self, config_path: Optional[Union[str, Path]] = None):
         if config_path is None:
             config_path = Path(__file__).with_name("config.json")
 
@@ -26,7 +27,7 @@ class WorkerRegistry:
         self.cluster_name = config["cluster_name"]
         self.leader = config["leader"]
 
-        self.workers: dict[str, WorkerState] = {}
+        self.workers: Dict[str, WorkerState] = {}
 
         for worker_id, data in config["workers"].items():
             self.workers[worker_id] = WorkerState(
@@ -43,7 +44,7 @@ class WorkerRegistry:
     def get(self, worker_id: str) -> WorkerState:
         return self.workers[worker_id]
 
-    def online_workers(self) -> list[WorkerState]:
+    def online_workers(self) -> List[WorkerState]:
         return [
             worker
             for worker in self.workers.values()
@@ -106,7 +107,7 @@ class WorkerRegistry:
     def healthcheck_all(
         self,
         timeout: float = 3.0,
-    ) -> list[WorkerState]:
+    ) -> List[WorkerState]:
 
         with ThreadPoolExecutor(
             max_workers=len(self.workers)

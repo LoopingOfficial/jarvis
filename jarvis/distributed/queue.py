@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import threading
+from typing import Dict, List
 from .protocol import Task, TaskStatus
 
 
 class TaskQueue:
     def __init__(self):
-        self.tasks: dict[str, Task] = {}
+        self.tasks: Dict[str, Task] = {}
         self._lock = threading.RLock()
 
     def add(self, task: Task) -> Task:
@@ -18,7 +19,7 @@ class TaskQueue:
             self._refresh()
             return task
 
-    def add_many(self, tasks: list[Task]) -> None:
+    def add_many(self, tasks: List[Task]) -> None:
         for task in tasks:
             self.add(task)
 
@@ -54,7 +55,7 @@ class TaskQueue:
                 else TaskStatus.BLOCKED
             )
 
-    def ready(self) -> list[Task]:
+    def ready(self) -> List[Task]:
         with self._lock:
             self._refresh()
             return [

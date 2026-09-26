@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, List, Optional, Set
 import time
 import uuid
 
@@ -32,35 +32,35 @@ class WorkerState:
     ollama_url: str
     model: str
     priority: int
-    capabilities: set[str]
+    capabilities: Set[str]
 
     status: WorkerStatus = WorkerStatus.UNKNOWN
-    latency_ms: float | None = None
+    latency_ms: Optional[float] = None
     running_tasks: int = 0
-    last_heartbeat: float | None = None
-    available_models: list[str] = field(default_factory=list)
-    error: str | None = None
+    last_heartbeat: Optional[float] = None
+    available_models: List[str] = field(default_factory=list)
+    error: Optional[str] = None
 
 
 @dataclass
 class Task:
     prompt: str
-    required_capabilities: set[str] = field(default_factory=set)
-    dependencies: set[str] = field(default_factory=set)
+    required_capabilities: Set[str] = field(default_factory=set)
+    dependencies: Set[str] = field(default_factory=set)
 
     task_id: str = field(
         default_factory=lambda: str(uuid.uuid4())
     )
 
     status: TaskStatus = TaskStatus.PENDING
-    assigned_worker: str | None = None
+    assigned_worker: Optional[str] = None
     attempts: int = 0
     result: Any = None
-    error: str | None = None
+    error: Optional[str] = None
 
     created_at: float = field(default_factory=time.time)
-    started_at: float | None = None
-    completed_at: float | None = None
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
 
 
 @dataclass
@@ -71,4 +71,4 @@ class TaskResult:
     content: str = ""
     duration: float = 0.0
     tokens_per_second: float = 0.0
-    error: str | None = None
+    error: Optional[str] = None

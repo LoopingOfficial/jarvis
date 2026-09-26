@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from .protocol import WorkerState, WorkerStatus, Task
 from .queue import TaskQueue
 from .registry import WorkerRegistry
@@ -40,7 +42,7 @@ class Scheduler:
     def claim_next(
         self,
         worker_id: str,
-    ) -> Task | None:
+    ) -> Optional[Task]:
 
         worker = self.registry.get(worker_id)
 
@@ -74,7 +76,7 @@ class Scheduler:
     def best_worker_for(
         self,
         task: Task,
-    ) -> WorkerState | None:
+    ) -> Optional[WorkerState]:
 
         candidates = [
             worker

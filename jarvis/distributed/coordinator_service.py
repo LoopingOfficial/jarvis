@@ -5,7 +5,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
+from urllib.parse import parse_qs, urlparse
 
+from .event_log import EventLog
 from .task_store import TaskStore
 
 
@@ -13,9 +15,11 @@ HOST = "0.0.0.0"
 PORT = 8765
 HEARTBEAT_TIMEOUT = 30.0
 
+EVENTS = EventLog()
 TASKS = TaskStore(
     lease_seconds=30.0,
     max_attempts=3,
+    event_sink=EVENTS.append,
 )
 
 
@@ -39,7 +43,15 @@ class ClusterState:
                     time.time(),
                 ),
                 "last_heartbeat": time.time(),
+                "current_task_id": existing.get("current_task_id"),
+                "current_task_started_at": existing.get("current_task_started_at"),
+                "completed_tasks": existing.get("completed_tasks", 0),
+                "failed_tasks": existing.get("failed_tasks", 0),
+                "last_error": existing.get("last_error"),
             }
+
+            EVENTS.append("WORKER_REGISTERED", worker_id=worker_id, details={"hostname": payload.get("hostname")})
+            EVENTS.append("WORKER_ONLINE", worker_id=worker_id)
 
             return dict(self.workers[worker_id])
 
@@ -63,6 +75,10 @@ class ClusterState:
 
             if "load" in payload:
                 worker["load"] = payload["load"]
+            for field in ("current_task_id", "current_task_started_at", "current_attempt", "lease_expires_at", "last_error"):
+                if field in payload:
+                    worker[field] = payload[field]
+            EVENTS.append("HEARTBEAT", worker_id=worker_id, details={"status": worker["status"]})
 
             return {
                 "ok": True,
@@ -78,18 +94,33 @@ class ClusterState:
         now = time.time()
 
         with self.lock:
-            workers = {}
+            worker_items = [(worker_id, dict(worker)) for worker_id, worker in self.workers.items()]
 
-            for worker_id, worker in self.workers.items():
-                item = dict(worker)
+        workers = {}
+        for worker_id, item in worker_items:
 
-                age = now - item["last_heartbeat"]
+            age = now - item["last_heartbeat"]
 
-                if age > HEARTBEAT_TIMEOUT:
-                    item["status"] = "offline"
+            if age > HEARTBEAT_TIMEOUT:
+                was_offline = item.get("status") == "offline"
+                item["status"] = "offline"
+                if not was_offline:
+                    EVENTS.append(
+                        "WORKER_OFFLINE",
+                        worker_id=worker_id,
+                        details={"heartbeat_age": round(age, 2)},
+                    )
 
-                item["heartbeat_age"] = round(age, 2)
-                workers[worker_id] = item
+            item["heartbeat_age"] = round(age, 2)
+            item["current_task"] = item.get("current_task_id")
+            task_id = item.get("current_task_id")
+            if task_id:
+                task = TASKS.get(task_id)
+                if task:
+                    item["current_task"] = task
+                    item["lease_remaining"] = max(0.0, (task.get("lease_expires_at") or now) - now)
+                    item["task_duration"] = max(0.0, now - (task.get("started_at") or now))
+            workers[worker_id] = item
 
             return {
                 "leader": "m4-local",
@@ -138,7 +169,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/health":
             self._send(
                 200,
                 {
@@ -149,14 +182,28 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        if self.path == "/workers":
+        if path == "/status":
+            snapshot = STATE.snapshot()
+            snapshot["tasks"] = TASKS.list()
+            snapshot["event_count"] = len(EVENTS.recent(limit=5000))
+            self._send(200, {"ok": True, **snapshot})
+            return
+
+        if path == "/events":
+            params = parse_qs(parsed.query)
+            since = params.get("since", [None])[0]
+            limit = int(params.get("limit", [500])[0])
+            self._send(200, {"ok": True, "events": EVENTS.recent(float(since) if since else None, limit)})
+            return
+
+        if path == "/workers":
             self._send(
                 200,
                 STATE.snapshot(),
             )
             return
 
-        if self.path == "/tasks":
+        if path == "/tasks":
             self._send(
                 200,
                 {
@@ -287,6 +334,16 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 )
 
+                if task:
+                    with STATE.lock:
+                        worker = STATE.workers.get(worker_id)
+                        if worker:
+                            worker["current_task_id"] = task["task_id"]
+                            worker["current_task_started_at"] = task.get("started_at")
+                            worker["current_attempt"] = task.get("attempts")
+                            worker["lease_expires_at"] = task.get("lease_expires_at")
+                            worker["status"] = "busy"
+
                 self._send(
                     200,
                     {
@@ -373,6 +430,15 @@ class Handler(BaseHTTPRequestHandler):
                     payload.get("result"),
                 )
 
+                if completed:
+                    with STATE.lock:
+                        worker = STATE.workers.get(worker_id)
+                        if worker:
+                            worker["current_task_id"] = None
+                            worker["current_task_started_at"] = None
+                            worker["completed_tasks"] = worker.get("completed_tasks", 0) + 1
+                            worker["status"] = "online"
+
                 self._send(
                     200 if completed else 409,
                     {
@@ -396,16 +462,25 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     return
 
+                error = str(payload.get("error", "worker_reported_failure"))
+                error_type = str(payload.get("error_type", "TERMINAL")).upper()
+                if error_type not in {"TRANSIENT", "TERMINAL"}:
+                    error_type = "TERMINAL"
                 failed = TASKS.fail(
                     task_id,
                     worker_id,
-                    str(
-                        payload.get(
-                            "error",
-                            "worker_reported_failure",
-                        )
-                    ),
+                    error,
+                    error_type=error_type,
                 )
+                if failed:
+                    with STATE.lock:
+                        worker = STATE.workers.get(worker_id)
+                        if worker:
+                            worker["current_task_id"] = None
+                            worker["current_task_started_at"] = None
+                            worker["failed_tasks"] = worker.get("failed_tasks", 0) + 1
+                            worker["last_error"] = error
+                            worker["status"] = "online"
 
                 self._send(
                     200 if failed else 409,

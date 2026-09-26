@@ -17,6 +17,10 @@ DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 DEFAULT_HEARTBEAT_INTERVAL = 5.0
 DEFAULT_CLAIM_INTERVAL = 2.0
 DEFAULT_RENEW_INTERVAL = 10.0
+TRANSIENT_ERROR_MARKERS = (
+    "timed out", "timeout", "connection refused", "temporarily",
+    "502", "503", "500", "model loading", "urlopen error",
+)
 
 
 class VelkoWorker:
@@ -30,6 +34,7 @@ class VelkoWorker:
         heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
         claim_interval: float = DEFAULT_CLAIM_INTERVAL,
         renew_interval: float = DEFAULT_RENEW_INTERVAL,
+        test_mode: bool = False,
     ):
         self.worker_id = worker_id
         self.coordinator = coordinator.rstrip("/")
@@ -39,12 +44,15 @@ class VelkoWorker:
         self.heartbeat_interval = heartbeat_interval
         self.claim_interval = claim_interval
         self.renew_interval = renew_interval
+        self.test_mode = test_mode and os.environ.get("VELKO_TEST_MODE") == "1"
 
         self.hostname = socket.gethostname()
         self.os_name = platform.system().lower()
 
         self.running = True
         self.busy = False
+        self.current_task_id = None
+        self.current_task_started_at = None
 
     def _post(
         self,
@@ -78,6 +86,7 @@ class VelkoWorker:
             "model": self.model,
             "python": platform.python_version(),
             "pid": os.getpid(),
+            "current_task_id": self.current_task_id,
         }
 
         result = self._post("/register", payload)
@@ -108,6 +117,8 @@ class VelkoWorker:
                     if self.busy
                     else 0
                 ),
+                "current_task_id": self.current_task_id,
+                "current_task_started_at": self.current_task_started_at,
             },
         )
 
@@ -360,6 +371,7 @@ class VelkoWorker:
         self,
         task_id: str,
         error: str,
+        error_type: str = "TERMINAL",
     ) -> None:
         response = self._post(
             "/failed",
@@ -367,6 +379,7 @@ class VelkoWorker:
                 "worker_id": self.worker_id,
                 "task_id": task_id,
                 "error": error,
+                "error_type": error_type,
             },
         )
 
@@ -397,6 +410,16 @@ class VelkoWorker:
         )
 
         self.busy = True
+        self.current_task_id = task_id
+        self.current_task_started_at = task.get("started_at")
+        fault = task.get("metadata", {}).get("test_fault")
+        if fault == "drop_lease" and self.test_mode:
+            print(f"[TEST FAULT] dropping lease for {task_id}", flush=True)
+            time.sleep(float(task.get("metadata", {}).get("test_fault_seconds", 35.0)))
+            self.busy = False
+            self.current_task_id = None
+            self.current_task_started_at = None
+            return
         renew_thread.start()
 
         try:
@@ -420,6 +443,7 @@ class VelkoWorker:
                 self.fail_task(
                     task_id,
                     str(exc),
+                    error_type=self._classify_error(exc),
                 )
             except Exception as fail_exc:
                 print(
@@ -434,6 +458,13 @@ class VelkoWorker:
                 timeout=2
             )
             self.busy = False
+            self.current_task_id = None
+            self.current_task_started_at = None
+
+    @staticmethod
+    def _classify_error(error: Exception) -> str:
+        message = str(error).lower()
+        return "TRANSIENT" if any(marker in message for marker in TRANSIENT_ERROR_MARKERS) else "TERMINAL"
 
     def work_loop(self) -> None:
         while self.running:
@@ -543,6 +574,12 @@ def parse_args() -> argparse.Namespace:
         default=[],
     )
 
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="Enable explicitly requested, opt-in test fault injection.",
+    )
+
     return parser.parse_args()
 
 
@@ -555,6 +592,7 @@ def main() -> None:
         capabilities=args.capabilities,
         model=args.model,
         ollama_url=args.ollama_url,
+        test_mode=args.test_mode,
     )
 
     worker.run()
