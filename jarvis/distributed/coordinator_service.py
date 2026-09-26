@@ -6,10 +6,17 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 
+from .task_store import TaskStore
+
 
 HOST = "0.0.0.0"
 PORT = 8765
 HEARTBEAT_TIMEOUT = 30.0
+
+TASKS = TaskStore(
+    lease_seconds=30.0,
+    max_attempts=3,
+)
 
 
 class ClusterState:
@@ -62,6 +69,11 @@ class ClusterState:
                 "worker_id": worker_id,
             }
 
+    def get_worker(self, worker_id: str) -> Dict[str, Any]:
+        with self.lock:
+            worker = self.workers.get(worker_id)
+            return dict(worker) if worker else {}
+
     def snapshot(self) -> Dict[str, Any]:
         now = time.time()
 
@@ -93,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send(
         self,
         status: int,
-        payload: Dict[str, Any],
+        payload: Any,
     ) -> None:
 
         body = json.dumps(
@@ -141,6 +153,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(
                 200,
                 STATE.snapshot(),
+            )
+            return
+
+        if self.path == "/tasks":
+            self._send(
+                200,
+                {
+                    "ok": True,
+                    "tasks": TASKS.list(),
+                },
             )
             return
 
@@ -194,9 +216,218 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
 
+            if self.path == "/tasks":
+                prompt = payload.get("prompt")
+
+                if not prompt:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "prompt_required",
+                        },
+                    )
+                    return
+
+                task = TASKS.create(
+                    prompt=prompt,
+                    required_capabilities=payload.get(
+                        "required_capabilities",
+                        [],
+                    ),
+                    dependencies=payload.get(
+                        "dependencies",
+                        [],
+                    ),
+                    metadata=payload.get(
+                        "metadata",
+                        {},
+                    ),
+                )
+
+                self._send(
+                    201,
+                    {
+                        "ok": True,
+                        "task": task,
+                    },
+                )
+                return
+
+            if self.path == "/claim":
+                worker_id = payload.get("worker_id")
+
+                if not worker_id:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "worker_id_required",
+                        },
+                    )
+                    return
+
+                worker = STATE.get_worker(worker_id)
+
+                if not worker:
+                    self._send(
+                        404,
+                        {
+                            "ok": False,
+                            "error": "worker_not_registered",
+                        },
+                    )
+                    return
+
+                task = TASKS.claim(
+                    worker_id=worker_id,
+                    capabilities=worker.get(
+                        "capabilities",
+                        [],
+                    ),
+                )
+
+                self._send(
+                    200,
+                    {
+                        "ok": True,
+                        "task": task,
+                    },
+                )
+                return
+
+            if self.path == "/renew":
+                task_id = payload.get("task_id")
+                worker_id = payload.get("worker_id")
+
+                if not task_id or not worker_id:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "task_id_and_worker_id_required",
+                        },
+                    )
+                    return
+
+                renewed = TASKS.renew(
+                    task_id,
+                    worker_id,
+                )
+
+                self._send(
+                    200 if renewed else 409,
+                    {
+                        "ok": renewed,
+                        "task_id": task_id,
+                    },
+                )
+                return
+
+            if self.path == "/progress":
+                task_id = payload.get("task_id")
+                worker_id = payload.get("worker_id")
+
+                if not task_id or not worker_id:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "task_id_and_worker_id_required",
+                        },
+                    )
+                    return
+
+                updated = TASKS.progress(
+                    task_id,
+                    worker_id,
+                    payload.get("progress"),
+                )
+
+                self._send(
+                    200 if updated else 409,
+                    {
+                        "ok": updated,
+                        "task_id": task_id,
+                    },
+                )
+                return
+
+            if self.path == "/complete":
+                task_id = payload.get("task_id")
+                worker_id = payload.get("worker_id")
+
+                if not task_id or not worker_id:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "task_id_and_worker_id_required",
+                        },
+                    )
+                    return
+
+                completed = TASKS.complete(
+                    task_id,
+                    worker_id,
+                    payload.get("result"),
+                )
+
+                self._send(
+                    200 if completed else 409,
+                    {
+                        "ok": completed,
+                        "task_id": task_id,
+                    },
+                )
+                return
+
+            if self.path == "/failed":
+                task_id = payload.get("task_id")
+                worker_id = payload.get("worker_id")
+
+                if not task_id or not worker_id:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "task_id_and_worker_id_required",
+                        },
+                    )
+                    return
+
+                failed = TASKS.fail(
+                    task_id,
+                    worker_id,
+                    str(
+                        payload.get(
+                            "error",
+                            "worker_reported_failure",
+                        )
+                    ),
+                )
+
+                self._send(
+                    200 if failed else 409,
+                    {
+                        "ok": failed,
+                        "task_id": task_id,
+                    },
+                )
+                return
+
             self._send(
                 404,
                 {"error": "not_found"},
+            )
+
+        except json.JSONDecodeError:
+            self._send(
+                400,
+                {
+                    "ok": False,
+                    "error": "invalid_json",
+                },
             )
 
         except Exception as exc:
@@ -228,6 +459,11 @@ def main() -> None:
     print("=" * 64)
     print(f"Local    : http://127.0.0.1:{PORT}")
     print(f"Tailscale: http://100.120.13.54:{PORT}")
+    print()
+    print("Task API : enabled")
+    print(f"Lease    : {TASKS.lease_seconds:.0f}s")
+    print(f"Retries  : {TASKS.max_attempts}")
+    print()
     print("CTRL+C pour arrêter")
     print("=" * 64)
 
