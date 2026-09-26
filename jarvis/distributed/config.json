@@ -1,0 +1,51 @@
+{
+  "cluster_name": "velko-home-cluster",
+  "leader": "m4-local",
+  "workers": {
+    "m4-local": {
+      "name": "MacBook M4",
+      "role": "leader",
+      "os": "macos",
+      "ollama_url": "http://127.0.0.1:11434",
+      "model": "qwen3.5:9b",
+      "priority": 80,
+      "capabilities": [
+        "orchestration",
+        "reasoning",
+        "coding",
+        "synthesis",
+        "tools"
+      ]
+    },
+    "rtx3080": {
+      "name": "RTX 3080 Worker",
+      "role": "power-worker",
+      "os": "windows",
+      "ollama_url": "http://100.69.142.4:11434",
+      "model": "qwen3.5:9b",
+      "priority": 100,
+      "capabilities": [
+        "coding",
+        "reasoning",
+        "vision",
+        "tools",
+        "heavy-task"
+      ]
+    },
+    "gtx1080": {
+      "name": "GTX 1080 Worker",
+      "role": "support-worker",
+      "os": "windows",
+      "ollama_url": "http://100.66.254.36:11434",
+      "model": "qwen3.5:9b",
+      "priority": 60,
+      "capabilities": [
+        "coding",
+        "analysis",
+        "testing",
+        "review",
+        "tools"
+      ]
+    }
+  }
+}
