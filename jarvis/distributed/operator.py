@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from .mission import Mission
 from .planner import MissionPlanner
 from .tools import ToolRegistry
+from .verifier import MissionVerifier
 from .workspace import GitWorkspaceManager
 
 
@@ -80,6 +81,7 @@ class MissionOperator:
 
         manager = GitWorkspaceManager(repository)
         mission.workspace = manager.create_workspace(mission.mission_id)
+        manager.create_task_branch("velko/" + mission.mission_id)
         tools = ToolRegistry(mission.workspace, allow_write=allow_write)
         mission.status = "running"
         mission.started_at = time.time()
@@ -127,8 +129,10 @@ class MissionOperator:
                 self.save(mission)
 
             mission.status = "verifying"
-            verification = {"git_status": tools.execute_tool("git_status", {}), "git_diff": tools.execute_tool("git_diff", {})}
+            verification = MissionVerifier().verify(mission, tools)
             mission.artifact("verification", "report", verification)
+            if verification["status"] != "PASS":
+                raise RuntimeError("mission_verification_" + verification["status"].lower())
             mission.result = {"mission_id": mission.mission_id, "workspace": mission.workspace, "artifacts": len(mission.artifacts), "verification": verification}
             mission.status = "completed"
             mission.completed_at = time.time()
