@@ -84,6 +84,7 @@ class DistributedAgentTests(unittest.TestCase):
 
     def test_structured_cli_result_is_separate_and_strictly_loaded(self):
         def runner(argv, **kwargs):
+            runner.last_argv = argv
             if argv[-1] == "--version":
                 return type("Completed", (), {"returncode": 0, "stdout": "codex", "stderr": ""})()
             if "--output-last-message" not in argv:
@@ -99,6 +100,11 @@ class DistributedAgentTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual("diagnostic text", result.content)
         self.assertEqual("replace", result.structured_output["changes"][0]["operation"])
+        command = runner.last_argv
+        self.assertEqual("return only JSON", command[-1])
+        self.assertLess(command.index("--output-schema"), command.index("return only JSON"))
+        self.assertTrue(result.raw["output_exists"])
+        self.assertEqual(16, result.raw["prompt_chars"])
 
     def test_structured_cli_result_missing_file_is_rejected(self):
         def runner(argv, **kwargs):

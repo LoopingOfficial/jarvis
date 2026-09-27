@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 import json
+import os
 import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
@@ -112,15 +113,46 @@ class CliProvider(AgentProvider):
         self._runner = runner
         self.probe_timeout = probe_timeout
 
-    def _probe_args(self, executable: str) -> List[str]:
-        prompt = "Reply exactly VELKO_READY"
+    def build_command(self, request: ExecutionRequest, executable: Optional[str] = None, schema_path: Optional[str] = None, output_path: Optional[str] = None) -> List[str]:
+        """Build the complete fixed argv for both probes and real executions.
+
+        Codex treats the prompt as the positional argument of ``exec``.  Keep it
+        last so optional flags cannot be mistaken for prompt text by wrappers.
+        """
+        executable = executable or self.executable
+        prompt = request.prompt
         if self.provider_id == "codex":
-            return [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort=none", prompt]
+            args = [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort=none"]
+            if request.structured_output:
+                if not schema_path or not output_path:
+                    raise ValueError("structured_output_paths_required")
+                args.extend(["--output-schema", schema_path, "--output-last-message", output_path])
+            args.append(prompt)
+            return args
         if self.provider_id == "claude":
-            return [executable, "-p", prompt, "--permission-mode", "plan"]
+            if request.structured_output:
+                raise ValueError("structured_output_unsupported:claude")
+            return [executable, "--permission-mode", "plan", "-p", prompt]
         if self.provider_id == "gemini":
+            if request.structured_output:
+                raise ValueError("structured_output_unsupported:gemini")
             return [executable, "-p", prompt]
-        return [executable, "run", prompt]
+        if self.provider_id == "opencode":
+            if request.structured_output:
+                raise ValueError("structured_output_unsupported:opencode")
+            return [executable, "run", prompt]
+        raise ValueError("no fixed adapter for provider")
+
+    def _probe_args(self, executable: str) -> List[str]:
+        return self.build_command(ExecutionRequest("healthcheck", "Reply exactly VELKO_READY"), executable=executable)
+
+    @staticmethod
+    def _diagnostic_text(value: Any, limit: int = 4000) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        return str(value)[:limit]
 
     @staticmethod
     def _classify_error(text: str, timed_out: bool = False) -> str:
@@ -183,20 +215,19 @@ class CliProvider(AgentProvider):
         executable = instance.metadata.get("executable")
         if not executable or not instance.functional:
             return ExecutionResult(False, self.provider_id, instance.instance_id, error="provider is not functional")
-        args = {
-            "codex": [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort=none", request.prompt],
-            "claude": [executable, "-p", request.prompt, "--permission-mode", "plan"],
-            "gemini": [executable, "-p", request.prompt],
-            "opencode": [executable, "run", request.prompt],
-        }.get(self.provider_id)
-        if not args:
-            return ExecutionResult(False, self.provider_id, instance.instance_id, error="no fixed adapter for provider")
         started = time.perf_counter()
+        args: List[str] = []
+        schema_path = None
+        output_path = None
+        schema_content = None
+        output_content = None
+        completed = None
+        content = ""
+        stderr = ""
+        timed_out = False
         try:
             structured = None
             with tempfile.TemporaryDirectory(prefix="velko-structured-") as directory:
-                schema_path = None
-                output_path = None
                 if request.structured_output:
                     if not isinstance(request.expected_schema, dict):
                         return ExecutionResult(False, self.provider_id, instance.instance_id, error="structured_output_schema_required")
@@ -204,18 +235,23 @@ class CliProvider(AgentProvider):
                     output_path = directory + "/result.json"
                     with open(schema_path, "w", encoding="utf-8") as handle:
                         json.dump(request.expected_schema, handle)
-                    args.extend(["--output-schema", schema_path, "--output-last-message", output_path])
+                    schema_content = json.dumps(request.expected_schema, ensure_ascii=False)
+                args = self.build_command(request, executable=executable, schema_path=schema_path, output_path=output_path)
                 completed = self._runner(args, cwd=request.workspace, capture_output=True, text=True, timeout=request.timeout, check=False)
-                content = (completed.stdout or "").strip()
-                error = None if completed.returncode == 0 else ((completed.stderr or content or "cli execution failed").strip()[:1000])
+                content = self._diagnostic_text(getattr(completed, "stdout", "")).strip()
+                stderr = self._diagnostic_text(getattr(completed, "stderr", "")).strip()
+                error = None if completed.returncode == 0 else (stderr or content or "cli execution failed")[:1000]
                 ok = completed.returncode == 0
                 if ok and request.structured_output:
                     try:
+                        with open(output_path, "r", encoding="utf-8") as handle:
+                            output_content = handle.read()
                         with open(output_path, "r", encoding="utf-8") as handle:
                             structured = json.load(handle)
                     except (OSError, TypeError, ValueError) as exc:
                         ok = False
                         error = "structured_output_invalid:{}".format(exc)
+                output_exists = bool(output_path and os.path.exists(output_path))
             instance.last_checked = time.time()
             instance.latency_ms = (time.perf_counter() - started) * 1000
             if ok:
@@ -226,12 +262,37 @@ class CliProvider(AgentProvider):
                 instance.status = self._classify_error((completed.stderr or content or ""))
                 instance.functional = False
                 instance.consecutive_failures += 1
-            return ExecutionResult(ok, self.provider_id, instance.instance_id, content=content, structured=structured, structured_output=structured, error=error, duration=time.perf_counter() - started, raw={"returncode": completed.returncode, "structured_output": structured})
-        except (OSError, subprocess.SubprocessError) as exc:
+            raw = {
+                "argv": args,
+                "prompt_chars": len(request.prompt),
+                "returncode": completed.returncode,
+                "exit_code": completed.returncode,
+                "timed_out": timed_out,
+                "duration": time.perf_counter() - started,
+                "stdout": content,
+                "stderr": stderr,
+                "schema_path": schema_path,
+                "schema_exists": bool(schema_path and os.path.exists(schema_path)),
+                "schema_content": schema_content,
+                "output_path": output_path,
+                "output_exists": output_exists,
+                "output_content": output_content,
+                "structured_output": structured,
+            }
+            return ExecutionResult(ok, self.provider_id, instance.instance_id, content=content, structured=structured, structured_output=structured, error=error, duration=time.perf_counter() - started, raw=raw)
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            stderr = self._diagnostic_text(getattr(exc, "stderr", ""))
+            content = self._diagnostic_text(getattr(exc, "output", ""))
+            instance.status = TIMEOUT
+            instance.functional = False
+            instance.consecutive_failures += 1
+            return ExecutionResult(False, self.provider_id, instance.instance_id, content=content, error="provider_timeout", duration=time.perf_counter() - started, raw={"argv": args, "prompt_chars": len(request.prompt), "returncode": None, "exit_code": None, "timed_out": True, "duration": time.perf_counter() - started, "stdout": content, "stderr": stderr, "schema_path": schema_path, "schema_exists": False, "schema_content": schema_content, "output_path": output_path, "output_exists": False, "output_content": None, "structured_output": None})
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
             instance.status = self._classify_error(str(exc), isinstance(exc, subprocess.TimeoutExpired))
             instance.functional = False
             instance.consecutive_failures += 1
-            return ExecutionResult(False, self.provider_id, instance.instance_id, error=str(exc), duration=time.perf_counter() - started)
+            return ExecutionResult(False, self.provider_id, instance.instance_id, error=str(exc), duration=time.perf_counter() - started, raw={"argv": args, "prompt_chars": len(request.prompt), "returncode": getattr(completed, "returncode", None), "exit_code": getattr(completed, "returncode", None), "timed_out": timed_out, "duration": time.perf_counter() - started, "stdout": content, "stderr": stderr, "schema_path": schema_path, "schema_exists": False, "schema_content": schema_content, "output_path": output_path, "output_exists": False, "output_content": output_content, "structured_output": None})
 
 
 class OllamaProvider(AgentProvider):
@@ -328,7 +389,10 @@ class AgentRegistry:
             result = self.provider_for(instance_id).execute(self.instance_for(instance_id), request)
             if result.ok:
                 return result
-            failures.append("{}: {}".format(instance_id, result.error))
+            diagnostics = ""
+            if result.raw:
+                diagnostics = "; diagnostics=" + json.dumps(result.raw, ensure_ascii=False, default=str)[:4000]
+            failures.append("{}: {}{}".format(instance_id, result.error or "provider_execution_failed", diagnostics))
         raise RuntimeError("agent_execution_failed; fallback=" + " | ".join(failures))
 
     def format_report(self) -> str:
