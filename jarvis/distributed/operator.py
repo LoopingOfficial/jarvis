@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .mission import Mission
+from .code_change import CodeChangeSet, PatchExecutor
 from .planner import MissionPlanner
 from .tools import ToolRegistry
 from .verifier import MissionVerifier
@@ -69,7 +70,34 @@ class MissionOperator:
     def load(self, mission_id: str) -> Mission:
         return Mission.from_dict(json.loads((MISSION_HOME / (mission_id + ".json")).read_text(encoding="utf-8")))
 
-    def run(self, request: str, repository: str, dry_run: bool = False, allow_write: bool = False, test_path: str = "tests") -> Mission:
+    def _remote(self, task: Any, prompt: str, mission_id: str) -> Dict[str, Any]:
+        capabilities = list(task.required_capabilities)
+        available = set(self.coordinator.available_capabilities())
+        if capabilities and not set(capabilities).issubset(available):
+            alternatives = ["reasoning", "analysis", "coding", "review", "synthesis"]
+            fallback = next((item for item in alternatives if item in available), None)
+            if fallback:
+                capabilities = [fallback]
+        remote = self.coordinator.create_task(prompt, task.task_type, capabilities, mission_id, [])
+        result = self.coordinator.wait(remote["task_id"], self.timeout)
+        worker_id = result.get("assigned_worker") or (result.get("result") or {}).get("worker_id")
+        return {"task": result, "worker_id": worker_id}
+
+    @staticmethod
+    def _repository_context(tools: ToolRegistry) -> Dict[str, Any]:
+        files = tools.list_files(".")
+        excerpts = {}
+        for relative in files:
+            if len(excerpts) >= 12:
+                break
+            if Path(relative).suffix in {".py", ".js", ".ts", ".json"}:
+                try:
+                    excerpts[relative] = tools.read_file(relative)[:12000]
+                except (OSError, UnicodeError):
+                    continue
+        return {"files": files[:200], "git_status": tools.git_status(), "excerpts": excerpts}
+
+    def run(self, request: str, repository: str, dry_run: bool = False, allow_write: bool = False, test_path: str = "tests", max_fix_attempts: int = 2, keep_workspace: bool = True, show_diff: bool = False) -> Mission:
         mission = Mission(request, workspace=None)
         mission.tasks = self.planner.plan(mission)
         mission.status = "ready"
@@ -83,6 +111,9 @@ class MissionOperator:
         mission.workspace = manager.create_workspace(mission.mission_id)
         manager.create_task_branch("velko/" + mission.mission_id)
         tools = ToolRegistry(mission.workspace, allow_write=allow_write)
+        patcher = PatchExecutor(mission.workspace)
+        context = {}
+        root_cause = ""
         mission.status = "running"
         mission.started_at = time.time()
         mission.event("WORKSPACE_CREATED", path=mission.workspace)
@@ -91,38 +122,68 @@ class MissionOperator:
 
         try:
             for task in mission.tasks:
+                if any(next((item for item in mission.tasks if item.task_id == dependency), None).status != "done" for dependency in task.depends_on):
+                    raise RuntimeError("task_dependency_not_satisfied:" + task.task_id)
                 task.status = "running"
                 mission.event("TASK_STARTED", task_id=task.task_id)
                 if task.task_type == "inspect":
-                    listing = tools.execute_tool("list_files", {"path": "."})
-                    status = tools.execute_tool("git_status", {})
-                    mission.artifact(task.task_id, "analysis", {"files": listing, "git_status": status}, path=mission.workspace)
-                    task.result = {"files": len(listing), "git_status": status}
+                    context = self._repository_context(tools)
+                    mission.artifact(task.task_id, "analysis", context, path=mission.workspace)
+                    task.result = {"files": len(context["files"]), "git_status": context["git_status"]}
+                elif task.task_type == "llm":
+                    prompt = "User request:\n{}\nRepository evidence (JSON):\n{}\nPrevious root cause:\n{}\nReturn a concise, evidence-bound answer; do not invent files or test results.".format(request, json.dumps(context, ensure_ascii=False), root_cause)
+                    remote = self._remote(task, prompt, mission.mission_id)
+                    result = remote["task"]
+                    task.worker_id = remote["worker_id"]
+                    task.result = result.get("result")
+                    artifact_type = "root_cause" if task.task_id == "analyze" else "final_report"
+                    mission.artifact(task.task_id, artifact_type, task.result, worker_id=task.worker_id, remote_task_id=result["task_id"])
+                    if task.task_id == "analyze":
+                        root_cause = (task.result or {}).get("content", "") if isinstance(task.result, dict) else str(task.result)
+                elif task.task_type == "code_change":
+                    prompt = "Return ONLY valid JSON, with no markdown or prose, matching exactly {{\"changes\":[{{\"operation\":\"replace\",\"path\":\"relative/path\",\"reason\":\"...\",\"before\":\"exact current text\",\"after\":\"replacement text\"}}]}}. User request: {}. Root cause: {}. Repository evidence: {}. The change must be minimal and testable.".format(request, root_cause, json.dumps(context, ensure_ascii=False))
+                    remote = self._remote(task, prompt, mission.mission_id)
+                    result = remote["task"]
+                    task.worker_id = remote["worker_id"]
+                    raw = (result.get("result") or {}).get("content", "")
+                    change_set = CodeChangeSet.from_json(raw)
+                    modified = patcher.apply(change_set)
+                    mission.artifact(task.task_id, "change_set", change_set.to_dict(), worker_id=task.worker_id, attempt=0)
+                    mission.artifact(task.task_id, "modified_files", modified, worker_id=task.worker_id, attempt=0)
+                    task.result = change_set.to_dict()
                 elif task.task_type == "test":
                     result = tools.execute_tool("run_tests", {"path": test_path})
                     mission.artifact(task.task_id, "test_result", result)
                     task.result = result
+                    fix_attempt = 0
+                    while result.get("returncode") != 0 and any(item.task_type == "code_change" for item in mission.tasks):
+                        if fix_attempt >= max_fix_attempts:
+                            task.status = "failed"
+                            raise RuntimeError("max_fix_attempts_exceeded")
+                        fix_attempt += 1
+                        patcher.rollback()
+                        correction_prompt = "Return ONLY valid JSON CodeChangeSet. Correct the failed tests. User request: {}. Root cause: {}. Current test result: {}. Current diff: {}".format(request, root_cause, json.dumps(result, ensure_ascii=False), tools.git_diff())
+                        remote = self._remote(task, correction_prompt, mission.mission_id)
+                        correction_result = remote["task"]
+                        raw = (correction_result.get("result") or {}).get("content", "")
+                        correction = CodeChangeSet.from_json(raw)
+                        modified = patcher.apply(correction)
+                        mission.artifact(task.task_id, "change_set", correction.to_dict(), worker_id=remote["worker_id"], attempt=fix_attempt)
+                        mission.artifact(task.task_id, "modified_files", modified, worker_id=remote["worker_id"], attempt=fix_attempt)
+                        result = tools.execute_tool("run_tests", {"path": test_path})
+                        mission.artifact(task.task_id, "test_result", result, attempt=fix_attempt)
+                        task.result = result
                     if result.get("returncode") != 0:
                         task.status = "failed"
                         raise RuntimeError("verification_tests_failed")
                 elif task.task_type == "review":
                     diff = tools.execute_tool("git_diff", {})
+                    review = {"decision": "PASS" if diff or not any(item.task_type == "code_change" for item in mission.tasks) else "NEEDS_FIX", "findings": [], "diff_length": len(diff)}
                     mission.artifact(task.task_id, "git_diff", diff)
-                    task.result = {"diff_length": len(diff), "status": "reviewed"}
+                    mission.artifact(task.task_id, "review", review)
+                    task.result = review
                 else:
-                    capabilities = list(task.required_capabilities)
-                    available = set(self.coordinator.available_capabilities())
-                    if capabilities and not set(capabilities).issubset(available):
-                        alternatives = ["reasoning", "analysis", "coding", "review", "synthesis"]
-                        fallback = next((item for item in alternatives if item in available), None)
-                        if fallback:
-                            capabilities = [fallback]
-                    remote = self.coordinator.create_task(task.prompt, task.task_type, capabilities, mission.mission_id, [])
-                    task.worker_id = remote.get("assigned_worker")
-                    result = self.coordinator.wait(remote["task_id"], self.timeout)
-                    task.worker_id = result.get("assigned_worker") or (result.get("result") or {}).get("worker_id")
-                    task.result = result.get("result")
-                    mission.artifact(task.task_id, "analysis", task.result, worker_id=task.worker_id, remote_task_id=remote["task_id"])
+                    raise RuntimeError("unsupported_operator_task_type:" + task.task_type)
                 task.progress = 100
                 task.status = "done"
                 mission.event("TASK_COMPLETED", task_id=task.task_id, worker_id=task.worker_id)
@@ -143,6 +204,8 @@ class MissionOperator:
             mission.event("MISSION_FAILED", error=str(exc))
         self.save(mission)
         self.print_report(mission)
+        if show_diff and mission.workspace:
+            print("\nDIFF\n{}".format(tools.git_diff()))
         return mission
 
     @staticmethod
@@ -175,6 +238,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-write", action="store_true", help="Enable explicitly requested workspace write tools")
     parser.add_argument("--test-path", default="tests", help="Workspace-relative unittest directory")
+    parser.add_argument("--max-fix-attempts", type=int, default=2)
+    parser.add_argument("--keep-workspace", action="store_true", default=True)
+    parser.add_argument("--show-diff", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--mission")
     args = parser.parse_args(argv)
@@ -186,7 +252,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if not args.request:
         parser.error("a mission request is required")
-    mission = operator.run(args.request, args.repo, args.dry_run, args.allow_write, args.test_path)
+    mission = operator.run(args.request, args.repo, args.dry_run, args.allow_write, args.test_path, max(0, args.max_fix_attempts), args.keep_workspace, args.show_diff)
     return 0 if mission.status in {"completed", "ready"} else 1
 
 

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from jarvis.distributed.mission import Mission
+from jarvis.distributed.code_change import CodeChangeSet, PatchExecutor
 from jarvis.distributed.planner import MissionPlanner
 from jarvis.distributed.tools import ToolRegistry
 
@@ -31,6 +32,23 @@ class DistributedOperatorTests(unittest.TestCase):
             registry = ToolRegistry(directory)
             with self.assertRaises(PermissionError):
                 registry.execute_tool("write_file", {"path": "x.txt", "content": "blocked"})
+
+    def test_structured_patch_applies_and_rolls_back_inside_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "bug.py")
+            path.write_text("return 1\n", encoding="utf-8")
+            change_set = CodeChangeSet.from_json('{"changes":[{"operation":"replace","path":"bug.py","reason":"fix","before":"return 1\\n","after":"return 2\\n"}]}')
+            executor = PatchExecutor(directory)
+            self.assertEqual(["bug.py"], executor.apply(change_set))
+            self.assertEqual("return 2\n", path.read_text(encoding="utf-8"))
+            executor.rollback()
+            self.assertEqual("return 1\n", path.read_text(encoding="utf-8"))
+
+    def test_structured_patch_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            change_set = CodeChangeSet.from_json('{"changes":[{"operation":"replace","path":"../bug.py","reason":"bad","before":"x","after":"y"}]}')
+            with self.assertRaises(ValueError):
+                PatchExecutor(directory).validate(change_set)
 
 
 if __name__ == "__main__":

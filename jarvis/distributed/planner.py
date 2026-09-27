@@ -17,7 +17,7 @@ class MissionPlanner:
             MissionTask("analyze", "Identifier la cause racine", "llm", request, ["inspect"], ["reasoning"]),
         ]
         if wants_change:
-            tasks.append(MissionTask("code", "Préparer le correctif", "code", "Propose un correctif vérifiable pour la demande utilisateur.", ["analyze"], ["coding", "tools"]))
+            tasks.append(MissionTask("code", "Produire le CodeChangeSet", "code_change", "Produis uniquement un CodeChangeSet JSON strict et vérifiable pour la demande utilisateur.", ["analyze"], ["coding", "tools"]))
             test_dependencies = ["code"]
             review_dependencies = ["code"]
         else:
