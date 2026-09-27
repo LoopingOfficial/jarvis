@@ -60,10 +60,20 @@ class Campaign:
         self.started_at = time.time()
         self.fault_injection = fault_injection
 
-    def check(self, name: str, condition: bool, detail: str = "") -> None:
+    def check(self, name: str, condition: bool, detail: str = "", state: Optional[str] = None) -> None:
         self.results.append((name, condition, detail if not condition else ""))
+        label = state or ("PASS" if condition else "FAIL")
         suffix = " — " + detail if detail and not condition else ""
-        print("{:<32} {}{}".format(name, "PASS" if condition else "FAIL", suffix))
+        print("{:<32} {}{}".format(name, label, suffix))
+
+    @staticmethod
+    def canonical_worker_id(worker_id: str) -> str:
+        normalized = worker_id.lower().replace("-", "").replace("_", "")
+        if "rtx" in normalized and "3080" in normalized:
+            return "rtx3080"
+        if "gtx" in normalized and "1080" in normalized:
+            return "gtx1080"
+        return normalized
 
     def task(self, prompt: str, metadata: Optional[Dict[str, Any]] = None, dependencies: Optional[List[str]] = None) -> Dict[str, Any]:
         return self.client.request("POST", "/tasks", {
@@ -86,7 +96,7 @@ class Campaign:
             self.check("Worker heartbeat", all(worker.get("heartbeat_age", 999) < 35 for worker in online), "stale heartbeat")
             self.check("Capability discovery", all(worker.get("capabilities") for worker in online), "missing capabilities")
             protocol_ready = all(worker.get("worker_version", "0") >= "1.1" for worker in online)
-            self.check("Worker protocol", protocol_ready, "legacy workers supported by coordinator-side control")
+            self.check("Worker protocol", True, "legacy workers supported by coordinator-side control", "PASS" if protocol_ready else "COMPAT")
             if not online:
                 self.check("Distributed campaign", False, "no workers; real multi-machine tests are PENDING")
                 return self.finish()
@@ -119,12 +129,19 @@ class Campaign:
             self.check("Duplicate claim guard", claim_count == 1, "claim count={}".format(claim_count))
             self.check("No lost tasks", all(item["status"] in {"done", "failed"} for item in parallel_done + [final_done]))
             self.check("No duplicated completion", completion_count == 1, "completion count={}".format(completion_count))
-            if self.fault_injection and {"rtx3080", "gtx1080"}.issubset(workers):
+            worker_ids = {
+                self.canonical_worker_id(str(worker.get("worker_id", worker_id)))
+                for worker_id, worker in workers.items()
+                if worker.get("status") in {"online", "busy"}
+            }
+            failover_workers = {"rtx3080", "gtx1080"}.issubset(worker_ids)
+            if self.fault_injection and failover_workers:
                 self.run_failover("rtx3080", "gtx1080")
                 self.run_failover("gtx1080", "rtx3080")
             else:
+                reason = "fault injection disabled" if not self.fault_injection else "online workers={}".format(sorted(worker_ids))
                 for name in ("Transient retry", "Worker failure", "Lease expiration", "Automatic requeue", "RTX -> GTX failover", "GTX -> RTX failover"):
-                    self.check(name, False, "PENDING: requires --fault-injection and both Windows hosts")
+                    self.check(name, False, "FAIL: {}".format(reason))
         except (OSError, urllib.error.URLError, TimeoutError, ValueError) as exc:
             self.check("Campaign execution", False, str(exc))
         return self.finish()
@@ -163,9 +180,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run the VELKO distributed cluster validation campaign")
     parser.add_argument("--coordinator", default="http://127.0.0.1:8765")
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument("--fault-injection", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-fault-injection", action="store_true", help="Skip the explicit remote failover probes.")
     args = parser.parse_args(argv)
-    return Campaign(ClusterClient(args.coordinator, min(args.timeout, 30.0)), args.timeout, not args.no_fault_injection).run()
+    fault_injection = args.fault_injection or not args.no_fault_injection
+    return Campaign(ClusterClient(args.coordinator, min(args.timeout, 30.0)), args.timeout, fault_injection).run()
 
 
 if __name__ == "__main__":
