@@ -16,7 +16,9 @@ class DistributedOperatorTests(unittest.TestCase):
         self.assertEqual({"inspect", "analyze", "code", "test", "review", "synthesis"}, set(by_id))
         self.assertEqual(["inspect"], by_id["analyze"].depends_on)
         self.assertEqual(["code"], by_id["test"].depends_on)
-        self.assertIn("coding", by_id["code"].required_capabilities)
+        self.assertEqual(["coding", "structured_output"], by_id["code"].required_capabilities)
+        self.assertNotIn("tools", by_id["code"].required_capabilities)
+        self.assertEqual([], by_id["test"].required_capabilities)
 
     def test_tools_cannot_escape_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

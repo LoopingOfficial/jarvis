@@ -13,19 +13,21 @@ class MissionPlanner:
         lower = request.lower()
         wants_change = any(word in lower for word in ("corrige", "fix", "implémente", "implement", "modifie", "change"))
         tasks = [
-            MissionTask("inspect", "Inspecter le repository", "inspect", "Inspecte la structure et les fichiers pertinents du repository.", required_capabilities=["tools"]),
+            # inspect/test/review are executed by the Operator's scoped tools;
+            # their capabilities must not be sent to an LLM provider.
+            MissionTask("inspect", "Inspecter le repository", "inspect", "Inspecte la structure et les fichiers pertinents du repository.", required_capabilities=[]),
             MissionTask("analyze", "Identifier la cause racine", "llm", request, ["inspect"], ["reasoning"]),
         ]
         if wants_change:
-            tasks.append(MissionTask("code", "Produire le CodeChangeSet", "code_change", "Produis uniquement un CodeChangeSet JSON strict et vérifiable pour la demande utilisateur.", ["analyze"], ["coding", "tools"]))
+            tasks.append(MissionTask("code", "Produire le CodeChangeSet", "code_change", "Produis uniquement un CodeChangeSet JSON strict et vérifiable pour la demande utilisateur.", ["analyze"], ["coding", "structured_output"]))
             test_dependencies = ["code"]
             review_dependencies = ["code"]
         else:
             test_dependencies = ["analyze"]
             review_dependencies = ["analyze"]
         tasks.extend([
-            MissionTask("test", "Exécuter les tests", "test", "Exécute les tests disponibles et collecte les preuves.", test_dependencies, ["testing", "tools"]),
-            MissionTask("review", "Revoir les résultats", "review", "Vérifie la cohérence de l'analyse et des preuves.", review_dependencies, ["review"]),
+            MissionTask("test", "Exécuter les tests", "test", "Exécute les tests disponibles et collecte les preuves.", test_dependencies, []),
+            MissionTask("review", "Revoir les résultats", "review", "Vérifie la cohérence de l'analyse et des preuves.", review_dependencies, []),
             MissionTask("synthesis", "Synthétiser le résultat", "llm", "Présente le résultat, les limites et les preuves.", ["test", "review"], ["reasoning"]),
         ])
         return tasks

@@ -10,7 +10,7 @@ class FakeProvider(AgentProvider):
         self.ok = ok
 
     def discover(self):
-        return [AgentInstance("fake@local", self.provider_id, "Fake", "test", capabilities={"reasoning", "coding"}, available=True, functional=True, status="READY", health="healthy", reason="test double")]
+        return [AgentInstance("fake@local", self.provider_id, "Fake", "test", capabilities={"reasoning", "coding", "structured_output"}, available=True, functional=True, status="READY", health="healthy", reason="test double")]
 
     def execute(self, instance, request):
         if not self.ok:
@@ -68,6 +68,18 @@ class DistributedAgentTests(unittest.TestCase):
         registry.discover()
         with self.assertRaisesRegex(RuntimeError, "no_available_agent"):
             registry.route(["coding"], forced_provider="ollama")
+
+    def test_code_change_contract_matches_codex_without_operator_tools(self):
+        registry = AgentRegistry(None, [FakeProvider()])
+        registry.discover()
+        decision = registry.route(["coding", "structured_output"])
+        self.assertEqual("fake@local", decision["selected"])
+
+    def test_strict_routing_blocks_missing_agent_capability(self):
+        registry = AgentRegistry(None, [FakeProvider()])
+        registry.discover()
+        with self.assertRaisesRegex(RuntimeError, "no_available_agent"):
+            registry.route(["coding", "structured_output", "review"])
 
 
 if __name__ == "__main__":

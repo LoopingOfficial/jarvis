@@ -136,7 +136,7 @@ class CliProvider(AgentProvider):
             provider_id=self.provider_id,
             display_name=self.display_name,
             host="m4-local",
-            capabilities={"reasoning", "analysis"},
+            capabilities={"reasoning", "analysis", "coding", "structured_output"},
             metadata={"executable": path or self.executable},
         )
         if not path:
