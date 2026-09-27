@@ -8,12 +8,9 @@ shell or user supplied command is accepted here.
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
@@ -113,16 +110,34 @@ class CliProvider(AgentProvider):
             completed = self._runner([path, "--version"], capture_output=True, text=True, timeout=5, check=False)
             version = (completed.stdout or completed.stderr or "").strip().splitlines()[0][:160]
             instance.available = completed.returncode == 0
-            instance.functional = False
+            instance.functional = instance.available
             instance.health = "healthy" if instance.available else "unhealthy"
-            instance.reason = (version + "; detected, execution adapter unavailable") if instance.available else "version check failed"
+            instance.reason = (version + "; fixed read-only/plan adapter") if instance.available else "version check failed"
             instance.metadata["version"] = version
         except (OSError, subprocess.SubprocessError) as exc:
             instance.reason = "healthcheck failed: {}".format(exc)
         return [instance]
 
     def execute(self, instance: AgentInstance, request: ExecutionRequest) -> ExecutionResult:
-        return ExecutionResult(False, self.provider_id, instance.instance_id, error="{} execution adapter is not enabled".format(self.display_name))
+        executable = instance.metadata.get("executable")
+        if not executable or not instance.functional:
+            return ExecutionResult(False, self.provider_id, instance.instance_id, error="provider is not functional")
+        args = {
+            "codex": [executable, "exec", "--sandbox", "read-only", request.prompt],
+            "claude": [executable, "-p", request.prompt, "--permission-mode", "plan"],
+            "gemini": [executable, "-p", request.prompt],
+            "opencode": [executable, "run", request.prompt],
+        }.get(self.provider_id)
+        if not args:
+            return ExecutionResult(False, self.provider_id, instance.instance_id, error="no fixed adapter for provider")
+        started = time.perf_counter()
+        try:
+            completed = self._runner(args, cwd=request.workspace, capture_output=True, text=True, timeout=request.timeout, check=False)
+            content = (completed.stdout or "").strip()
+            error = None if completed.returncode == 0 else ((completed.stderr or content or "cli execution failed").strip()[:1000])
+            return ExecutionResult(completed.returncode == 0, self.provider_id, instance.instance_id, content=content, error=error, duration=time.perf_counter() - started, raw={"returncode": completed.returncode})
+        except (OSError, subprocess.SubprocessError) as exc:
+            return ExecutionResult(False, self.provider_id, instance.instance_id, error=str(exc), duration=time.perf_counter() - started)
 
 
 class OllamaProvider(AgentProvider):

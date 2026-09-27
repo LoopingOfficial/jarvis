@@ -79,7 +79,7 @@ class MissionOperator:
         return Mission.from_dict(json.loads((MISSION_HOME / (mission_id + ".json")).read_text(encoding="utf-8")))
 
     def _remote(self, task: Any, prompt: str, mission_id: str, forced_provider: Optional[str] = None) -> Dict[str, Any]:
-        request = ExecutionRequest(task.task_id, prompt, required_capabilities=list(task.required_capabilities), structured_output=task.task_type == "code_change", timeout=self.timeout)
+        request = ExecutionRequest(task.task_id, prompt, workspace=getattr(self, "_active_workspace", None), required_capabilities=list(task.required_capabilities), structured_output=task.task_type == "code_change", timeout=self.timeout)
         if not self.agents.instances:
             self.agents.discover()
         decision = self.agents.route(request.required_capabilities, forced_provider)
@@ -117,6 +117,7 @@ class MissionOperator:
         mission.workspace = manager.create_workspace(mission.mission_id)
         manager.create_task_branch("velko/" + mission.mission_id)
         tools = ToolRegistry(mission.workspace, allow_write=allow_write)
+        self._active_workspace = mission.workspace
         patcher = PatchExecutor(mission.workspace)
         context = {}
         root_cause = ""

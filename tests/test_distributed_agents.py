@@ -46,6 +46,20 @@ class DistributedAgentTests(unittest.TestCase):
         self.assertTrue(instance.available)
         self.assertEqual("codex 1.2", instance.metadata["version"])
 
+    def test_cli_execution_uses_fixed_argv_without_shell(self):
+        calls = []
+
+        def runner(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return type("Completed", (), {"returncode": 0, "stdout": "answer", "stderr": ""})()
+
+        provider = CliProvider("codex", "codex", "Codex", lambda name: "/safe/codex", runner)
+        instance = provider.discover()[0]
+        result = provider.execute(instance, ExecutionRequest("t", "inspect", workspace="/tmp"))
+        self.assertTrue(result.ok)
+        self.assertEqual(["/safe/codex", "exec", "--sandbox", "read-only", "inspect"], calls[-1][0])
+        self.assertNotIn("shell", calls[-1][1])
+
     def test_forced_provider_rejects_other_agents(self):
         registry = AgentRegistry(None, [FakeProvider()])
         registry.discover()
