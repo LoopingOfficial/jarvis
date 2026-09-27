@@ -91,7 +91,17 @@ class ToolRegistry:
         return self._git(["status", "--short"])
 
     def git_diff(self) -> str:
-        return self._git(["diff", "--"])
+        raw = self._git(["diff", "--"])
+        chunks = raw.split("diff --git ")
+        kept = []
+        for chunk in chunks:
+            if not chunk:
+                continue
+            header = chunk.splitlines()[0] if chunk.splitlines() else ""
+            if any(path in header for path in ("a/.claude/helpers/", "b/.claude/helpers/", "a/.claude-flow/", "b/.claude-flow/")):
+                continue
+            kept.append("diff --git " + chunk)
+        return "".join(kept)
 
     def run_tests(self, path: str) -> Dict[str, Any]:
         test_path = self._path(path)

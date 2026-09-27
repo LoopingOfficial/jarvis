@@ -22,6 +22,15 @@ CLI_COMMANDS = {
     "opencode": ("opencode", "OpenCode"),
 }
 
+READY = "READY"
+INSTALLED = "INSTALLED"
+DEGRADED = "DEGRADED"
+UNAUTHENTICATED = "UNAUTHENTICATED"
+QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
+TIMEOUT = "TIMEOUT"
+OFFLINE = "OFFLINE"
+ERROR = "ERROR"
+
 
 @dataclass
 class ExecutionRequest:
@@ -56,9 +65,14 @@ class AgentInstance:
     capabilities: Set[str] = field(default_factory=set)
     available: bool = False
     functional: bool = False
+    status: str = INSTALLED
     health: str = "unknown"
     reason: str = "not checked"
     load: float = 0.0
+    last_checked: Optional[float] = None
+    last_success: Optional[float] = None
+    consecutive_failures: int = 0
+    latency_ms: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -86,12 +100,34 @@ class CliProvider(AgentProvider):
     invokes a shell and never accepts an arbitrary executable from mission data.
     """
 
-    def __init__(self, provider_id: str, executable: str, display_name: str, which: Callable[[str], Optional[str]] = shutil.which, runner: Callable[..., Any] = subprocess.run) -> None:
+    def __init__(self, provider_id: str, executable: str, display_name: str, which: Callable[[str], Optional[str]] = shutil.which, runner: Callable[..., Any] = subprocess.run, probe_timeout: float = 15.0) -> None:
         self.provider_id = provider_id
         self.executable = executable
         self.display_name = display_name
         self._which = which
         self._runner = runner
+        self.probe_timeout = probe_timeout
+
+    def _probe_args(self, executable: str) -> List[str]:
+        prompt = "Reply exactly VELKO_READY"
+        if self.provider_id == "codex":
+            return [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort=none", prompt]
+        if self.provider_id == "claude":
+            return [executable, "-p", prompt, "--permission-mode", "plan"]
+        if self.provider_id == "gemini":
+            return [executable, "-p", prompt]
+        return [executable, "run", prompt]
+
+    @staticmethod
+    def _classify_error(text: str, timed_out: bool = False) -> str:
+        lower = text.lower()
+        if timed_out:
+            return TIMEOUT
+        if any(marker in lower for marker in ("weekly limit", "usage limit", "rate limit", "quota exhausted", "quota limit")):
+            return QUOTA_EXHAUSTED
+        if any(marker in lower for marker in ("unauthorized", "unauthenticated", "invalid api key", "authentication required")):
+            return UNAUTHENTICATED
+        return ERROR
 
     def discover(self) -> List[AgentInstance]:
         path = self._which(self.executable)
@@ -104,17 +140,38 @@ class CliProvider(AgentProvider):
             metadata={"executable": path or self.executable},
         )
         if not path:
+            instance.status = OFFLINE
             instance.reason = "executable not found on PATH"
             return [instance]
+        instance.available = True
+        instance.last_checked = time.time()
         try:
             completed = self._runner([path, "--version"], capture_output=True, text=True, timeout=5, check=False)
             version = (completed.stdout or completed.stderr or "").strip().splitlines()[0][:160]
-            instance.available = completed.returncode == 0
-            instance.functional = instance.available
-            instance.health = "healthy" if instance.available else "unhealthy"
-            instance.reason = (version + "; fixed read-only/plan adapter") if instance.available else "version check failed"
             instance.metadata["version"] = version
+            if completed.returncode != 0:
+                instance.status = ERROR
+                instance.health = "unhealthy"
+                instance.reason = "version check failed"
+                return [instance]
+            started = time.perf_counter()
+            probe = self._runner(self._probe_args(path), cwd=None, capture_output=True, text=True, timeout=self.probe_timeout, check=False)
+            instance.latency_ms = (time.perf_counter() - started) * 1000
+            probe_text = ((probe.stdout or "") + "\n" + (probe.stderr or "")).strip()
+            instance.last_checked = time.time()
+            if probe.returncode == 0 and "VELKO_READY" in probe.stdout:
+                instance.functional = True
+                instance.status = READY
+                instance.health = "healthy"
+                instance.reason = "real execution probe passed"
+                instance.last_success = instance.last_checked
+            else:
+                instance.status = self._classify_error(probe_text)
+                instance.health = "degraded"
+                instance.reason = probe_text[-500:] or "real execution probe failed"
         except (OSError, subprocess.SubprocessError) as exc:
+            instance.status = self._classify_error(str(exc), isinstance(exc, subprocess.TimeoutExpired))
+            instance.health = "degraded"
             instance.reason = "healthcheck failed: {}".format(exc)
         return [instance]
 
@@ -123,7 +180,7 @@ class CliProvider(AgentProvider):
         if not executable or not instance.functional:
             return ExecutionResult(False, self.provider_id, instance.instance_id, error="provider is not functional")
         args = {
-            "codex": [executable, "exec", "--sandbox", "read-only", request.prompt],
+            "codex": [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort=none", request.prompt],
             "claude": [executable, "-p", request.prompt, "--permission-mode", "plan"],
             "gemini": [executable, "-p", request.prompt],
             "opencode": [executable, "run", request.prompt],
@@ -135,8 +192,22 @@ class CliProvider(AgentProvider):
             completed = self._runner(args, cwd=request.workspace, capture_output=True, text=True, timeout=request.timeout, check=False)
             content = (completed.stdout or "").strip()
             error = None if completed.returncode == 0 else ((completed.stderr or content or "cli execution failed").strip()[:1000])
-            return ExecutionResult(completed.returncode == 0, self.provider_id, instance.instance_id, content=content, error=error, duration=time.perf_counter() - started, raw={"returncode": completed.returncode})
+            ok = completed.returncode == 0
+            instance.last_checked = time.time()
+            instance.latency_ms = (time.perf_counter() - started) * 1000
+            if ok:
+                instance.status = READY
+                instance.last_success = instance.last_checked
+                instance.consecutive_failures = 0
+            else:
+                instance.status = self._classify_error((completed.stderr or content or ""))
+                instance.functional = False
+                instance.consecutive_failures += 1
+            return ExecutionResult(ok, self.provider_id, instance.instance_id, content=content, error=error, duration=time.perf_counter() - started, raw={"returncode": completed.returncode})
         except (OSError, subprocess.SubprocessError) as exc:
+            instance.status = self._classify_error(str(exc), isinstance(exc, subprocess.TimeoutExpired))
+            instance.functional = False
+            instance.consecutive_failures += 1
             return ExecutionResult(False, self.provider_id, instance.instance_id, error=str(exc), duration=time.perf_counter() - started)
 
 
@@ -151,7 +222,7 @@ class OllamaProvider(AgentProvider):
         try:
             status = self.coordinator.status()
         except Exception as exc:
-            return [AgentInstance("ollama@cluster", self.provider_id, "Ollama distributed", "cluster", available=False, health="unreachable", reason=str(exc))]
+            return [AgentInstance("ollama@cluster", self.provider_id, "Ollama distributed", "cluster", available=False, status=OFFLINE, health="unreachable", reason=str(exc))]
         instances = []
         for worker_id, worker in status.get("workers", {}).items():
             state = str(worker.get("status", "offline"))
@@ -168,6 +239,7 @@ class OllamaProvider(AgentProvider):
                 capabilities=capabilities,
                 available=state in {"online", "busy"},
                 functional=state in {"online", "busy"},
+                status=READY if state in {"online", "busy"} else OFFLINE,
                 health="healthy" if state in {"online", "busy"} else "offline",
                 reason="coordinator status: {}".format(state),
                 load=float(worker.get("load") or 0),
@@ -208,7 +280,7 @@ class AgentRegistry:
 
     def route(self, required_capabilities: Iterable[str], forced_provider: Optional[str] = None) -> Dict[str, Any]:
         required = set(required_capabilities)
-        candidates = [item for item in self.instances if item.available and item.functional and required.issubset(item.capabilities) and (not forced_provider or item.provider_id == forced_provider)]
+        candidates = [item for item in self.instances if item.status == READY and item.functional and required.issubset(item.capabilities) and (not forced_provider or item.provider_id == forced_provider)]
         candidates.sort(key=lambda item: (item.load, -len(item.capabilities), item.instance_id))
         reason = "required capabilities={} ; candidates={} ; selected={}".format(sorted(required), [item.instance_id for item in candidates], candidates[0].instance_id if candidates else None)
         decision = {"required_capabilities": sorted(required), "candidates": [item.instance_id for item in candidates], "selected": candidates[0].instance_id if candidates else None, "reason": reason}
@@ -239,6 +311,5 @@ class AgentRegistry:
     def format_report(self) -> str:
         lines = ["VELKO AGENTS"]
         for item in self.instances:
-            state = "READY" if item.functional else ("DETECTED" if item.available else "UNAVAILABLE")
-            lines.append("{} {:<11} {:<22} {}".format(state, item.provider_id, item.instance_id, item.reason))
+            lines.append("{} {:<11} {:<22} installed={} operational={} latency_ms={} reason={}".format(item.status, item.provider_id, item.instance_id, "yes" if item.available else "no", "yes" if item.functional else "no", "{:.1f}".format(item.latency_ms) if item.latency_ms is not None else "-", item.reason))
         return "\n".join(lines)

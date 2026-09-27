@@ -10,7 +10,7 @@ class FakeProvider(AgentProvider):
         self.ok = ok
 
     def discover(self):
-        return [AgentInstance("fake@local", self.provider_id, "Fake", "test", capabilities={"reasoning", "coding"}, available=True, functional=True, health="healthy", reason="test double")]
+        return [AgentInstance("fake@local", self.provider_id, "Fake", "test", capabilities={"reasoning", "coding"}, available=True, functional=True, status="READY", health="healthy", reason="test double")]
 
     def execute(self, instance, request):
         if not self.ok:
@@ -38,26 +38,29 @@ class DistributedAgentTests(unittest.TestCase):
             return "/safe/{}".format(name)
 
         def runner(argv, **kwargs):
-            self.assertEqual(["/safe/codex", "--version"], argv)
             self.assertFalse(kwargs.get("shell", False))
-            return type("Completed", (), {"returncode": 0, "stdout": "codex 1.2\n", "stderr": ""})()
+            if argv[-1] == "--version":
+                return type("Completed", (), {"returncode": 0, "stdout": "codex 1.2\n", "stderr": ""})()
+            return type("Completed", (), {"returncode": 0, "stdout": "VELKO_READY\n", "stderr": ""})()
 
         instance = CliProvider("codex", "codex", "Codex", which, runner).discover()[0]
         self.assertTrue(instance.available)
         self.assertEqual("codex 1.2", instance.metadata["version"])
+        self.assertEqual("READY", instance.status)
 
     def test_cli_execution_uses_fixed_argv_without_shell(self):
         calls = []
 
         def runner(argv, **kwargs):
             calls.append((argv, kwargs))
-            return type("Completed", (), {"returncode": 0, "stdout": "answer", "stderr": ""})()
+            output = "codex 1.2" if argv[-1] == "--version" else ("VELKO_READY" if "VELKO_READY" in argv[-1] else "answer")
+            return type("Completed", (), {"returncode": 0, "stdout": output, "stderr": ""})()
 
         provider = CliProvider("codex", "codex", "Codex", lambda name: "/safe/codex", runner)
         instance = provider.discover()[0]
         result = provider.execute(instance, ExecutionRequest("t", "inspect", workspace="/tmp"))
         self.assertTrue(result.ok)
-        self.assertEqual(["/safe/codex", "exec", "--sandbox", "read-only", "inspect"], calls[-1][0])
+        self.assertEqual(["/safe/codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort=none", "inspect"], calls[-1][0])
         self.assertNotIn("shell", calls[-1][1])
 
     def test_forced_provider_rejects_other_agents(self):

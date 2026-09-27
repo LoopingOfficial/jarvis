@@ -91,7 +91,8 @@ class MissionOperator:
 
     @staticmethod
     def _repository_context(tools: ToolRegistry) -> Dict[str, Any]:
-        files = tools.list_files(".")
+        all_files = tools.list_files(".")
+        files = [item for item in all_files if not item.startswith((".claude/", ".claude-flow/", ".agents/", ".git/"))]
         excerpts = {}
         for relative in files:
             if len(excerpts) >= 12:
@@ -142,9 +143,9 @@ class MissionOperator:
                     remote = self._remote(task, prompt, mission.mission_id, forced_provider)
                     result = remote["task"]
                     task.worker_id = remote["worker_id"]
-                    task.result = result.get("result") if isinstance(result, dict) else remote["content"]
+                    task.result = result.get("result") if isinstance(result, dict) and result.get("result") is not None else remote["content"]
                     artifact_type = "root_cause" if task.task_id == "analyze" else "final_report"
-                    mission.artifact(task.task_id, artifact_type, task.result, worker_id=task.worker_id, remote_task_id=result["task_id"])
+                    mission.artifact(task.task_id, artifact_type, task.result, worker_id=task.worker_id, remote_task_id=result.get("task_id") if isinstance(result, dict) else None)
                     if task.task_id == "analyze":
                         root_cause = (task.result or {}).get("content", "") if isinstance(task.result, dict) else str(task.result)
                 elif task.task_type == "code_change":
@@ -206,7 +207,7 @@ class MissionOperator:
             mission.completed_at = time.time()
             mission.event("MISSION_COMPLETED", artifact_count=len(mission.artifacts))
         except (OSError, RuntimeError, TimeoutError, ValueError, urllib.error.URLError) as exc:
-            mission.status = "blocked" if "operator_task_timeout" in str(exc) else "failed"
+            mission.status = "blocked" if any(marker in str(exc) for marker in ("operator_task_timeout", "no_available_agent", "agent_execution_failed")) else "failed"
             mission.error = str(exc)
             mission.event("MISSION_FAILED", error=str(exc))
         self.save(mission)
