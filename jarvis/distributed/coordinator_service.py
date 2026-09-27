@@ -151,10 +151,10 @@ class ClusterState:
                     item["task_duration"] = max(0.0, now - (task.get("started_at") or now))
             workers[worker_id] = item
 
-            return {
-                "leader": "m4-local",
-                "workers": workers,
-            }
+        return {
+            "leader": "m4-local",
+            "workers": workers,
+        }
 
 
 STATE = ClusterState()
