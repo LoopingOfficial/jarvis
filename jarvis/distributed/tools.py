@@ -96,7 +96,13 @@ class ToolRegistry:
         test_path = self._path(path)
         if not test_path.exists():
             return {"returncode": 2, "stdout": "", "stderr": "test_path_not_found"}
-        completed = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(test_path)], cwd=str(self.root), capture_output=True, text=True, timeout=180, check=False)
+        if test_path.is_file():
+            command = [sys.executable, str(test_path)]
+        else:
+            command = [sys.executable, "-m", "unittest", "discover", "-s", str(test_path)]
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(self.root) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else "")
+        completed = subprocess.run(command, cwd=str(self.root), env=environment, capture_output=True, text=True, timeout=180, check=False)
         return {"returncode": completed.returncode, "stdout": completed.stdout[-20000:], "stderr": completed.stderr[-10000:]}
 
     def write_file(self, relative: str, content: str) -> str:
