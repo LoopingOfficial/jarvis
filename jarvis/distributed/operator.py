@@ -20,6 +20,31 @@ from .workspace import GitWorkspaceManager
 from .agents import AgentRegistry, ExecutionRequest
 
 
+CODE_CHANGE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["changes"],
+    "properties": {
+        "changes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["operation", "path", "reason", "after"],
+                "properties": {
+                    "operation": {"enum": ["replace", "create"]},
+                    "path": {"type": "string", "minLength": 1},
+                    "reason": {"type": "string"},
+                    "before": {"type": ["string", "null"]},
+                    "after": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
 MISSION_HOME = Path.home() / ".velko" / "missions"
 
 
@@ -79,7 +104,7 @@ class MissionOperator:
         return Mission.from_dict(json.loads((MISSION_HOME / (mission_id + ".json")).read_text(encoding="utf-8")))
 
     def _remote(self, task: Any, prompt: str, mission_id: str, forced_provider: Optional[str] = None) -> Dict[str, Any]:
-        request = ExecutionRequest(task.task_id, prompt, workspace=getattr(self, "_active_workspace", None), required_capabilities=list(task.required_capabilities), structured_output=task.task_type == "code_change", timeout=self.timeout)
+        request = ExecutionRequest(task.task_id, prompt, workspace=getattr(self, "_active_workspace", None), required_capabilities=list(task.required_capabilities), structured_output=task.task_type == "code_change", expected_schema=CODE_CHANGE_SCHEMA if task.task_type == "code_change" else None, timeout=self.timeout)
         if not self.agents.instances:
             self.agents.discover()
         decision = self.agents.route(request.required_capabilities, forced_provider)
@@ -87,7 +112,7 @@ class MissionOperator:
         result = self.agents.execute(request, forced_provider)
         worker_id = result.raw.get("assigned_worker") if isinstance(result.raw, dict) else None
         worker_id = worker_id or result.agent_instance_id
-        return {"task": result.raw, "worker_id": worker_id, "content": result.content, "routing": decision}
+        return {"task": result.raw, "worker_id": worker_id, "content": result.content, "structured_output": result.structured_output, "routing": decision}
 
     @staticmethod
     def _repository_context(tools: ToolRegistry) -> Dict[str, Any]:
@@ -149,11 +174,11 @@ class MissionOperator:
                     if task.task_id == "analyze":
                         root_cause = (task.result or {}).get("content", "") if isinstance(task.result, dict) else str(task.result)
                 elif task.task_type == "code_change":
-                    prompt = "Return ONLY valid JSON, with no markdown or prose, matching exactly {{\"changes\":[{{\"operation\":\"replace\",\"path\":\"relative/path\",\"reason\":\"...\",\"before\":\"exact current text\",\"after\":\"replacement text\"}}]}}. User request: {}. Root cause: {}. Repository evidence: {}. The change must be minimal and testable.".format(request, root_cause, json.dumps(context, ensure_ascii=False))
+                    prompt = "Return ONLY the JSON object matching the supplied schema, with no markdown or prose. Every path MUST be repository-relative (for example jarvis/distributed/file.py), never absolute and never containing .. . Use only replace/create operations. User request: {}. Root cause: {}. Repository evidence: {}. The change must be minimal and testable.".format(request, root_cause, json.dumps(context, ensure_ascii=False))
                     remote = self._remote(task, prompt, mission.mission_id, forced_provider)
                     result = remote["task"]
                     task.worker_id = remote["worker_id"]
-                    raw = (result.get("result") or {}).get("content", "") if isinstance(result, dict) else remote["content"]
+                    raw = json.dumps(remote["structured_output"]) if remote.get("structured_output") is not None else ((result.get("result") or {}).get("content", "") if isinstance(result, dict) else remote["content"])
                     change_set = CodeChangeSet.from_json(raw)
                     modified = patcher.apply(change_set)
                     mission.artifact(task.task_id, "change_set", change_set.to_dict(), worker_id=task.worker_id, attempt=0)
@@ -173,7 +198,7 @@ class MissionOperator:
                         correction_prompt = "Return ONLY valid JSON CodeChangeSet. Correct the failed tests. User request: {}. Root cause: {}. Current test result: {}. Current diff: {}".format(request, root_cause, json.dumps(result, ensure_ascii=False), tools.git_diff())
                         remote = self._remote(task, correction_prompt, mission.mission_id, forced_provider)
                         correction_result = remote["task"]
-                        raw = (correction_result.get("result") or {}).get("content", "") if isinstance(correction_result, dict) else remote["content"]
+                        raw = json.dumps(remote["structured_output"]) if remote.get("structured_output") is not None else ((correction_result.get("result") or {}).get("content", "") if isinstance(correction_result, dict) else remote["content"])
                         correction = CodeChangeSet.from_json(raw)
                         modified = patcher.apply(correction)
                         mission.artifact(task.task_id, "change_set", correction.to_dict(), worker_id=remote["worker_id"], attempt=fix_attempt)

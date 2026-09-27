@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from jarvis.distributed.agents import AgentInstance, AgentProvider, AgentRegistry, CliProvider, ExecutionRequest, ExecutionResult
@@ -80,6 +81,38 @@ class DistributedAgentTests(unittest.TestCase):
         registry.discover()
         with self.assertRaisesRegex(RuntimeError, "no_available_agent"):
             registry.route(["coding", "structured_output", "review"])
+
+    def test_structured_cli_result_is_separate_and_strictly_loaded(self):
+        def runner(argv, **kwargs):
+            if argv[-1] == "--version":
+                return type("Completed", (), {"returncode": 0, "stdout": "codex", "stderr": ""})()
+            if "--output-last-message" not in argv:
+                return type("Completed", (), {"returncode": 0, "stdout": "VELKO_READY", "stderr": ""})()
+            output_path = argv[argv.index("--output-last-message") + 1]
+            with open(output_path, "w", encoding="utf-8") as handle:
+                json.dump({"changes": [{"operation": "replace", "path": "x.py", "reason": "test", "before": "return False", "after": "return True"}]}, handle)
+            return type("Completed", (), {"returncode": 0, "stdout": "diagnostic text", "stderr": ""})()
+
+        provider = CliProvider("codex", "codex", "Codex", lambda name: "/safe/codex", runner)
+        instance = provider.discover()[0]
+        result = provider.execute(instance, ExecutionRequest("t", "return only JSON", structured_output=True, expected_schema={"type": "object"}))
+        self.assertTrue(result.ok)
+        self.assertEqual("diagnostic text", result.content)
+        self.assertEqual("replace", result.structured_output["changes"][0]["operation"])
+
+    def test_structured_cli_result_missing_file_is_rejected(self):
+        def runner(argv, **kwargs):
+            if argv[-1] == "--version":
+                return type("Completed", (), {"returncode": 0, "stdout": "codex", "stderr": ""})()
+            if "--output-last-message" not in argv:
+                return type("Completed", (), {"returncode": 0, "stdout": "VELKO_READY", "stderr": ""})()
+            return type("Completed", (), {"returncode": 0, "stdout": "not structured", "stderr": ""})()
+
+        provider = CliProvider("codex", "codex", "Codex", lambda name: "/safe/codex", runner)
+        instance = provider.discover()[0]
+        result = provider.execute(instance, ExecutionRequest("t", "return only JSON", structured_output=True, expected_schema={"type": "object"}))
+        self.assertFalse(result.ok)
+        self.assertTrue(result.error.startswith("structured_output_invalid:"))
 
 
 if __name__ == "__main__":

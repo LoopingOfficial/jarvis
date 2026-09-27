@@ -11,6 +11,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+import json
+import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
@@ -39,6 +41,7 @@ class ExecutionRequest:
     workspace: Optional[str] = None
     required_capabilities: List[str] = field(default_factory=list)
     structured_output: bool = False
+    expected_schema: Optional[Dict[str, Any]] = None
     timeout: float = 180.0
 
 
@@ -49,6 +52,7 @@ class ExecutionResult:
     agent_instance_id: str
     content: str = ""
     structured: Any = None
+    structured_output: Any = None
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
     duration: float = 0.0
@@ -189,10 +193,29 @@ class CliProvider(AgentProvider):
             return ExecutionResult(False, self.provider_id, instance.instance_id, error="no fixed adapter for provider")
         started = time.perf_counter()
         try:
-            completed = self._runner(args, cwd=request.workspace, capture_output=True, text=True, timeout=request.timeout, check=False)
-            content = (completed.stdout or "").strip()
-            error = None if completed.returncode == 0 else ((completed.stderr or content or "cli execution failed").strip()[:1000])
-            ok = completed.returncode == 0
+            structured = None
+            with tempfile.TemporaryDirectory(prefix="velko-structured-") as directory:
+                schema_path = None
+                output_path = None
+                if request.structured_output:
+                    if not isinstance(request.expected_schema, dict):
+                        return ExecutionResult(False, self.provider_id, instance.instance_id, error="structured_output_schema_required")
+                    schema_path = directory + "/schema.json"
+                    output_path = directory + "/result.json"
+                    with open(schema_path, "w", encoding="utf-8") as handle:
+                        json.dump(request.expected_schema, handle)
+                    args.extend(["--output-schema", schema_path, "--output-last-message", output_path])
+                completed = self._runner(args, cwd=request.workspace, capture_output=True, text=True, timeout=request.timeout, check=False)
+                content = (completed.stdout or "").strip()
+                error = None if completed.returncode == 0 else ((completed.stderr or content or "cli execution failed").strip()[:1000])
+                ok = completed.returncode == 0
+                if ok and request.structured_output:
+                    try:
+                        with open(output_path, "r", encoding="utf-8") as handle:
+                            structured = json.load(handle)
+                    except (OSError, TypeError, ValueError) as exc:
+                        ok = False
+                        error = "structured_output_invalid:{}".format(exc)
             instance.last_checked = time.time()
             instance.latency_ms = (time.perf_counter() - started) * 1000
             if ok:
@@ -203,7 +226,7 @@ class CliProvider(AgentProvider):
                 instance.status = self._classify_error((completed.stderr or content or ""))
                 instance.functional = False
                 instance.consecutive_failures += 1
-            return ExecutionResult(ok, self.provider_id, instance.instance_id, content=content, error=error, duration=time.perf_counter() - started, raw={"returncode": completed.returncode})
+            return ExecutionResult(ok, self.provider_id, instance.instance_id, content=content, structured=structured, structured_output=structured, error=error, duration=time.perf_counter() - started, raw={"returncode": completed.returncode, "structured_output": structured})
         except (OSError, subprocess.SubprocessError) as exc:
             instance.status = self._classify_error(str(exc), isinstance(exc, subprocess.TimeoutExpired))
             instance.functional = False
