@@ -24,6 +24,7 @@ class MissionTask:
     progress: int = 0
     result: Any = None
     error: Optional[str] = None
+    routing: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

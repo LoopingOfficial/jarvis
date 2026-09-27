@@ -17,6 +17,7 @@ from .planner import MissionPlanner
 from .tools import ToolRegistry
 from .verifier import MissionVerifier
 from .workspace import GitWorkspaceManager
+from .agents import AgentRegistry, ExecutionRequest
 
 
 MISSION_HOME = Path.home() / ".velko" / "missions"
@@ -35,8 +36,14 @@ class CoordinatorClient:
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def create_task(self, prompt: str, task_type: str, capabilities: List[str], mission_id: str, dependencies: List[str]) -> Dict[str, Any]:
-        return self.request("POST", "/tasks", {"prompt": prompt, "required_capabilities": capabilities, "dependencies": dependencies, "metadata": {"mission_id": mission_id, "task_type": task_type}})["task"]
+    def create_task(self, prompt: str, task_type: str, capabilities: List[str], mission_id: str, dependencies: List[str], worker_id: Optional[str] = None) -> Dict[str, Any]:
+        metadata = {"mission_id": mission_id, "task_type": task_type}
+        if worker_id:
+            metadata["operator_agent_instance"] = worker_id
+        return self.request("POST", "/tasks", {"prompt": prompt, "required_capabilities": capabilities, "dependencies": dependencies, "metadata": metadata})["task"]
+
+    def status(self) -> Dict[str, Any]:
+        return self.request("GET", "/status")
 
     def available_capabilities(self) -> List[str]:
         status = self.request("GET", "/status")
@@ -62,6 +69,7 @@ class MissionOperator:
         self.coordinator = CoordinatorClient(coordinator)
         self.timeout = timeout
         self.planner = MissionPlanner()
+        self.agents = AgentRegistry(self.coordinator)
 
     def save(self, mission: Mission) -> None:
         MISSION_HOME.mkdir(parents=True, exist_ok=True)
@@ -70,18 +78,16 @@ class MissionOperator:
     def load(self, mission_id: str) -> Mission:
         return Mission.from_dict(json.loads((MISSION_HOME / (mission_id + ".json")).read_text(encoding="utf-8")))
 
-    def _remote(self, task: Any, prompt: str, mission_id: str) -> Dict[str, Any]:
-        capabilities = list(task.required_capabilities)
-        available = set(self.coordinator.available_capabilities())
-        if capabilities and not set(capabilities).issubset(available):
-            alternatives = ["reasoning", "analysis", "coding", "review", "synthesis"]
-            fallback = next((item for item in alternatives if item in available), None)
-            if fallback:
-                capabilities = [fallback]
-        remote = self.coordinator.create_task(prompt, task.task_type, capabilities, mission_id, [])
-        result = self.coordinator.wait(remote["task_id"], self.timeout)
-        worker_id = result.get("assigned_worker") or (result.get("result") or {}).get("worker_id")
-        return {"task": result, "worker_id": worker_id}
+    def _remote(self, task: Any, prompt: str, mission_id: str, forced_provider: Optional[str] = None) -> Dict[str, Any]:
+        request = ExecutionRequest(task.task_id, prompt, required_capabilities=list(task.required_capabilities), structured_output=task.task_type == "code_change", timeout=self.timeout)
+        if not self.agents.instances:
+            self.agents.discover()
+        decision = self.agents.route(request.required_capabilities, forced_provider)
+        task.routing = decision
+        result = self.agents.execute(request, forced_provider)
+        worker_id = result.raw.get("assigned_worker") if isinstance(result.raw, dict) else None
+        worker_id = worker_id or result.agent_instance_id
+        return {"task": result.raw, "worker_id": worker_id, "content": result.content, "routing": decision}
 
     @staticmethod
     def _repository_context(tools: ToolRegistry) -> Dict[str, Any]:
@@ -97,7 +103,7 @@ class MissionOperator:
                     continue
         return {"files": files[:200], "git_status": tools.git_status(), "excerpts": excerpts}
 
-    def run(self, request: str, repository: str, dry_run: bool = False, allow_write: bool = False, test_path: str = "tests", max_fix_attempts: int = 2, keep_workspace: bool = True, show_diff: bool = False) -> Mission:
+    def run(self, request: str, repository: str, dry_run: bool = False, allow_write: bool = False, test_path: str = "tests", max_fix_attempts: int = 2, keep_workspace: bool = True, show_diff: bool = False, forced_provider: Optional[str] = None) -> Mission:
         mission = Mission(request, workspace=None)
         mission.tasks = self.planner.plan(mission)
         mission.status = "ready"
@@ -132,20 +138,20 @@ class MissionOperator:
                     task.result = {"files": len(context["files"]), "git_status": context["git_status"]}
                 elif task.task_type == "llm":
                     prompt = "User request:\n{}\nRepository evidence (JSON):\n{}\nPrevious root cause:\n{}\nReturn a concise, evidence-bound answer; do not invent files or test results.".format(request, json.dumps(context, ensure_ascii=False), root_cause)
-                    remote = self._remote(task, prompt, mission.mission_id)
+                    remote = self._remote(task, prompt, mission.mission_id, forced_provider)
                     result = remote["task"]
                     task.worker_id = remote["worker_id"]
-                    task.result = result.get("result")
+                    task.result = result.get("result") if isinstance(result, dict) else remote["content"]
                     artifact_type = "root_cause" if task.task_id == "analyze" else "final_report"
                     mission.artifact(task.task_id, artifact_type, task.result, worker_id=task.worker_id, remote_task_id=result["task_id"])
                     if task.task_id == "analyze":
                         root_cause = (task.result or {}).get("content", "") if isinstance(task.result, dict) else str(task.result)
                 elif task.task_type == "code_change":
                     prompt = "Return ONLY valid JSON, with no markdown or prose, matching exactly {{\"changes\":[{{\"operation\":\"replace\",\"path\":\"relative/path\",\"reason\":\"...\",\"before\":\"exact current text\",\"after\":\"replacement text\"}}]}}. User request: {}. Root cause: {}. Repository evidence: {}. The change must be minimal and testable.".format(request, root_cause, json.dumps(context, ensure_ascii=False))
-                    remote = self._remote(task, prompt, mission.mission_id)
+                    remote = self._remote(task, prompt, mission.mission_id, forced_provider)
                     result = remote["task"]
                     task.worker_id = remote["worker_id"]
-                    raw = (result.get("result") or {}).get("content", "")
+                    raw = (result.get("result") or {}).get("content", "") if isinstance(result, dict) else remote["content"]
                     change_set = CodeChangeSet.from_json(raw)
                     modified = patcher.apply(change_set)
                     mission.artifact(task.task_id, "change_set", change_set.to_dict(), worker_id=task.worker_id, attempt=0)
@@ -163,9 +169,9 @@ class MissionOperator:
                         fix_attempt += 1
                         patcher.rollback()
                         correction_prompt = "Return ONLY valid JSON CodeChangeSet. Correct the failed tests. User request: {}. Root cause: {}. Current test result: {}. Current diff: {}".format(request, root_cause, json.dumps(result, ensure_ascii=False), tools.git_diff())
-                        remote = self._remote(task, correction_prompt, mission.mission_id)
+                        remote = self._remote(task, correction_prompt, mission.mission_id, forced_provider)
                         correction_result = remote["task"]
-                        raw = (correction_result.get("result") or {}).get("content", "")
+                        raw = (correction_result.get("result") or {}).get("content", "") if isinstance(correction_result, dict) else remote["content"]
                         correction = CodeChangeSet.from_json(raw)
                         modified = patcher.apply(correction)
                         mission.artifact(task.task_id, "change_set", correction.to_dict(), worker_id=remote["worker_id"], attempt=fix_attempt)
@@ -243,8 +249,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--show-diff", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--mission")
+    parser.add_argument("--agents", action="store_true", help="Discover real local and distributed agent instances")
+    parser.add_argument("--explain-routing", action="store_true", help="Include provider routing decisions in the mission report")
+    parser.add_argument("--provider", choices=["codex", "claude", "gemini", "opencode", "ollama"], help="Force one discovered provider")
     args = parser.parse_args(argv)
     operator = MissionOperator(args.coordinator)
+    if args.agents:
+        operator.agents.discover()
+        print(operator.agents.format_report())
+        return 0 if any(item.functional for item in operator.agents.instances) else 1
     if args.status:
         if not args.mission:
             parser.error("--status requires --mission")
@@ -252,7 +265,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if not args.request:
         parser.error("a mission request is required")
-    mission = operator.run(args.request, args.repo, args.dry_run, args.allow_write, args.test_path, max(0, args.max_fix_attempts), args.keep_workspace, args.show_diff)
+    mission = operator.run(args.request, args.repo, args.dry_run, args.allow_write, args.test_path, max(0, args.max_fix_attempts), args.keep_workspace, args.show_diff, args.provider)
+    if args.explain_routing:
+        print("\nROUTING\n" + json.dumps(operator.agents.last_routing, indent=2, ensure_ascii=False))
     return 0 if mission.status in {"completed", "ready"} else 1
 
 
